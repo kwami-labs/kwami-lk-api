@@ -31,7 +31,9 @@ def signed(event: dict, secret: str | None = None, timestamp: int | None = None)
     return payload, f"t={ts},v1={signature}"
 
 
-def checkout_event(user_id: str, *, event_id="evt_1", session_id="cs_1", status="paid", credits=100):
+def checkout_event(
+    user_id: str, *, event_id="evt_1", session_id="cs_1", status="paid", credits=100
+):
     return {
         "id": event_id,
         "type": "checkout.session.completed",
@@ -59,6 +61,7 @@ async def post(client: AsyncClient, event: dict, **kwargs):
 # --------------------------------------------------------------------------
 # signature
 # --------------------------------------------------------------------------
+
 
 @pytest.mark.anyio
 async def test_missing_signature_is_rejected(client: AsyncClient, tenant):
@@ -94,6 +97,7 @@ async def test_stale_timestamp_is_rejected(client: AsyncClient, tenant):
 # --------------------------------------------------------------------------
 # crediting
 # --------------------------------------------------------------------------
+
 
 @pytest.mark.anyio
 async def test_a_paid_checkout_credits_the_user(client: AsyncClient, tenant, fake_supabase):
@@ -164,7 +168,9 @@ async def test_an_async_payment_that_later_succeeds_is_credited(
     client: AsyncClient, tenant, fake_supabase
 ):
     """Previously this returned 'skipped' forever: paid user, no credits."""
-    pending = checkout_event(tenant.user_id, event_id="evt_p", session_id="cs_async", status="unpaid")
+    pending = checkout_event(
+        tenant.user_id, event_id="evt_p", session_id="cs_async", status="unpaid"
+    )
     await post(client, pending)
 
     settled = checkout_event(tenant.user_id, event_id="evt_s", session_id="cs_async", status="paid")
