@@ -5,7 +5,7 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from src.core.config import settings
@@ -923,7 +923,7 @@ def _finalize_usage_report(
                 "charged_micro": charged_micro,
                 "unpaid_micro": unpaid_micro,
                 "result": result,
-                "settled_at": datetime.now(timezone.utc).isoformat(),
+                "settled_at": datetime.now(UTC).isoformat(),
             }
         ).eq("report_key", report_key).execute()
     except Exception:

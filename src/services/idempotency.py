@@ -13,6 +13,7 @@ deliveries both see "not processed" and both proceed.
 from __future__ import annotations
 
 import logging
+from datetime import UTC
 from typing import Any
 
 from src.services.credits import get_supabase_admin
@@ -56,9 +57,7 @@ def claim_event(
         return True
     except Exception as exc:
         if _is_unique_violation(exc):
-            logger.info(
-                "Ignoring duplicate %s webhook %s (%s)", provider, event_id, event_type
-            )
+            logger.info("Ignoring duplicate %s webhook %s (%s)", provider, event_id, event_type)
             return False
         raise
 
@@ -120,6 +119,6 @@ def already_in_ledger(idempotency_key: str) -> bool:
 
 
 def _now_iso() -> str:
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()

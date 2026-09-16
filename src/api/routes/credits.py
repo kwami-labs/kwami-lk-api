@@ -177,6 +177,11 @@ class UsageReportResponse(BaseModel):
     total_margin_usd: float
     settlement_status: str
     items_processed: int
+    # What the session cost beyond the balance available. Non-zero means the
+    # service was delivered without being fully paid for.
+    unpaid_credits: int = 0
+    # True when this response is the cached outcome of an earlier identical report.
+    idempotent_replay: bool = False
 
 
 class ReconciliationSummary(BaseModel):
@@ -426,11 +431,16 @@ def _verify_kwami_api_key(
 async def report_usage(
     request: UsageReportRequest,
     _: Annotated[None, Depends(_verify_kwami_api_key)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ):
     """Report AI usage from the agent after a session ends.
 
     This endpoint is called by the LiveKit agent (not the frontend).
     Authenticated via Kwami API key (X-API-Key header).
+
+    Send an ``Idempotency-Key`` header to make a retry safe. Without one a key is
+    derived from the report's contents, so a redelivered identical report is
+    still settled only once.
     """
     logger.info(
         f"Usage report received: user={request.user_id}, "
@@ -456,18 +466,23 @@ async def report_usage(
     ]
 
     result = await process_usage_report(
+        idempotency_key=idempotency_key,
         user_id=request.user_id,
         session_id=request.session_id,
         usage_items=usage_items,
     )
 
+    # `.get` throughout: a replay returns the cached result of the original
+    # settlement, which may predate any field added since.
     return UsageReportResponse(
-        total_credits_requested=result["total_credits_requested"],
-        total_credits_charged=result["total_credits_charged"],
-        new_balance=result["new_balance"],
-        total_provider_cost_usd=result["total_provider_cost_usd"],
-        total_billed_cost_usd=result["total_billed_cost_usd"],
-        total_margin_usd=result["total_margin_usd"],
-        settlement_status=result["settlement_status"],
-        items_processed=len(result["items"]),
+        total_credits_requested=result.get("total_credits_requested", 0),
+        total_credits_charged=result.get("total_credits_charged", 0),
+        new_balance=result.get("new_balance", 0),
+        total_provider_cost_usd=result.get("total_provider_cost_usd", 0.0),
+        total_billed_cost_usd=result.get("total_billed_cost_usd", 0.0),
+        total_margin_usd=result.get("total_margin_usd", 0.0),
+        settlement_status=result.get("settlement_status", "skipped"),
+        items_processed=len(result.get("items", [])),
+        unpaid_credits=result.get("unpaid_credits", 0),
+        idempotent_replay=bool(result.get("idempotent_replay", False)),
     )
