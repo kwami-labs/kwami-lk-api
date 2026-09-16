@@ -135,7 +135,11 @@ celerybeat.pid
 *.sage.py
 
 # Environments
+# `.env.*` catches .env.local, .env.production and every other variant someone creates in a
+# hurry; .env.sample is the one that is meant to be committed, and holds names only.
 .env
+.env.*
+!.env.sample
 .envrc
 .venv
 env/
@@ -205,3 +209,10 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Coverage artefacts. `coverage.unit` and `coverage.integration` are the staged per-lane
+# profiles that `make coverage` merges; coverage.json is what the floors gate reads.
+coverage.unit
+coverage.integration
+coverage.json
+htmlcov/
