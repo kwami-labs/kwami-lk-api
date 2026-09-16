@@ -33,7 +33,8 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # Tests point KWAMI_ENV_FILE at tests/.env.test so the live .env is never read.
+        env_file=os.environ.get("KWAMI_ENV_FILE", ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -91,6 +92,15 @@ class Settings(BaseSettings):
     livekit_agent_name: str = Field(
         default="kwami-agent",
         alias="LIVEKIT_AGENT_NAME",
+    )
+    # Tokens are redeemed at connect time, so they do not need a long life. The
+    # previous 6 hours meant a leaked token stayed usable for a working day.
+    # Raise via env if a client caches tokens across a session.
+    livekit_token_ttl_minutes: int = Field(
+        default=15,
+        ge=1,
+        le=360,
+        alias="LIVEKIT_TOKEN_TTL_MINUTES",
     )
 
     # Public URLs / webhooks
