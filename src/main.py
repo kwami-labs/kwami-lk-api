@@ -4,9 +4,8 @@ import logging
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.api.routes import (
     admin_reconciliation,
@@ -26,6 +25,7 @@ from src.api.routes import (
     webhooks,
 )
 from src.core.config import settings
+from src.core.errors import install_error_handlers
 
 # Configure logging
 logging.basicConfig(
@@ -35,29 +35,12 @@ logging.basicConfig(
 logger = logging.getLogger("kwami-api")
 
 
-class RequestLoggingMiddleware(BaseHTTPMiddleware):
-    """Log incoming request bodies for debugging."""
-
-    async def dispatch(self, request: Request, call_next):
-        if request.url.path == "/token" and request.method == "POST":
-            body = await request.body()
-            logger.info(f"📨 Raw request body: {body.decode()[:500]}")
-            # Recreate the request with the body since we consumed it
-            from starlette.requests import Request as StarletteRequest
-            scope = request.scope
-            async def receive():
-                return {"type": "http.request", "body": body}
-            request = StarletteRequest(scope, receive)
-        return await call_next(request)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     logger.info(f"🚀 Starting {settings.app_name} v0.1.0")
     logger.info(f"🌐 Listening on {settings.api_host}:{settings.api_port}")
     logger.info(f"📡 LiveKit URL: {settings.livekit_url}")
-    logger.info(f"🔑 API Key: {settings.livekit_api_key[:8]}...")
     logger.info(f"🌍 Environment: {settings.app_env}")
     if settings.kwami_api_key and settings.kwami_api_key.strip():
         logger.info("📊 Kwami API key for usage report: set")
@@ -76,7 +59,6 @@ app = FastAPI(
     redoc_url="/redoc" if settings.show_docs else None,
 )
 
-app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -84,6 +66,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Registered before the routers so every route is covered, including the
+# catch-all that stops `detail=str(e)` forwarding upstream text to clients.
+install_error_handlers(app)
 
 app.include_router(health.router, tags=["Health"])
 app.include_router(token.router, prefix="/token", tags=["Token"])
