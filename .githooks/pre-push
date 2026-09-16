@@ -1,0 +1,41 @@
+#!/bin/sh
+#
+# Refuses a push that would land directly on main.
+#
+# This is the local stand-in for the server-side ruleset in .github/rulesets/main.json, which
+# GitHub will not apply to a private repository on a free plan. It enforces the same first rule —
+# every change arrives as a pull request — from the one place that still can.
+#
+# It is a guardrail, not a wall: it lives in the working copy, so it protects whoever installed it
+# and nobody else, and `--no-verify` walks straight past it. Treat a bypass as a decision worth
+# saying out loud, and apply the real ruleset the moment the plan allows it.
+#
+# Install with `make hooks`. Git passes one line per ref being pushed on stdin:
+#   <local ref> <local sha> <remote ref> <remote sha>
+set -eu
+
+protected='refs/heads/main'
+
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+	[ "$remote_ref" = "$protected" ] || continue
+
+	branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
+	cat >&2 <<MSG
+
+  Refusing to push directly to main.
+
+  Every change reaches main through a pull request, so that CI has run and someone
+  has read it. See CONTRIBUTING.md.
+
+      git switch -c feat/your-change      # you are on '$branch'
+      git push -u origin feat/your-change
+      gh pr create
+
+  If you genuinely have to bypass this, 'git push --no-verify' will let you, and
+  the history will show that you did.
+
+MSG
+	exit 1
+done
+
+exit 0
