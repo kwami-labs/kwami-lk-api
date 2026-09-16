@@ -202,6 +202,53 @@ def verify_user_access(user: AuthUser, user_id: str):
             detail="Access denied: You can only access your own memory data"
         )
 
+
+def thread_belongs_to(thread_id: str | None, thread_user_id: str | None, user_id: str) -> bool:
+    """Decide thread ownership with anchored matching.
+
+    This used to be ``thread_user == user_id or user_id in str(thread_id)``. The
+    substring test matched any thread whose id merely *contained* the caller's id,
+    so a user could read -- and, from the delete endpoint, destroy -- another
+    tenant's threads.
+
+    Zep sets ``user_id`` on threads it owns, so that is authoritative when present.
+    The id fallback exists only for older threads created before that, and is
+    anchored to the start so it cannot match on a coincidental substring.
+    """
+    if thread_user_id:
+        return thread_user_id == user_id
+    if not thread_id:
+        return False
+    thread_id = str(thread_id)
+    return thread_id == user_id or thread_id.startswith((f"{user_id}:", f"{user_id}_"))
+
+
+async def iter_all_threads(client: AsyncZep, page_size: int = 100):
+    """Yield every thread in the project, following pagination to exhaustion.
+
+    Callers used to take a single ``list_all(page_size=50|100)`` page. For the
+    delete endpoint that meant "delete all memory" silently left threads behind
+    once a project exceeded one page -- which makes an erasure request a false
+    claim, not just a bug.
+
+    Zep's thread API has no per-user filter, so project-wide enumeration is
+    unavoidable here; ownership is applied by the caller via `thread_belongs_to`.
+    """
+    page = 1
+    seen = 0
+    while True:
+        response = await client.thread.list_all(page_number=page, page_size=page_size)
+        threads = getattr(response, "threads", None) or []
+        if not threads:
+            return
+        for thread in threads:
+            yield thread
+        seen += len(threads)
+        total = getattr(response, "total_count", None)
+        if len(threads) < page_size or (total is not None and seen >= total):
+            return
+        page += 1
+
 @router.get("/debug/{user_id}")
 async def debug_user_memory(
     user_id: str,
@@ -245,31 +292,27 @@ async def debug_user_memory(
     except Exception as e:
         result["errors"].append(f"graph.node: {str(e)}")
     
-    # List ALL threads to see what exists
+    # Threads belonging to this user only.
+    #
+    # This endpoint used to return `result["all_threads"]` -- every thread in the
+    # Zep project, with its owner's user_id -- to any authenticated caller. That
+    # was a cross-tenant enumeration of the entire user base.
     try:
-        threads_response = await client.thread.list_all(page_size=50)
-        all_threads = []
-        if threads_response:
-            threads_list = threads_response.threads if hasattr(threads_response, 'threads') else threads_response
-            for t in (threads_list or []):
-                thread_id = t.thread_id if hasattr(t, 'thread_id') else (t.uuid if hasattr(t, 'uuid') else str(t))
-                thread_user = t.user_id if hasattr(t, 'user_id') else None
-                all_threads.append({
-                    "thread_id": thread_id,
-                    "user_id": thread_user,
-                })
-        result["all_threads"] = all_threads  # Show ALL threads for debugging
-        
-        # Now filter to this user and get context
-        for t_info in all_threads:
-            if t_info["user_id"] == user_id or (t_info["thread_id"] and user_id in str(t_info["thread_id"])):
-                try:
-                    ctx = await client.thread.get_context(thread_id=t_info["thread_id"])
-                    if ctx and ctx.context:
-                        t_info["context"] = ctx.context[:500] + "..." if len(ctx.context) > 500 else ctx.context
-                except Exception as ctx_err:
-                    t_info["context_error"] = str(ctx_err)[:100]
-                result["threads"].append(t_info)
+        async for thread in iter_all_threads(client):
+            thread_id = getattr(thread, "thread_id", None) or getattr(thread, "uuid_", None)
+            thread_user = getattr(thread, "user_id", None)
+            if not thread_belongs_to(thread_id, thread_user, user_id):
+                continue
+            info = {"thread_id": thread_id, "user_id": thread_user}
+            try:
+                ctx = await client.thread.get_context(thread_id=thread_id)
+                if ctx and ctx.context:
+                    info["context"] = (
+                        ctx.context[:500] + "..." if len(ctx.context) > 500 else ctx.context
+                    )
+            except Exception as ctx_err:
+                info["context_error"] = str(ctx_err)[:100]
+            result["threads"].append(info)
     except Exception as e:
         result["errors"].append(f"thread.list_all: {str(e)}")
     
@@ -342,21 +385,21 @@ async def delete_user_memory(
     try:
         # 1. Delete all threads belonging to this user
         try:
-            threads_response = await client.thread.list_all(page_size=100)
-            if threads_response:
-                threads_list = threads_response.threads if hasattr(threads_response, 'threads') else threads_response
-                for t in (threads_list or []):
-                    thread_id = t.thread_id if hasattr(t, 'thread_id') else (t.uuid if hasattr(t, 'uuid') else None)
-                    thread_user = t.user_id if hasattr(t, 'user_id') else None
-                    
-                    # Delete threads that belong to this user
-                    if thread_user == user_id or (thread_id and user_id in str(thread_id)):
-                        try:
-                            await client.thread.delete(thread_id=thread_id)
-                            deleted["threads"] += 1
-                            logger.info(f"🗑️ Deleted thread: {thread_id}")
-                        except Exception as e:
-                            deleted["errors"].append(f"Failed to delete thread {thread_id}: {str(e)}")
+            async for t in iter_all_threads(client):
+                thread_id = getattr(t, "thread_id", None) or getattr(t, "uuid_", None)
+                thread_user = getattr(t, "user_id", None)
+
+                # Exact ownership only. The previous substring test could delete
+                # another tenant's threads, and the single-page listing meant a
+                # "delete all my memory" request silently left data behind.
+                if not thread_belongs_to(thread_id, thread_user, user_id):
+                    continue
+                try:
+                    await client.thread.delete(thread_id=thread_id)
+                    deleted["threads"] += 1
+                    logger.info(f"🗑️ Deleted thread: {thread_id}")
+                except Exception as e:
+                    deleted["errors"].append(f"Failed to delete thread {thread_id}: {str(e)}")
         except Exception as e:
             deleted["errors"].append(f"Failed to list threads: {str(e)}")
         
@@ -391,7 +434,7 @@ async def get_user_messages(
     user_id: str,
     user: Annotated[AuthUser, Depends(require_auth)],
     client: AsyncZep = Depends(get_zep_client),
-    limit: int = 100,
+    limit: int = Query(100, ge=1, le=500),
 ):
     """Get conversation messages for a user from their threads/sessions.
     
@@ -406,47 +449,45 @@ async def get_user_messages(
         
         # Get all threads and find ones belonging to this user
         try:
-            threads_response = await client.thread.list_all(page_size=50)
-            if threads_response:
-                threads_list = threads_response.threads if hasattr(threads_response, 'threads') else threads_response
-                for t in (threads_list or []):
-                    thread_id = t.thread_id if hasattr(t, 'thread_id') else (t.uuid if hasattr(t, 'uuid') else None)
-                    thread_user = t.user_id if hasattr(t, 'user_id') else None
-                    
-                    # Check if thread belongs to this user
-                    if thread_user == user_id or (thread_id and user_id in str(thread_id)):
-                        sessions.append({
-                            "thread_id": thread_id,
-                            "user_id": thread_user,
-                            "created_at": str(t.created_at) if hasattr(t, 'created_at') and t.created_at else None,
-                        })
+            async for t in iter_all_threads(client):
+                thread_id = getattr(t, "thread_id", None) or getattr(t, "uuid_", None)
+                thread_user = getattr(t, "user_id", None)
+
+                # Exact ownership: the substring test returned other tenants'
+                # messages whenever their thread id happened to contain this id.
+                if thread_belongs_to(thread_id, thread_user, user_id):
+                    sessions.append({
+                        "thread_id": thread_id,
+                        "user_id": thread_user,
+                        "created_at": str(t.created_at) if hasattr(t, 'created_at') and t.created_at else None,
+                    })
                         
-                        # Get messages from this thread (Zep v3: thread.get returns messages)
-                        try:
-                            msgs_response = await client.thread.get(
-                                thread_id=thread_id,
-                                limit=limit,
-                            )
-                            # MessageListResponse has a .messages attribute
-                            msg_list = None
-                            if msgs_response:
-                                if hasattr(msgs_response, 'messages'):
-                                    msg_list = msgs_response.messages
-                                elif isinstance(msgs_response, list):
-                                    msg_list = msgs_response
+                    # Get messages from this thread (Zep v3: thread.get returns messages)
+                    try:
+                        msgs_response = await client.thread.get(
+                            thread_id=thread_id,
+                            limit=limit,
+                        )
+                        # MessageListResponse has a .messages attribute
+                        msg_list = None
+                        if msgs_response:
+                            if hasattr(msgs_response, 'messages'):
+                                msg_list = msgs_response.messages
+                            elif isinstance(msgs_response, list):
+                                msg_list = msgs_response
                             
-                            if msg_list:
-                                for msg in msg_list:
-                                    messages.append({
-                                        "uuid": msg.uuid if hasattr(msg, 'uuid') else None,
-                                        "content": msg.content if hasattr(msg, 'content') else None,
-                                        "role": msg.role if hasattr(msg, 'role') else (msg.role_type if hasattr(msg, 'role_type') else None),
-                                        "role_type": msg.role_type if hasattr(msg, 'role_type') else None,
-                                        "created_at": str(msg.created_at) if hasattr(msg, 'created_at') and msg.created_at else None,
-                                        "thread_id": thread_id,
-                                    })
-                        except Exception as msg_err:
-                            logger.warning(f"💬 Failed to get messages from thread {thread_id}: {msg_err}")
+                        if msg_list:
+                            for msg in msg_list:
+                                messages.append({
+                                    "uuid": msg.uuid if hasattr(msg, 'uuid') else None,
+                                    "content": msg.content if hasattr(msg, 'content') else None,
+                                    "role": msg.role if hasattr(msg, 'role') else (msg.role_type if hasattr(msg, 'role_type') else None),
+                                    "role_type": msg.role_type if hasattr(msg, 'role_type') else None,
+                                    "created_at": str(msg.created_at) if hasattr(msg, 'created_at') and msg.created_at else None,
+                                    "thread_id": thread_id,
+                                })
+                    except Exception as msg_err:
+                        logger.warning(f"💬 Failed to get messages from thread {thread_id}: {msg_err}")
         except Exception as e:
             logger.warning(f"💬 thread.list_all failed: {e}")
         
