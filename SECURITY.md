@@ -50,7 +50,13 @@ the deployed service until the matching commit is on `main` and `cd` has gone gr
 - Runtime configuration is validated at boot by [`src/core/config.py`](./src/core/config.py). The
   process refuses to start when a required variable is missing, rather than starting and 500ing.
 - Deploy credentials live in GitHub (`FLY_API_TOKEN`) and on Fly (`fly secrets`), not in the repo.
-  `GITHUB_TOKEN` is the only credential `cd.yml` uses for the release and for GHCR.
+  `GITHUB_TOKEN` covers the GHCR publish.
+- `RELEASE_TOKEN` is a fine-grained PAT owned by a repository admin, with **Contents: Read and
+  write** on this repository and nothing else. It exists only because the release commit is pushed
+  to protected `main` and `github-actions[bot]` cannot bypass the ruleset — see
+  [CONTRIBUTING.md](./CONTRIBUTING.md#the-release-needs-release_token). Scope it to this repository,
+  give it an expiry, and rotate it on the same schedule as any other deploy credential. A leaked
+  one can rewrite `main`.
 - Rotate anything that reaches a third party in both places at once: `LIVEKIT_API_SECRET`,
   `SUPABASE_SECRET_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `TWILIO_AUTH_TOKEN`,
   `SENDGRID_API_KEY`, `ZEP_API_KEY`, `KWAMI_API_KEY`, and the wallet signing and webhook secrets.
