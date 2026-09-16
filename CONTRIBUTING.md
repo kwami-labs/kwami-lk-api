@@ -4,6 +4,9 @@ This repository is Apache-2.0 licensed — see [LICENSE](./LICENSE).
 Report security issues privately — [SECURITY.md](./SECURITY.md). Do not open a public issue or
 pull request for a vulnerability.
 
+Long-form documentation is in [`docs/`](./docs/README.md). Local setup, the two test lanes, and
+coverage floors are also spelled out in [docs/development.md](./docs/development.md).
+
 ## The rules, in one paragraph
 
 `main` is protected: you cannot push to it. Every change arrives as a pull request from a branch,
@@ -207,8 +210,38 @@ itself built or deployed — the image and the deploy both come from the commit 
 behind. The tag, the release and the changelog are all correct; only the deployed tree is a
 changelog commit short.
 
-That push lands on protected `main`, so the `github-actions` app is a bypass actor in
-[`main.json`](.github/rulesets/main.json). A release cannot open a pull request for itself.
+### The release needs `RELEASE_TOKEN`
+
+That push lands on protected `main` — a release cannot open a pull request for itself — so
+something has to bypass the rule. On most repositories that something is the `github-actions`
+app, named as a bypass actor. **This organisation cannot do that.** The Actions app is not
+installed on `kwami-labs`, and naming it makes GitHub reject the entire ruleset:
+
+```
+422  Actor GitHub Actions integration must be part of the ruleset source or owner organization
+```
+
+So the bypass actor in [`main.json`](.github/rulesets/main.json) is the **repository admin
+role**, and the release has to push *as* an admin. `GITHUB_TOKEN` does not: it acts as
+`github-actions[bot]`, which holds no repository role and is not covered.
+
+Hence one secret:
+
+| Secret | What it is |
+|---|---|
+| `RELEASE_TOKEN` | A **fine-grained personal access token** owned by a repository admin, scoped to this repository, with **Contents: Read and write**. `cd.yml` checks out and pushes with it, and semantic-release authenticates with it. |
+
+Create it at **Settings → Developer settings → Personal access tokens → Fine-grained tokens**, then
+add it under **Settings → Secrets and variables → Actions**.
+
+Without it, `cd.yml` refuses to start a release whenever a branch ruleset is active, rather than
+tagging and then failing to push — which would leave a tag and a GitHub Release whose changelog
+commit never landed, and a next run that computes its version from that tag. On an unprotected
+`main` the workflow falls back to `GITHUB_TOKEN` and warns.
+
+`scripts/branch-protection.sh` drops an Integration bypass actor that the organisation has not
+installed, with a warning, rather than letting the API reject the whole payload — so the same
+rulesets stay portable to a repository whose org *does* install it.
 
 ## Applying the rules to the repository
 
