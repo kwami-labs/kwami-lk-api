@@ -1,7 +1,8 @@
 # Security policy
 
 Contribution rules live in [CONTRIBUTING.md](./CONTRIBUTING.md). Licence terms are in
-[LICENSE](./LICENSE).
+[LICENSE](./LICENSE). The threat model, auth classes, and money invariants are in
+[docs/security.md](./docs/security.md).
 
 ## Reporting a vulnerability
 

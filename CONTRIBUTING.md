@@ -4,6 +4,9 @@ This repository is Apache-2.0 licensed — see [LICENSE](./LICENSE).
 Report security issues privately — [SECURITY.md](./SECURITY.md). Do not open a public issue or
 pull request for a vulnerability.
 
+Long-form documentation is in [`docs/`](./docs/README.md). Local setup, the two test lanes, and
+coverage floors are also spelled out in [docs/development.md](./docs/development.md).
+
 ## The rules, in one paragraph
 
 `main` is protected: you cannot push to it. Every change arrives as a pull request from a branch,
