@@ -37,7 +37,7 @@ class CustodyService:
             raise CustodyError("Wallet custody provider is not configured")
         if self._provider == "mock":
             # Deterministic test-friendly public key stub.
-            digest = hashlib.sha256(f"{user_id}:{kwami_id}".encode("utf-8")).hexdigest()
+            digest = hashlib.sha256(f"{user_id}:{kwami_id}".encode()).hexdigest()
             return CustodyWalletMaterial(
                 public_key=f"mock_{digest[:32]}",
                 key_ref=f"mock-key-{digest[:24]}",
@@ -49,7 +49,7 @@ class CustodyService:
             raise CustodyError("WALLET_CUSTODY_SIGNING_SECRET is required for custody mode")
 
         nonce = secrets.token_hex(16)
-        raw = f"{self._provider}:{user_id}:{kwami_id}:{nonce}".encode("utf-8")
+        raw = f"{self._provider}:{user_id}:{kwami_id}:{nonce}".encode()
         digest = hmac.new(self._secret.encode("utf-8"), raw, hashlib.sha256).hexdigest()
         return CustodyWalletMaterial(
             public_key=f"sol_{digest[:42]}",

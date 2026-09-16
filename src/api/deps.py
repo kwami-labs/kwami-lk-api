@@ -2,7 +2,7 @@
 
 import hmac
 import logging
-from typing import Annotated, Optional
+from typing import Annotated
 
 import jwt
 from fastapi import Depends, Header, HTTPException, status
@@ -24,15 +24,15 @@ security_scheme = HTTPBearer(auto_error=False)
 
 
 async def get_current_user(
-    credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(security_scheme)]
-) -> Optional[AuthUser]:
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security_scheme)],
+) -> AuthUser | None:
     """
     Decode and validate Supabase JWT via JWKS, return user info.
-    
+
     Returns None if:
     - No credentials provided
     - Auth is not configured
-    
+
     Raises HTTPException 401 if:
     - Token is invalid or expired
     """
@@ -74,12 +74,10 @@ async def get_current_user(
         )
 
 
-async def require_auth(
-    user: Annotated[Optional[AuthUser], Depends(get_current_user)]
-) -> AuthUser:
+async def require_auth(user: Annotated[AuthUser | None, Depends(get_current_user)]) -> AuthUser:
     """
     Dependency that requires authentication.
-    
+
     Use this for endpoints that must have a valid authenticated user.
     Raises 401 if user is not authenticated.
     """
@@ -93,8 +91,8 @@ async def require_auth(
 
 
 async def require_admin(
-    user: Annotated[Optional[AuthUser], Depends(get_current_user)],
-    x_admin_api_key: Annotated[Optional[str], Header(alias="X-Admin-API-Key")] = None,
+    user: Annotated[AuthUser | None, Depends(get_current_user)],
+    x_admin_api_key: Annotated[str | None, Header(alias="X-Admin-API-Key")] = None,
 ) -> AdminPrincipal:
     """Require an admin identity via API key or authenticated allowlist."""
     if is_valid_admin_api_key(x_admin_api_key):
@@ -117,7 +115,7 @@ async def require_admin(
 
 
 async def require_internal_api_key(
-    x_kwami_api_key: Annotated[Optional[str], Header(alias="X-Kwami-API-Key")] = None,
+    x_kwami_api_key: Annotated[str | None, Header(alias="X-Kwami-API-Key")] = None,
 ) -> None:
     """Require the shared agent/API key for internal backend-to-backend routes."""
     if not settings.kwami_api_key or not x_kwami_api_key:

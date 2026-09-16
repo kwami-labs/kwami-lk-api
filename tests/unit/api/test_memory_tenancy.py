@@ -26,6 +26,7 @@ def thread(thread_id: str, user_id: str | None = None) -> SimpleNamespace:
 # ownership
 # --------------------------------------------------------------------------
 
+
 def test_owner_recorded_on_the_thread_is_authoritative():
     assert thread_belongs_to("t-1", "alice", "alice") is True
     assert thread_belongs_to("alice-thread", "bob", "alice") is False
@@ -40,10 +41,10 @@ def test_legacy_threads_match_on_an_anchored_id(thread_id: str):
 @pytest.mark.parametrize(
     "thread_id",
     [
-        "malice",            # contains "alice"
+        "malice",  # contains "alice"
         "bob-alice-thread",  # contains "alice" in the middle
         "xalice",
-        "aliceb",            # shares a prefix but is a different namespace
+        "aliceb",  # shares a prefix but is a different namespace
         "",
     ],
 )
@@ -55,6 +56,7 @@ def test_substring_matches_are_rejected(thread_id: str):
 # pagination
 # --------------------------------------------------------------------------
 
+
 @pytest.mark.anyio
 async def test_iter_all_threads_follows_every_page():
     pages = {
@@ -63,7 +65,9 @@ async def test_iter_all_threads_follows_every_page():
         3: SimpleNamespace(threads=[thread(f"t{i}") for i in range(200, 250)], total_count=250),
     }
     client = MagicMock()
-    client.thread.list_all = AsyncMock(side_effect=lambda page_number, page_size: pages[page_number])
+    client.thread.list_all = AsyncMock(
+        side_effect=lambda page_number, page_size: pages[page_number]
+    )
 
     seen = [t.thread_id async for t in iter_all_threads(client)]
 
@@ -83,6 +87,7 @@ async def test_iter_all_threads_stops_on_an_empty_page():
 # --------------------------------------------------------------------------
 # the endpoint
 # --------------------------------------------------------------------------
+
 
 @pytest.fixture
 def zep_with_two_tenants(app_instance):
@@ -131,4 +136,6 @@ async def test_delete_only_touches_own_threads(auth_client: AsyncClient, zep_wit
     assert response.status_code == 200
 
     deleted = {c.kwargs["thread_id"] for c in zep_with_two_tenants.thread.delete.await_args_list}
-    assert deleted == {"t-mine"}, "a substring match would also have deleted another tenant's thread"
+    assert deleted == {"t-mine"}, (
+        "a substring match would also have deleted another tenant's thread"
+    )

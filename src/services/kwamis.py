@@ -12,21 +12,23 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.core.errors import KwamiNotFound
+from src.core.errors import KwamiNotFoundError
 from src.services.credits import get_supabase_admin
 
 # Enough for ownership decisions and for the callers that need the config blob.
 KWAMI_COLUMNS = "id, user_id, name, config, created_at, updated_at"
 
 
-def resolve_owned_kwami(user_id: str, kwami_id: str, *, columns: str = KWAMI_COLUMNS) -> dict[str, Any]:
-    """Return the kwami row, or raise ``KwamiNotFound``.
+def resolve_owned_kwami(
+    user_id: str, kwami_id: str, *, columns: str = KWAMI_COLUMNS
+) -> dict[str, Any]:
+    """Return the kwami row, or raise ``KwamiNotFoundError``.
 
     Filters on ``user_id`` as well as ``id``, so a kwami belonging to someone else
     is indistinguishable from one that does not exist -- no existence oracle.
     """
     if not user_id or not kwami_id:
-        raise KwamiNotFound()
+        raise KwamiNotFoundError()
 
     sb = get_supabase_admin()
     result = (
@@ -39,7 +41,7 @@ def resolve_owned_kwami(user_id: str, kwami_id: str, *, columns: str = KWAMI_COL
     )
     rows = getattr(result, "data", None) or []
     if not rows:
-        raise KwamiNotFound()
+        raise KwamiNotFoundError()
     return rows[0]
 
 
@@ -50,13 +52,11 @@ def resolve_kwami(kwami_id: str, *, columns: str = KWAMI_COLUMNS) -> dict[str, A
     end user to scope by. Never reachable from a user-authenticated request.
     """
     if not kwami_id:
-        raise KwamiNotFound()
+        raise KwamiNotFoundError()
 
     sb = get_supabase_admin()
-    result = (
-        sb.table("user_kwamis").select(columns).eq("id", kwami_id).limit(1).execute()
-    )
+    result = sb.table("user_kwamis").select(columns).eq("id", kwami_id).limit(1).execute()
     rows = getattr(result, "data", None) or []
     if not rows:
-        raise KwamiNotFound()
+        raise KwamiNotFoundError()
     return rows[0]

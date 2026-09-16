@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Annotated, Optional
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -154,7 +154,7 @@ async def pull_provider_import(
 @router.get("/imports", response_model=ProviderImportListResponse)
 async def get_provider_imports(
     _: Annotated[AdminPrincipal, Depends(require_admin)],
-    provider: Optional[str] = Query(None),
+    provider: str | None = Query(None),
     limit: int = Query(50, ge=1, le=500),
 ):
     try:

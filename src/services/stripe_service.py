@@ -73,10 +73,7 @@ async def create_checkout_session(
         client_reference_id=user_id,
     )
 
-    logger.info(
-        f"Created Stripe checkout session {session.id} "
-        f"for user {user_id}, pack={pack_id}"
-    )
+    logger.info(f"Created Stripe checkout session {session.id} for user {user_id}, pack={pack_id}")
 
     return session.url
 
@@ -142,9 +139,7 @@ async def _handle_checkout_completed(session: dict) -> dict:
         return {"status": "error", "reason": "missing metadata"}
 
     if payment_status != "paid":
-        logger.warning(
-            f"Checkout session {stripe_session_id} not paid: {payment_status}"
-        )
+        logger.warning(f"Checkout session {stripe_session_id} not paid: {payment_status}")
         return {"status": "skipped", "reason": f"payment_status={payment_status}"}
 
     credits = int(credits_str)
@@ -167,8 +162,7 @@ async def _handle_checkout_completed(session: dict) -> dict:
     )
 
     logger.info(
-        f"Credited {credits:,} credits to user {user_id} "
-        f"(Stripe session: {stripe_session_id})"
+        f"Credited {credits:,} credits to user {user_id} (Stripe session: {stripe_session_id})"
     )
 
     return {

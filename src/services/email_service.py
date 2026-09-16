@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from src.core.config import settings
@@ -22,7 +22,7 @@ USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,28}[a-z0-9]$")
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _single(result: Any) -> dict[str, Any] | None:
@@ -35,6 +35,7 @@ def _single(result: Any) -> dict[str, Any] | None:
 # ---------------------------------------------------------------------------
 # Username validation & availability
 # ---------------------------------------------------------------------------
+
 
 def validate_username(username: str) -> str | None:
     """Return ``None`` if valid, else an error key suitable for i18n."""
@@ -66,6 +67,7 @@ def check_username_available(username: str) -> bool:
 # ---------------------------------------------------------------------------
 # Account lifecycle
 # ---------------------------------------------------------------------------
+
 
 def get_account(user_id: str, kwami_id: str) -> dict[str, Any] | None:
     sb = get_supabase_admin()
@@ -104,12 +106,14 @@ def activate_account(
     sb = get_supabase_admin()
     result = (
         sb.table("kwami_email_accounts")
-        .insert({
-            "user_id": user_id,
-            "kwami_id": kwami_id,
-            "username": lower,
-            "is_active": True,
-        })
+        .insert(
+            {
+                "user_id": user_id,
+                "kwami_id": kwami_id,
+                "username": lower,
+                "is_active": True,
+            }
+        )
         .execute()
     )
     row = _single(result)
@@ -130,13 +134,16 @@ def deactivate_account(user_id: str, kwami_id: str) -> bool:
     # in case RLS or triggers need to fire.
     sb.table("kwami_email_messages").delete().eq("account_id", account["id"]).execute()
     sb.table("kwami_email_accounts").delete().eq("id", account["id"]).execute()
-    logger.info("Email account deactivated: %s", account.get("email_address") or account["username"])
+    logger.info(
+        "Email account deactivated: %s", account.get("email_address") or account["username"]
+    )
     return True
 
 
 # ---------------------------------------------------------------------------
 # Inbound email processing
 # ---------------------------------------------------------------------------
+
 
 def find_account_by_address(email_address: str) -> dict[str, Any] | None:
     """Look up an account by full email (username@kwami.io)."""
@@ -187,23 +194,25 @@ def process_inbound_email(
     sb = get_supabase_admin()
     result = (
         sb.table("kwami_email_messages")
-        .insert({
-            "account_id": account["id"],
-            "user_id": account["user_id"],
-            "kwami_id": account["kwami_id"],
-            "direction": "inbound",
-            "from_address": from_address,
-            "to_addresses": to_addresses,
-            "cc_addresses": cc_addresses or [],
-            "subject": subject,
-            "body_text": body_text,
-            "body_html": body_html,
-            "headers": headers or {},
-            "sendgrid_message_id": sendgrid_message_id,
-            "category": classification.category,
-            "action_card_data": classification.action_card_data,
-            "received_at": _now_iso(),
-        })
+        .insert(
+            {
+                "account_id": account["id"],
+                "user_id": account["user_id"],
+                "kwami_id": account["kwami_id"],
+                "direction": "inbound",
+                "from_address": from_address,
+                "to_addresses": to_addresses,
+                "cc_addresses": cc_addresses or [],
+                "subject": subject,
+                "body_text": body_text,
+                "body_html": body_html,
+                "headers": headers or {},
+                "sendgrid_message_id": sendgrid_message_id,
+                "category": classification.category,
+                "action_card_data": classification.action_card_data,
+                "received_at": _now_iso(),
+            }
+        )
         .execute()
     )
     row = _single(result)
@@ -219,6 +228,7 @@ def process_inbound_email(
 # ---------------------------------------------------------------------------
 # Inbox queries
 # ---------------------------------------------------------------------------
+
 
 def fetch_inbox(
     user_id: str,
@@ -287,6 +297,7 @@ def get_unread_counts(user_id: str, kwami_id: str) -> dict[str, int]:
 # Message mutations
 # ---------------------------------------------------------------------------
 
+
 def update_message(
     user_id: str,
     message_id: str,
@@ -312,6 +323,7 @@ def update_message(
 # Outbound email helper
 # ---------------------------------------------------------------------------
 
+
 def store_outbound_email(
     *,
     account: dict[str, Any],
@@ -325,22 +337,24 @@ def store_outbound_email(
     sb = get_supabase_admin()
     result = (
         sb.table("kwami_email_messages")
-        .insert({
-            "account_id": account["id"],
-            "user_id": account["user_id"],
-            "kwami_id": account["kwami_id"],
-            "direction": "outbound",
-            "from_address": account["email_address"],
-            "to_addresses": to_addresses,
-            "cc_addresses": cc_addresses or [],
-            "subject": subject,
-            "body_text": body_text,
-            "body_html": body_html,
-            "sendgrid_message_id": sendgrid_message_id,
-            "category": "personal",
-            "is_read": True,
-            "received_at": _now_iso(),
-        })
+        .insert(
+            {
+                "account_id": account["id"],
+                "user_id": account["user_id"],
+                "kwami_id": account["kwami_id"],
+                "direction": "outbound",
+                "from_address": account["email_address"],
+                "to_addresses": to_addresses,
+                "cc_addresses": cc_addresses or [],
+                "subject": subject,
+                "body_text": body_text,
+                "body_html": body_html,
+                "sendgrid_message_id": sendgrid_message_id,
+                "category": "personal",
+                "is_read": True,
+                "received_at": _now_iso(),
+            }
+        )
         .execute()
     )
     return _single(result)

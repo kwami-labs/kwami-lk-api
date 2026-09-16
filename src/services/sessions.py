@@ -13,7 +13,7 @@ import logging
 from typing import Any
 from uuid import uuid4
 
-from src.core.errors import Forbidden
+from src.core.errors import ForbiddenError
 from src.services.credits import get_supabase_admin
 
 logger = logging.getLogger("kwami-api.sessions")
@@ -50,7 +50,7 @@ def claim_room(
 ) -> dict[str, Any]:
     """Record the room for this user, or confirm they already own it.
 
-    Raises ``Forbidden`` when the room belongs to someone else. That is the check
+    Raises ``ForbiddenError`` when the room belongs to someone else. That is the check
     that closes the cross-tenant join: an attacker who learns a room name cannot
     obtain a token for it, because the row already names a different owner.
     """
@@ -58,12 +58,11 @@ def claim_room(
     if existing is not None:
         if str(existing.get("user_id")) != str(user_id):
             logger.warning(
-                "Rejected token request for room owned by another user "
-                "(room=%s requester=%s)",
+                "Rejected token request for room owned by another user (room=%s requester=%s)",
                 room_name,
                 user_id,
             )
-            raise Forbidden("This room belongs to another user")
+            raise ForbiddenError("This room belongs to another user")
         return existing
 
     sb = get_supabase_admin()
@@ -83,7 +82,7 @@ def claim_room(
             existing = get_session(room_name)
             if existing and str(existing.get("user_id")) == str(user_id):
                 return existing
-            raise Forbidden("This room belongs to another user") from exc
+            raise ForbiddenError("This room belongs to another user") from exc
         raise
     rows = getattr(result, "data", None) or []
     return rows[0] if rows else payload

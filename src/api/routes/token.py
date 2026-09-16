@@ -5,7 +5,7 @@ Do NOT manually dispatch agents here to avoid duplicate agents in rooms.
 """
 
 import logging
-from typing import Annotated, Optional
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -27,7 +27,7 @@ class TokenRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    room_name: Optional[str] = Field(
+    room_name: str | None = Field(
         None,
         min_length=1,
         max_length=128,
@@ -37,20 +37,35 @@ class TokenRequest(BaseModel):
             "name. A room name already issued to a different user is rejected."
         ),
     )
-    participant_name: Optional[str] = Field(
-        None, min_length=1, max_length=128, alias="participantName", description="Display name for participant"
+    participant_name: str | None = Field(
+        None,
+        min_length=1,
+        max_length=128,
+        alias="participantName",
+        description="Display name for participant",
     )
-    participant_identity: Optional[str] = Field(
-        None, max_length=128, alias="participantIdentity", description="Unique identity (defaults to participant_name)"
+    participant_identity: str | None = Field(
+        None,
+        max_length=128,
+        alias="participantIdentity",
+        description="Unique identity (defaults to participant_name)",
     )
 
     # Permissions
-    can_publish: bool = Field(True, alias="canPublish", description="Allow publishing audio/video tracks")
-    can_subscribe: bool = Field(True, alias="canSubscribe", description="Allow subscribing to tracks")
-    can_publish_data: bool = Field(True, alias="canPublishData", description="Allow publishing data messages")
+    can_publish: bool = Field(
+        True, alias="canPublish", description="Allow publishing audio/video tracks"
+    )
+    can_subscribe: bool = Field(
+        True, alias="canSubscribe", description="Allow subscribing to tracks"
+    )
+    can_publish_data: bool = Field(
+        True, alias="canPublishData", description="Allow publishing data messages"
+    )
 
     # Kwami-specific metadata
-    kwami_id: Optional[str] = Field(None, alias="kwamiId", description="Kwami instance ID for agent matching")
+    kwami_id: str | None = Field(
+        None, alias="kwamiId", description="Kwami instance ID for agent matching"
+    )
 
 
 class TokenResponse(BaseModel):
@@ -72,10 +87,10 @@ async def generate_token(
 
     This endpoint creates a JWT token that allows a client to connect
     to a LiveKit room with the specified permissions.
-    
+
     Note: Agent dispatching is handled automatically by LiveKit Cloud's
     auto-dispatch feature when a user joins the room.
-    
+
     Requires authentication - user's Supabase ID is used as participant identity.
     """
     # Use Supabase user ID as the identity (for memory persistence)
@@ -102,7 +117,9 @@ async def generate_token(
     try:
         credit_data = await get_balance(identity)
         if credit_data["balance"] <= 0:
-            logger.warning(f"🚫 User {identity} has insufficient credits ({credit_data['balance']})")
+            logger.warning(
+                f"🚫 User {identity} has insufficient credits ({credit_data['balance']})"
+            )
             raise HTTPException(
                 status_code=402,
                 detail="Insufficient credits. Please purchase credits to continue.",
@@ -147,9 +164,16 @@ async def generate_token(
 @router.get("", response_model=TokenResponse)
 async def generate_token_get(
     user: Annotated[AuthUser, Depends(require_auth)],
-    room_name: Annotated[Optional[str], Query(alias="roomName", min_length=1, max_length=128, description="Room name")] = None,
-    participant_name: Annotated[Optional[str], Query(alias="participantName", min_length=1, max_length=128, description="Participant name")] = None,
-    kwami_id: Annotated[Optional[str], Query(alias="kwamiId", max_length=128)] = None,
+    room_name: Annotated[
+        str | None, Query(alias="roomName", min_length=1, max_length=128, description="Room name")
+    ] = None,
+    participant_name: Annotated[
+        str | None,
+        Query(
+            alias="participantName", min_length=1, max_length=128, description="Participant name"
+        ),
+    ] = None,
+    kwami_id: Annotated[str | None, Query(alias="kwamiId", max_length=128)] = None,
 ):
     """
     Generate a LiveKit access token (GET method for simple integrations).

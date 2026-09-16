@@ -16,9 +16,7 @@ from src.core.config import settings
 
 
 @pytest.mark.anyio
-async def test_issues_a_token_for_a_kwami_the_caller_owns(
-    tenant_client: AsyncClient, tenant
-):
+async def test_issues_a_token_for_a_kwami_the_caller_owns(tenant_client: AsyncClient, tenant):
     response = await tenant_client.post("/token", json={"kwamiId": tenant.kwami_id})
     assert response.status_code == 200
     body = response.json()
@@ -35,9 +33,7 @@ async def test_issues_a_token_for_a_kwami_the_caller_owns(
 
 
 @pytest.mark.anyio
-async def test_rejects_a_kwami_owned_by_someone_else(
-    tenant_client: AsyncClient, other_tenant
-):
+async def test_rejects_a_kwami_owned_by_someone_else(tenant_client: AsyncClient, other_tenant):
     """The core IDOR: another tenant's kwami_id must not be dispatchable."""
     response = await tenant_client.post("/token", json={"kwamiId": other_tenant.kwami_id})
     assert response.status_code == 404
@@ -53,9 +49,7 @@ async def test_rejects_a_kwami_that_does_not_exist(tenant_client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_derives_an_unguessable_room_when_none_is_given(
-    tenant_client: AsyncClient, tenant
-):
+async def test_derives_an_unguessable_room_when_none_is_given(tenant_client: AsyncClient, tenant):
     first = await tenant_client.post("/token", json={"kwamiId": tenant.kwami_id})
     second = await tenant_client.post("/token", json={"kwamiId": tenant.kwami_id})
 

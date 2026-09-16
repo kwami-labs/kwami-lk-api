@@ -59,6 +59,7 @@ class Settings(BaseSettings):
         origins = [origin.strip() for origin in self.cors_origins_str.split(",") if origin.strip()]
         if self.app_env == "production" and "*" in origins:
             import logging
+
             logging.getLogger("kwami-api.config").warning(
                 "CORS_ORIGINS is set to '*' in production. "
                 "Set CORS_ORIGINS to specific origins for security."
@@ -303,11 +304,9 @@ class Settings(BaseSettings):
     def admin_emails(self) -> list[str]:
         """Parse admin emails from a comma-separated string."""
         return [
-            email.strip().lower()
-            for email in self.admin_emails_str.split(",")
-            if email.strip()
+            email.strip().lower() for email in self.admin_emails_str.split(",") if email.strip()
         ]
-    
+
     @computed_field
     @property
     def supabase_jwks_url(self) -> str | None:

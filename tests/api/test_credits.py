@@ -18,9 +18,7 @@ def test_calculate_usage_charge_llm_uses_detailed_tokens():
     breakdown = credits.calculate_usage_charge(item)
 
     expected_provider = (
-        ((1000 - 200) / 1_000_000) * 0.15
-        + (500 / 1_000_000) * 0.60
-        + (200 / 1_000_000) * 0.075
+        ((1000 - 200) / 1_000_000) * 0.15 + (500 / 1_000_000) * 0.60 + (200 / 1_000_000) * 0.075
     )
     expected_billed = expected_provider * settings.billing_markup_multiplier
 
@@ -101,7 +99,10 @@ async def test_token_credit_check_can_fail_closed(auth_client, monkeypatch):
     )
 
     assert response.status_code == 503
-    assert response.json()["detail"] == "Credit verification is temporarily unavailable. Please try again shortly."
+    assert (
+        response.json()["detail"]
+        == "Credit verification is temporarily unavailable. Please try again shortly."
+    )
 
 
 def test_build_reconciliation_report_summarizes_margin_and_anomalies():

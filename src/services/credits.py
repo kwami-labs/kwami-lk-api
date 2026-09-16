@@ -6,14 +6,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from supabase import create_client, Client
-
 from src.core.config import settings
 from src.services.pricing import (
     ALL_PRICING,
+    PRICING_VERSION,
     AudioPricing,
     ExternalPricing,
-    PRICING_VERSION,
     RealtimePricing,
     TokenPricing,
     calculate_audio_cost,
@@ -21,6 +19,7 @@ from src.services.pricing import (
     calculate_realtime_cost,
     calculate_token_cost,
 )
+from supabase import Client, create_client
 
 logger = logging.getLogger("kwami-api.credits")
 
@@ -160,9 +159,7 @@ def calculate_usage_charge(item: dict[str, Any]) -> PricingBreakdown:
             prompt_tokens = int(item.get("prompt_tokens") or 0)
             completion_tokens = int(item.get("completion_tokens") or 0)
             cached_input_tokens = int(
-                item.get("cached_input_tokens")
-                or item.get("cached_tokens")
-                or 0
+                item.get("cached_input_tokens") or item.get("cached_tokens") or 0
             )
             if prompt_tokens or completion_tokens or cached_input_tokens:
                 provider_cost_usd = calculate_token_cost(
@@ -171,14 +168,9 @@ def calculate_usage_charge(item: dict[str, Any]) -> PricingBreakdown:
                     completion_tokens=completion_tokens,
                     cached_input_tokens=cached_input_tokens,
                 )
-                units_used = float(
-                    item.get("units_used")
-                    or prompt_tokens + completion_tokens
-                )
+                units_used = float(item.get("units_used") or prompt_tokens + completion_tokens)
             else:
-                average_price_per_1m = (
-                    pricing.input_per_1m + pricing.output_per_1m
-                ) / 2
+                average_price_per_1m = (pricing.input_per_1m + pricing.output_per_1m) / 2
                 provider_cost_usd = (units_used / 1_000_000) * average_price_per_1m
                 pricing_source = "estimated_total_tokens"
         elif isinstance(pricing, AudioPricing):
@@ -242,12 +234,14 @@ async def get_balance(user_id: str) -> dict[str, Any]:
         }
 
     # User has no row yet (shouldn't happen with trigger, but handle gracefully)
-    sb.table("user_credits").insert({
-        "user_id": user_id,
-        "balance": 0,
-        "lifetime_purchased": 0,
-        "lifetime_used": 0,
-    }).execute()
+    sb.table("user_credits").insert(
+        {
+            "user_id": user_id,
+            "balance": 0,
+            "lifetime_purchased": 0,
+            "lifetime_used": 0,
+        }
+    ).execute()
 
     return {
         "balance": 0,
@@ -281,10 +275,7 @@ async def add_credits(
     ).execute()
 
     new_balance = result.data
-    logger.info(
-        f"Added {amount_micro} micro-credits to user {user_id}, "
-        f"new balance: {new_balance}"
-    )
+    logger.info(f"Added {amount_micro} micro-credits to user {user_id}, new balance: {new_balance}")
     return new_balance
 
 
@@ -312,8 +303,7 @@ async def deduct_credits(
 
         new_balance = result.data
         logger.info(
-            f"Deducted {amount_micro} micro-credits from user {user_id}, "
-            f"new balance: {new_balance}"
+            f"Deducted {amount_micro} micro-credits from user {user_id}, new balance: {new_balance}"
         )
         return new_balance
     except Exception as e:
@@ -337,13 +327,7 @@ def resolve_ledger_user_id(reported_id: str) -> str:
         return rid
 
     sb = get_supabase_admin()
-    kwami_hit = (
-        sb.table("user_kwamis")
-        .select("user_id")
-        .eq("id", rid)
-        .limit(1)
-        .execute()
-    )
+    kwami_hit = sb.table("user_kwamis").select("user_id").eq("id", rid).limit(1).execute()
     rows = getattr(kwami_hit, "data", None) or []
     if rows and rows[0].get("user_id"):
         return str(rows[0]["user_id"])
@@ -365,23 +349,29 @@ async def log_usage(
 ) -> str:
     """Insert a pending usage log row and return its ID."""
     sb = get_supabase_admin()
-    result = sb.table("credit_usage_logs").insert({
-        "user_id": user_id,
-        "session_id": session_id,
-        "model_type": model_type,
-        "model_id": model_id,
-        "units_used": units_used,
-        "cost_usd": provider_cost_usd,
-        "provider_cost_usd": provider_cost_usd,
-        "billed_cost_usd": billed_cost_usd,
-        "margin_usd": margin_usd,
-        "requested_credits": requested_credits,
-        "credits_charged": 0,
-        "settlement_status": "pending",
-        "pricing_version": PRICING_VERSION,
-        "pricing_source": pricing_source,
-        "usage_metadata": usage_metadata or {},
-    }).execute()
+    result = (
+        sb.table("credit_usage_logs")
+        .insert(
+            {
+                "user_id": user_id,
+                "session_id": session_id,
+                "model_type": model_type,
+                "model_id": model_id,
+                "units_used": units_used,
+                "cost_usd": provider_cost_usd,
+                "provider_cost_usd": provider_cost_usd,
+                "billed_cost_usd": billed_cost_usd,
+                "margin_usd": margin_usd,
+                "requested_credits": requested_credits,
+                "credits_charged": 0,
+                "settlement_status": "pending",
+                "pricing_version": PRICING_VERSION,
+                "pricing_source": pricing_source,
+                "usage_metadata": usage_metadata or {},
+            }
+        )
+        .execute()
+    )
     if result.data:
         return result.data[0]["id"]
     raise RuntimeError("Failed to insert credit usage log")
@@ -395,10 +385,12 @@ async def update_usage_settlement(
 ) -> None:
     """Update a usage log with the final settlement result."""
     sb = get_supabase_admin()
-    sb.table("credit_usage_logs").update({
-        "credits_charged": credits_charged,
-        "settlement_status": settlement_status,
-    }).eq("id", usage_log_id).execute()
+    sb.table("credit_usage_logs").update(
+        {
+            "credits_charged": credits_charged,
+            "settlement_status": settlement_status,
+        }
+    ).eq("id", usage_log_id).execute()
 
 
 async def get_transactions(
@@ -596,22 +588,24 @@ def build_reconciliation_report(logs: list[dict]) -> dict[str, Any]:
 
     provider_items = []
     for row in provider_breakdown.values():
-        provider_items.append({
-            "provider": row["provider"],
-            "usage_rows": row["usage_rows"],
-            "sessions_count": len(row["sessions_count"]),
-            "provider_cost_usd": _round_usd(row["provider_cost_usd"]),
-            "billed_cost_usd": _round_usd(row["billed_cost_usd"]),
-            "margin_usd": _round_usd(row["margin_usd"]),
-            "margin_percent": round(
-                (row["margin_usd"] / row["billed_cost_usd"] * 100)
-                if row["billed_cost_usd"] > 0
-                else 0.0,
-                2,
-            ),
-            "requested_credits": row["requested_credits"],
-            "charged_credits": row["charged_credits"],
-        })
+        provider_items.append(
+            {
+                "provider": row["provider"],
+                "usage_rows": row["usage_rows"],
+                "sessions_count": len(row["sessions_count"]),
+                "provider_cost_usd": _round_usd(row["provider_cost_usd"]),
+                "billed_cost_usd": _round_usd(row["billed_cost_usd"]),
+                "margin_usd": _round_usd(row["margin_usd"]),
+                "margin_percent": round(
+                    (row["margin_usd"] / row["billed_cost_usd"] * 100)
+                    if row["billed_cost_usd"] > 0
+                    else 0.0,
+                    2,
+                ),
+                "requested_credits": row["requested_credits"],
+                "charged_credits": row["charged_credits"],
+            }
+        )
     provider_items.sort(key=lambda item: item["provider_cost_usd"], reverse=True)
 
     session_items = []
@@ -625,17 +619,19 @@ def build_reconciliation_report(logs: list[dict]) -> dict[str, Any]:
             settlement_status = "pending"
         else:
             settlement_status = "mixed"
-        session_items.append({
-            "session_id": row["session_id"],
-            "usage_rows": row["usage_rows"],
-            "providers": sorted(row["providers"]),
-            "provider_cost_usd": _round_usd(row["provider_cost_usd"]),
-            "billed_cost_usd": _round_usd(row["billed_cost_usd"]),
-            "margin_usd": _round_usd(row["margin_usd"]),
-            "requested_credits": row["requested_credits"],
-            "charged_credits": row["charged_credits"],
-            "settlement_status": settlement_status,
-        })
+        session_items.append(
+            {
+                "session_id": row["session_id"],
+                "usage_rows": row["usage_rows"],
+                "providers": sorted(row["providers"]),
+                "provider_cost_usd": _round_usd(row["provider_cost_usd"]),
+                "billed_cost_usd": _round_usd(row["billed_cost_usd"]),
+                "margin_usd": _round_usd(row["margin_usd"]),
+                "requested_credits": row["requested_credits"],
+                "charged_credits": row["charged_credits"],
+                "settlement_status": settlement_status,
+            }
+        )
     session_items.sort(key=lambda item: item["provider_cost_usd"], reverse=True)
 
     anomalies = [
@@ -726,19 +722,21 @@ async def process_usage_report(
         total_provider_cost_usd += breakdown.provider_cost_usd
         total_billed_cost_usd += breakdown.billed_cost_usd
         total_margin_usd += breakdown.margin_usd
-        logged_items.append({
-            "usage_log_id": usage_log_id,
-            "model_type": model_type,
-            "model_id": model_id,
-            "units_used": breakdown.normalized_units_used,
-            "provider_cost_usd": breakdown.provider_cost_usd,
-            "billed_cost_usd": breakdown.billed_cost_usd,
-            "margin_usd": breakdown.margin_usd,
-            "requested_credits": breakdown.requested_micro_credits,
-            "credits_charged": 0,
-            "pricing_source": breakdown.pricing_source,
-            "settlement_status": "pending",
-        })
+        logged_items.append(
+            {
+                "usage_log_id": usage_log_id,
+                "model_type": model_type,
+                "model_id": model_id,
+                "units_used": breakdown.normalized_units_used,
+                "provider_cost_usd": breakdown.provider_cost_usd,
+                "billed_cost_usd": breakdown.billed_cost_usd,
+                "margin_usd": breakdown.margin_usd,
+                "requested_credits": breakdown.requested_micro_credits,
+                "credits_charged": 0,
+                "pricing_source": breakdown.pricing_source,
+                "settlement_status": "pending",
+            }
+        )
 
     # Deduct total from user balance
     new_balance = 0
@@ -764,11 +762,7 @@ async def process_usage_report(
             )
 
     for logged_item in logged_items:
-        credits_charged = (
-            logged_item["requested_credits"]
-            if settlement_status == "charged"
-            else 0
-        )
+        credits_charged = logged_item["requested_credits"] if settlement_status == "charged" else 0
         await update_usage_settlement(
             logged_item["usage_log_id"],
             credits_charged=credits_charged,

@@ -18,10 +18,10 @@ import pytest
 from src.services import wallet_service
 from src.services.wallet_service import _compute_credit_amount
 
-
 # --------------------------------------------------------------------------
 # credit computation
 # --------------------------------------------------------------------------
+
 
 def test_a_usd_quote_is_used_when_present():
     assert _compute_credit_amount(Decimal("3"), Decimal("250"), asset_symbol="SOL") == 250_000_000
@@ -46,6 +46,7 @@ def test_unknown_asset_without_a_quote_is_refused():
 # --------------------------------------------------------------------------
 # settlement
 # --------------------------------------------------------------------------
+
 
 @pytest.fixture
 def funding_intent(fake_supabase, tenant):
@@ -99,9 +100,7 @@ async def test_settlement_grants_credits_and_then_confirms(fake_supabase, fundin
 
 
 @pytest.mark.anyio
-async def test_replaying_the_same_settlement_does_not_double_credit(
-    fake_supabase, funding_intent
-):
+async def test_replaying_the_same_settlement_does_not_double_credit(fake_supabase, funding_intent):
     payload = {"intent_id": funding_intent["id"], "amount_received": "25", "event_id": "evt-1"}
     first = await wallet_service.settle_funding_intent("phantom_transfer", payload)
     second = await wallet_service.settle_funding_intent("phantom_transfer", payload)

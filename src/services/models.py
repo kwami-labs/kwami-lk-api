@@ -8,11 +8,13 @@ Last updated: 2026-01-28
 """
 
 from typing import Literal
+
 from pydantic import BaseModel
 
 
 class ModelMetadata(BaseModel):
     """Complete metadata for a model."""
+
     model_id: str
     display_name: str
     provider: str
@@ -112,7 +114,6 @@ LLM_METADATA: dict[str, ModelMetadata] = {
         speed="fast",
         tier="budget",
     ),
-    
     # -------------------------------------------------------------------------
     # OpenAI Models (Plugin)
     # -------------------------------------------------------------------------
@@ -198,7 +199,6 @@ LLM_METADATA: dict[str, ModelMetadata] = {
         speed="slow",
         tier="flagship",
     ),
-    
     # -------------------------------------------------------------------------
     # Google Models (Inference)
     # -------------------------------------------------------------------------
@@ -252,7 +252,6 @@ LLM_METADATA: dict[str, ModelMetadata] = {
         speed="fast",
         tier="budget",
     ),
-    
     # -------------------------------------------------------------------------
     # Google Models (Plugin)
     # -------------------------------------------------------------------------
@@ -306,7 +305,6 @@ LLM_METADATA: dict[str, ModelMetadata] = {
         speed="fast",
         tier="budget",
     ),
-    
     # -------------------------------------------------------------------------
     # Anthropic Models (Plugin)
     # -------------------------------------------------------------------------
@@ -370,7 +368,6 @@ LLM_METADATA: dict[str, ModelMetadata] = {
         speed="fast",
         tier="budget",
     ),
-    
     # -------------------------------------------------------------------------
     # DeepSeek Models
     # -------------------------------------------------------------------------
@@ -384,7 +381,6 @@ LLM_METADATA: dict[str, ModelMetadata] = {
         speed="fast",
         tier="budget",
     ),
-    
     # -------------------------------------------------------------------------
     # Groq Models (Plugin)
     # -------------------------------------------------------------------------
@@ -429,7 +425,6 @@ LLM_METADATA: dict[str, ModelMetadata] = {
         speed="fast",
         tier="budget",
     ),
-    
     # -------------------------------------------------------------------------
     # Mistral Models (Plugin)
     # -------------------------------------------------------------------------
@@ -473,7 +468,6 @@ LLM_METADATA: dict[str, ModelMetadata] = {
         speed="fast",
         tier="budget",
     ),
-    
     # -------------------------------------------------------------------------
     # Kimi Models
     # -------------------------------------------------------------------------
@@ -500,28 +494,28 @@ def get_default_metadata(model_id: str, provider: str) -> ModelMetadata:
     # Try to infer from model name
     name = model_id.split("/")[-1] if "/" in model_id else model_id
     display_name = name.replace("-", " ").replace("_", " ").title()
-    
+
     # Infer capabilities from common patterns
     capabilities = ["streaming"]
     if any(x in model_id.lower() for x in ["gpt-4", "claude-3", "gemini", "llama-3"]):
         capabilities.append("function_calling")
     if any(x in model_id.lower() for x in ["4o", "gemini-2", "claude-3-5", "claude-sonnet"]):
         capabilities.append("vision")
-    
+
     # Infer speed from common patterns
     speed: Literal["fast", "standard", "slow"] = "standard"
     if any(x in model_id.lower() for x in ["mini", "nano", "flash", "haiku", "instant", "turbo"]):
         speed = "fast"
     elif any(x in model_id.lower() for x in ["opus", "pro", "large"]):
         speed = "slow"
-    
+
     # Infer tier
     tier: Literal["flagship", "standard", "budget"] = "standard"
     if any(x in model_id.lower() for x in ["opus", "pro", "large", "flagship"]):
         tier = "flagship"
     elif any(x in model_id.lower() for x in ["mini", "nano", "lite", "haiku", "small", "budget"]):
         tier = "budget"
-    
+
     return ModelMetadata(
         model_id=model_id,
         display_name=display_name,

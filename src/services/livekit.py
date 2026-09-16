@@ -3,10 +3,11 @@
 from datetime import timedelta
 
 from livekit import api
-from livekit.protocol.room import RoomConfiguration
 from livekit.protocol.agent_dispatch import RoomAgentDispatch
+from livekit.protocol.room import RoomConfiguration
 
 from src.core.config import settings
+
 
 def _default_agent_name() -> str:
     """The agent to dispatch.

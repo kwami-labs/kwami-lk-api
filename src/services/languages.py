@@ -22,8 +22,10 @@ logger = logging.getLogger("kwami-api.languages")
 # Language Models
 # =============================================================================
 
+
 class Language(BaseModel):
     """Language definition with metadata."""
+
     code: str
     name: str
     native_name: str | None = None
@@ -32,6 +34,7 @@ class Language(BaseModel):
 
 class ProviderLanguages(BaseModel):
     """Languages supported by a provider."""
+
     provider: str
     languages: list[Language]
     source: Literal["sdk", "yaml"] = "yaml"
@@ -49,44 +52,36 @@ LANGUAGE_NAMES: dict[str, dict[str, str]] = {
     "en-AU": {"name": "English (Australia)", "native": "English", "region": "AU"},
     "en-NZ": {"name": "English (New Zealand)", "native": "English", "region": "NZ"},
     "en-IN": {"name": "English (India)", "native": "English", "region": "IN"},
-    
     # Spanish
     "es": {"name": "Spanish", "native": "Español"},
     "es-419": {"name": "Spanish (Latin America)", "native": "Español", "region": "LATAM"},
     "es-LATAM": {"name": "Spanish (Latin America)", "native": "Español", "region": "LATAM"},
     "es-ES": {"name": "Spanish (Spain)", "native": "Español", "region": "ES"},
     "es-MX": {"name": "Spanish (Mexico)", "native": "Español", "region": "MX"},
-    
     # French
     "fr": {"name": "French", "native": "Français"},
     "fr-CA": {"name": "French (Canada)", "native": "Français", "region": "CA"},
     "fr-FR": {"name": "French (France)", "native": "Français", "region": "FR"},
-    
     # German
     "de": {"name": "German", "native": "Deutsch"},
     "de-DE": {"name": "German (Germany)", "native": "Deutsch", "region": "DE"},
     "de-AT": {"name": "German (Austria)", "native": "Deutsch", "region": "AT"},
     "de-CH": {"name": "German (Switzerland)", "native": "Deutsch", "region": "CH"},
-    
     # Portuguese
     "pt": {"name": "Portuguese", "native": "Português"},
     "pt-BR": {"name": "Portuguese (Brazil)", "native": "Português", "region": "BR"},
     "pt-PT": {"name": "Portuguese (Portugal)", "native": "Português", "region": "PT"},
-    
     # Chinese
     "zh": {"name": "Chinese", "native": "中文"},
     "zh-CN": {"name": "Chinese (Simplified)", "native": "简体中文", "region": "CN"},
     "zh-TW": {"name": "Chinese (Traditional)", "native": "繁體中文", "region": "TW"},
     "zh-HK": {"name": "Chinese (Hong Kong)", "native": "粵語", "region": "HK"},
-    
     # Japanese
     "ja": {"name": "Japanese", "native": "日本語"},
     "ja-JP": {"name": "Japanese (Japan)", "native": "日本語", "region": "JP"},
-    
     # Korean
     "ko": {"name": "Korean", "native": "한국어"},
     "ko-KR": {"name": "Korean (Korea)", "native": "한국어", "region": "KR"},
-    
     # Other major languages
     "it": {"name": "Italian", "native": "Italiano"},
     "nl": {"name": "Dutch", "native": "Nederlands"},
@@ -102,7 +97,6 @@ LANGUAGE_NAMES: dict[str, dict[str, str]] = {
     "ms": {"name": "Malay", "native": "Bahasa Melayu"},
     "tl": {"name": "Tagalog", "native": "Tagalog"},
     "fil": {"name": "Filipino", "native": "Filipino"},
-    
     # European languages
     "sv": {"name": "Swedish", "native": "Svenska"},
     "da": {"name": "Danish", "native": "Dansk"},
@@ -118,7 +112,6 @@ LANGUAGE_NAMES: dict[str, dict[str, str]] = {
     "uk": {"name": "Ukrainian", "native": "Українська"},
     "he": {"name": "Hebrew", "native": "עברית"},
     "ka": {"name": "Georgian", "native": "ქართული"},
-    
     # Indian languages
     "ta": {"name": "Tamil", "native": "தமிழ்"},
     "te": {"name": "Telugu", "native": "తెలుగు"},
@@ -129,12 +122,10 @@ LANGUAGE_NAMES: dict[str, dict[str, str]] = {
     "mr": {"name": "Marathi", "native": "मराठी"},
     "or": {"name": "Odia", "native": "ଓଡ଼ିଆ"},
     "pa": {"name": "Punjabi", "native": "ਪੰਜਾਬੀ"},
-    
     # African languages
     "sw": {"name": "Swahili", "native": "Kiswahili"},
     "af": {"name": "Afrikaans", "native": "Afrikaans"},
     "taq": {"name": "Tamasheq", "native": "Tamasheq"},
-    
     # Special
     "multi": {"name": "Multi-language", "native": "Multi-language"},
 }
@@ -158,10 +149,12 @@ def get_language_info(code: str) -> Language:
 # SDK Language Extraction
 # =============================================================================
 
+
 def _extract_deepgram_stt_languages() -> list[Language]:
     """Extract Deepgram STT languages from SDK."""
     try:
         from livekit.plugins.deepgram.models import DeepgramLanguages
+
         codes = get_args(DeepgramLanguages)
         return [get_language_info(code) for code in codes]
     except ImportError as e:
@@ -173,6 +166,7 @@ def _extract_cartesia_stt_languages() -> list[Language]:
     """Extract Cartesia STT languages from SDK."""
     try:
         from livekit.plugins.cartesia.models import STTLanguages
+
         codes = get_args(STTLanguages)
         return [get_language_info(code) for code in codes]
     except ImportError as e:
@@ -184,6 +178,7 @@ def _extract_cartesia_tts_languages() -> list[Language]:
     """Extract Cartesia TTS languages from SDK."""
     try:
         from livekit.plugins.cartesia.models import TTSLanguages
+
         codes = get_args(TTSLanguages)
         return [get_language_info(code) for code in codes]
     except ImportError as e:
@@ -195,6 +190,7 @@ def _extract_google_stt_languages() -> list[Language]:
     """Extract Google STT languages from SDK."""
     try:
         from livekit.plugins.google.models import SpeechLanguages
+
         codes = get_args(SpeechLanguages)
         return [get_language_info(code) for code in codes]
     except ImportError as e:
@@ -215,10 +211,10 @@ def _load_languages_yaml() -> dict:
     global _LANGUAGES_YAML
     if _LANGUAGES_YAML is not None:
         return _LANGUAGES_YAML
-    
+
     yaml_path = Path(__file__).parents[2] / "config" / "livekit_languages.yaml"
     try:
-        with open(yaml_path, "r") as f:
+        with open(yaml_path) as f:
             _LANGUAGES_YAML = yaml.safe_load(f) or {}
             logger.info(f"Loaded languages from {yaml_path}")
             return _LANGUAGES_YAML
@@ -243,10 +239,11 @@ def _get_yaml_languages(provider: str, model_type: str) -> list[Language]:
 # Public API
 # =============================================================================
 
+
 def get_stt_languages() -> dict[str, ProviderLanguages]:
     """Get all STT languages grouped by provider."""
     providers = {}
-    
+
     # SDK-extracted languages
     deepgram_langs = _extract_deepgram_stt_languages()
     if deepgram_langs:
@@ -255,7 +252,7 @@ def get_stt_languages() -> dict[str, ProviderLanguages]:
             languages=deepgram_langs,
             source="sdk",
         )
-    
+
     cartesia_langs = _extract_cartesia_stt_languages()
     if cartesia_langs:
         providers["cartesia"] = ProviderLanguages(
@@ -263,7 +260,7 @@ def get_stt_languages() -> dict[str, ProviderLanguages]:
             languages=cartesia_langs,
             source="sdk",
         )
-    
+
     google_langs = _extract_google_stt_languages()
     if google_langs:
         providers["google"] = ProviderLanguages(
@@ -271,7 +268,7 @@ def get_stt_languages() -> dict[str, ProviderLanguages]:
             languages=google_langs,
             source="sdk",
         )
-    
+
     # YAML languages for providers not in SDK
     yaml_providers = ["openai", "assemblyai", "elevenlabs", "groq"]
     for provider in yaml_providers:
@@ -282,7 +279,7 @@ def get_stt_languages() -> dict[str, ProviderLanguages]:
                 languages=langs,
                 source="yaml",
             )
-    
+
     return providers
 
 
@@ -295,7 +292,7 @@ def get_stt_languages_by_provider(provider: str) -> ProviderLanguages | None:
 def get_tts_languages() -> dict[str, ProviderLanguages]:
     """Get all TTS languages grouped by provider."""
     providers = {}
-    
+
     # SDK-extracted languages
     cartesia_langs = _extract_cartesia_tts_languages()
     if cartesia_langs:
@@ -304,7 +301,7 @@ def get_tts_languages() -> dict[str, ProviderLanguages]:
             languages=cartesia_langs,
             source="sdk",
         )
-    
+
     # YAML languages for providers not in SDK
     yaml_providers = ["openai", "elevenlabs", "deepgram", "google", "rime"]
     for provider in yaml_providers:
@@ -315,7 +312,7 @@ def get_tts_languages() -> dict[str, ProviderLanguages]:
                 languages=langs,
                 source="yaml",
             )
-    
+
     return providers
 
 
@@ -328,7 +325,7 @@ def get_tts_languages_by_provider(provider: str) -> ProviderLanguages | None:
 def get_realtime_languages() -> dict[str, ProviderLanguages]:
     """Get all Realtime languages grouped by provider."""
     providers = {}
-    
+
     # Realtime languages are primarily from YAML
     yaml_providers = ["openai", "gemini"]
     for provider in yaml_providers:
@@ -339,7 +336,7 @@ def get_realtime_languages() -> dict[str, ProviderLanguages]:
                 languages=langs,
                 source="yaml",
             )
-    
+
     return providers
 
 

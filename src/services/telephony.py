@@ -8,12 +8,12 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 from livekit import api as livekit_api
-from livekit.api.twirp_client import TwirpError
 from livekit.api.sip_service import (
     CreateSIPParticipantRequest,
     ListSIPInboundTrunkRequest,
     ListSIPOutboundTrunkRequest,
 )
+from livekit.api.twirp_client import TwirpError
 from livekit.protocol.agent_dispatch import CreateAgentDispatchRequest
 
 from src.core.config import settings
@@ -87,7 +87,9 @@ async def sync_shared_livekit_trunks(phone_number: str) -> dict[str, object]:
         if settings.livekit_sip_outbound_trunk_id:
             outbound = await _find_outbound_trunk(lkapi, settings.livekit_sip_outbound_trunk_id)
             if not outbound:
-                raise HTTPException(status_code=503, detail="Configured LiveKit outbound SIP trunk was not found")
+                raise HTTPException(
+                    status_code=503, detail="Configured LiveKit outbound SIP trunk was not found"
+                )
             outbound_numbers = _merged_numbers(outbound, phone_number)
             await lkapi.sip.update_outbound_trunk_fields(
                 settings.livekit_sip_outbound_trunk_id,
@@ -106,7 +108,9 @@ async def sync_shared_livekit_trunks(phone_number: str) -> dict[str, object]:
         if settings.livekit_sip_inbound_trunk_id:
             inbound = await _find_inbound_trunk(lkapi, settings.livekit_sip_inbound_trunk_id)
             if not inbound:
-                raise HTTPException(status_code=503, detail="Configured LiveKit inbound SIP trunk was not found")
+                raise HTTPException(
+                    status_code=503, detail="Configured LiveKit inbound SIP trunk was not found"
+                )
             inbound_numbers = _merged_numbers(inbound, phone_number)
             await lkapi.sip.update_inbound_trunk_fields(
                 settings.livekit_sip_inbound_trunk_id,
@@ -246,8 +250,7 @@ async def create_outbound_call(
                 status_code=502,
                 detail=(
                     "LiveKit could not start the outbound SIP call. "
-                    f"{exc.code}: {exc.message or 'unknown error'}."
-                    + _twirp_sip_client_detail(exc)
+                    f"{exc.code}: {exc.message or 'unknown error'}." + _twirp_sip_client_detail(exc)
                 ),
             ) from exc
 
@@ -273,7 +276,11 @@ async def create_outbound_call(
                 detail=(
                     "Outbound SIP leg was created but the Kwami agent could not be dispatched to the call room. "
                     f"{exc.code}: {exc.message or 'unknown error'}."
-                    + (f" ({'; '.join(f'{k}={v}' for k, v in sorted((exc.metadata or {}).items()))})" if exc.metadata else "")
+                    + (
+                        f" ({'; '.join(f'{k}={v}' for k, v in sorted((exc.metadata or {}).items()))})"
+                        if exc.metadata
+                        else ""
+                    )
                     + " Ensure LIVEKIT_AGENT_NAME matches your worker and the agent is deployed."
                 ),
             ) from exc

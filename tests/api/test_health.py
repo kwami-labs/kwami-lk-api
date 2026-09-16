@@ -1,6 +1,7 @@
 import pytest
 from httpx import AsyncClient
 
+
 @pytest.mark.anyio
 async def test_health_check(client: AsyncClient):
     """Test health endpoint returns healthy status."""
@@ -9,6 +10,7 @@ async def test_health_check(client: AsyncClient):
     data = response.json()
     assert data["status"] == "healthy"
     assert "service" in data
+
 
 @pytest.mark.anyio
 async def test_root(client: AsyncClient):

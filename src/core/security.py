@@ -3,7 +3,6 @@
 import hmac
 import logging
 from dataclasses import dataclass
-from typing import Optional
 
 import jwt
 from jwt import PyJWKClient
@@ -13,10 +12,10 @@ from src.core.config import settings
 logger = logging.getLogger("kwami-api.security")
 
 # JWKS client for asymmetric key verification (cached)
-_jwks_client: Optional[PyJWKClient] = None
+_jwks_client: PyJWKClient | None = None
 
 
-def get_jwks_client() -> Optional[PyJWKClient]:
+def get_jwks_client() -> PyJWKClient | None:
     """Get or create JWKS client for Supabase."""
     global _jwks_client
     if _jwks_client is None and settings.supabase_jwks_url:
@@ -30,7 +29,7 @@ class AuthUser:
 
     def __init__(self, payload: dict):
         self.id: str = payload.get("sub", "")
-        self.email: Optional[str] = payload.get("email")
+        self.email: str | None = payload.get("email")
         self.role: str = payload.get("role", "authenticated")
         self.aud: str = payload.get("aud", "")
         self.raw_payload: dict = payload

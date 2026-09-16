@@ -153,7 +153,9 @@ async def purchase_kwami_phone_number(
             logger.warning("Failed to attach number to Twilio SIP trunk: %s", exc)
         try:
             shared_infra_sync = await sync_shared_livekit_trunks(phone_number)
-            outbound_state = shared_infra_sync.get("outbound") if isinstance(shared_infra_sync, dict) else {}
+            outbound_state = (
+                shared_infra_sync.get("outbound") if isinstance(shared_infra_sync, dict) else {}
+            )
             voice_outbound_ready = bool(
                 isinstance(outbound_state, dict) and outbound_state.get("synced")
             )

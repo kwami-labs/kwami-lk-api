@@ -211,7 +211,9 @@ async def admin_client(app_instance: FastAPI, auth_registry) -> AsyncGenerator[A
 
 
 @pytest.fixture
-async def internal_client(app_instance: FastAPI, auth_registry) -> AsyncGenerator[AsyncClient, None]:
+async def internal_client(
+    app_instance: FastAPI, auth_registry
+) -> AsyncGenerator[AsyncClient, None]:
     """Client carrying the shared agent key, for ``/internal/*`` and usage reports."""
     async with _asgi_client(app_instance) as c:
         c.headers["X-Kwami-API-Key"] = settings.kwami_api_key or ""

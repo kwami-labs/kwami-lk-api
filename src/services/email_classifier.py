@@ -39,52 +39,95 @@ _DOMAIN_CATEGORY: list[tuple[list[str], str]] = [
     # Travel
     (
         [
-            "booking.com", "airbnb.com", "expedia.com", "hotels.com",
-            "kayak.com", "tripadvisor.com", "skyscanner.com",
-            "united.com", "delta.com", "aa.com", "southwest.com",
-            "ryanair.com", "easyjet.com", "flydubai.com",
+            "booking.com",
+            "airbnb.com",
+            "expedia.com",
+            "hotels.com",
+            "kayak.com",
+            "tripadvisor.com",
+            "skyscanner.com",
+            "united.com",
+            "delta.com",
+            "aa.com",
+            "southwest.com",
+            "ryanair.com",
+            "easyjet.com",
+            "flydubai.com",
         ],
         TRAVEL,
     ),
     # Bills
     (
         [
-            "paypal.com", "venmo.com", "chase.com", "bankofamerica.com",
-            "capitalone.com", "amex.com", "discover.com", "citi.com",
-            "mint.com", "plaid.com", "stripe.com", "invoicing.",
+            "paypal.com",
+            "venmo.com",
+            "chase.com",
+            "bankofamerica.com",
+            "capitalone.com",
+            "amex.com",
+            "discover.com",
+            "citi.com",
+            "mint.com",
+            "plaid.com",
+            "stripe.com",
+            "invoicing.",
         ],
         BILLS,
     ),
     # Shopping
     (
         [
-            "amazon.com", "ebay.com", "etsy.com", "shopify.com",
-            "walmart.com", "target.com", "bestbuy.com", "aliexpress.com",
+            "amazon.com",
+            "ebay.com",
+            "etsy.com",
+            "shopify.com",
+            "walmart.com",
+            "target.com",
+            "bestbuy.com",
+            "aliexpress.com",
         ],
         SHOPPING,
     ),
     # Newsletters
     (
         [
-            "substack.com", "medium.com", "mailchimp.com", "beehiiv.com",
-            "convertkit.com", "buttondown.email", "revue.email",
+            "substack.com",
+            "medium.com",
+            "mailchimp.com",
+            "beehiiv.com",
+            "convertkit.com",
+            "buttondown.email",
+            "revue.email",
         ],
         NEWSLETTERS,
     ),
     # Notifications
     (
         [
-            "github.com", "gitlab.com", "bitbucket.org", "vercel.com",
-            "netlify.com", "sentry.io", "linear.app", "notion.so",
-            "slack.com", "discord.com", "trello.com", "asana.com",
+            "github.com",
+            "gitlab.com",
+            "bitbucket.org",
+            "vercel.com",
+            "netlify.com",
+            "sentry.io",
+            "linear.app",
+            "notion.so",
+            "slack.com",
+            "discord.com",
+            "trello.com",
+            "asana.com",
         ],
         NOTIFICATIONS,
     ),
     # Events
     (
         [
-            "eventbrite.com", "meetup.com", "zoom.us", "calendly.com",
-            "lu.ma", "ticketmaster.com",
+            "eventbrite.com",
+            "meetup.com",
+            "zoom.us",
+            "calendly.com",
+            "lu.ma",
+            "ticketmaster.com",
         ],
         EVENTS,
     ),
@@ -156,7 +199,7 @@ def _extract_domain(address: str) -> str:
     at = address.rfind("@")
     if at == -1:
         return ""
-    return address[at + 1:].lower().strip().rstrip(">")
+    return address[at + 1 :].lower().strip().rstrip(">")
 
 
 _AMOUNT_RE = re.compile(r"\$\s?([\d,]+\.?\d{0,2})")

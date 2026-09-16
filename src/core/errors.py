@@ -57,35 +57,35 @@ class DomainError(Exception):
         super().__init__(self.message)
 
 
-class NotFound(DomainError):
+class NotFoundError(DomainError):
     """The requested resource does not exist."""
 
     status_code = status.HTTP_404_NOT_FOUND
     code = "not_found"
 
 
-class Forbidden(DomainError):
+class ForbiddenError(DomainError):
     """You do not have access to this resource."""
 
     status_code = status.HTTP_403_FORBIDDEN
     code = "forbidden"
 
 
-class Conflict(DomainError):
+class ConflictError(DomainError):
     """The request conflicts with the current state."""
 
     status_code = status.HTTP_409_CONFLICT
     code = "conflict"
 
 
-class ValidationFailed(DomainError):
+class ValidationFailedError(DomainError):
     """The request was not valid."""
 
     status_code = 422  # starlette renamed its constant; the literal is version-safe
     code = "validation_failed"
 
 
-class InsufficientCredits(DomainError):
+class InsufficientCreditsError(DomainError):
     """Insufficient credits. Please purchase credits to continue."""
 
     status_code = status.HTTP_402_PAYMENT_REQUIRED
@@ -99,7 +99,7 @@ class ExternalServiceError(DomainError):
     code = "upstream_error"
 
 
-class ServiceUnavailable(DomainError):
+class ServiceUnavailableError(DomainError):
     """This feature is not configured."""
 
     status_code = status.HTTP_503_SERVICE_UNAVAILABLE
@@ -109,38 +109,38 @@ class ServiceUnavailable(DomainError):
 # -- specific errors, so call sites read as intent ---------------------------
 
 
-class KwamiNotFound(NotFound):
+class KwamiNotFoundError(NotFoundError):
     """Kwami not found."""
 
     code = "kwami_not_found"
 
 
-class ChannelNotFound(NotFound):
+class ChannelNotFoundError(NotFoundError):
     """Channel not found."""
 
     code = "channel_not_found"
 
 
-class ContactNotFound(NotFound):
+class ContactNotFoundError(NotFoundError):
     """Contact not found."""
 
     code = "contact_not_found"
 
 
-class WalletNotFound(NotFound):
+class WalletNotFoundError(NotFoundError):
     """Wallet not found."""
 
     code = "wallet_not_found"
 
 
-class InvalidPhoneNumber(ValidationFailed):
+class InvalidPhoneNumberError(ValidationFailedError):
     """The phone number is not valid."""
 
     status_code = status.HTTP_400_BAD_REQUEST
     code = "invalid_phone_number"
 
 
-class InvalidEmailAddress(ValidationFailed):
+class InvalidEmailAddressError(ValidationFailedError):
     """The email address is not valid."""
 
     status_code = status.HTTP_400_BAD_REQUEST
@@ -193,9 +193,7 @@ def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(Exception)
     async def _unhandled(request: Request, exc: Exception) -> JSONResponse:
         # Full traceback server-side, nothing upstream-specific to the client.
-        logger.exception(
-            "Unhandled error on %s %s", request.method, request.url.path, exc_info=exc
-        )
+        logger.exception("Unhandled error on %s %s", request.method, request.url.path, exc_info=exc)
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content=error_body("internal_error", "An unexpected error occurred"),
