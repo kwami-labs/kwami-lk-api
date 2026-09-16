@@ -17,7 +17,7 @@ from src.services.channels import (
     find_channel_by_address,
     find_channel_by_kind_and_address,
     get_owned_kwami,
-    maybe_normalize_phone_number,
+    try_normalize_phone_number,
     update_call_event_status,
     update_message_event_status,
 )
@@ -43,17 +43,19 @@ async def twilio_voice_webhook(request: Request):
     payload = await _form_payload(request)
     await validate_twilio_request(request, payload)
 
-    called = maybe_normalize_phone_number(
-        payload.get("To") or payload.get("Called"),
-        settings.twilio_phone_country,
-    )
-    caller = maybe_normalize_phone_number(
+    # try_* rather than maybe_*: Twilio sends whatever the network gave it, and
+    # a raise here becomes a 5xx, which Twilio retries -- one malformed caller ID
+    # would otherwise turn into a redelivery storm.
+    raw_called = payload.get("To") or payload.get("Called")
+    called = try_normalize_phone_number(raw_called, settings.twilio_phone_country)
+    caller = try_normalize_phone_number(
         payload.get("From") or payload.get("Caller"),
         settings.twilio_phone_country,
     )
 
     if not called:
-        raise HTTPException(status_code=400, detail="Missing destination number")
+        logger.warning("Inbound voice call with no usable destination number")
+        return Response("<Response><Reject/></Response>", media_type="application/xml")
 
     channel = find_channel_by_address(called)
     if not channel:
@@ -137,14 +139,21 @@ async def twilio_whatsapp_webhook(request: Request):
     if is_whatsapp:
         channel = find_channel_by_kind_and_address("whatsapp", to_address)
     else:
-        to_e164 = maybe_normalize_phone_number(to_address, settings.twilio_phone_country) or to_address
-        channel = find_channel_by_kind_and_address("sms", to_e164) or find_channel_by_address(to_e164)
+        to_e164 = (
+            try_normalize_phone_number(to_address, settings.twilio_phone_country) or to_address
+        )
+        channel = find_channel_by_kind_and_address("sms", to_e164) or find_channel_by_address(
+            to_e164
+        )
     if not channel:
         logger.warning("Inbound %s message for unknown sender: %s", channel_kind, to_address)
-        return Response(build_message_ack_response("This sender is not configured."), media_type="application/xml")
+        return Response(
+            build_message_ack_response("This sender is not configured."),
+            media_type="application/xml",
+        )
 
     raw_contact_address = from_address.replace("whatsapp:", "")
-    contact_number = maybe_normalize_phone_number(raw_contact_address, settings.twilio_phone_country)
+    contact_number = try_normalize_phone_number(raw_contact_address, settings.twilio_phone_country)
     contact = ensure_contact(
         user_id=channel["user_id"],
         kwami_id=channel["kwami_id"],
@@ -159,7 +168,10 @@ async def twilio_whatsapp_webhook(request: Request):
         kind="whatsapp",
         contact_id=contact["id"],
         external_thread_id=from_address,
-        metadata={"source": "twilio_whatsapp" if is_whatsapp else "twilio_sms", "channelKind": channel_kind},
+        metadata={
+            "source": "twilio_whatsapp" if is_whatsapp else "twilio_sms",
+            "channelKind": channel_kind,
+        },
     )
     create_message_event(
         conversation_id=conversation["id"],
@@ -185,8 +197,7 @@ async def twilio_whatsapp_webhook(request: Request):
         )
     else:
         ack_text = (
-            f"{kwami.get('name') or 'Kwami'} received your SMS. "
-            "SMS is connected for this number."
+            f"{kwami.get('name') or 'Kwami'} received your SMS. SMS is connected for this number."
         )
     return Response(build_message_ack_response(ack_text), media_type="application/xml")
 
@@ -209,6 +220,7 @@ async def twilio_whatsapp_status_webhook(request: Request):
 # ---------------------------------------------------------------------------
 # SendGrid Inbound Parse
 # ---------------------------------------------------------------------------
+
 
 def _parse_address_list(raw: str) -> list[str]:
     """Extract email addresses from a SendGrid-style address string."""

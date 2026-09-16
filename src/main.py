@@ -20,8 +20,8 @@ from src.api.routes import (
     memory,
     models,
     token,
-    wallet,
     voices,
+    wallet,
     webhooks,
 )
 from src.core.config import settings
@@ -45,7 +45,9 @@ async def lifespan(app: FastAPI):
     if settings.kwami_api_key and settings.kwami_api_key.strip():
         logger.info("📊 Kwami API key for usage report: set")
     else:
-        logger.warning("📊 Kwami API key for usage report: NOT SET (agent usage reports will get 503)")
+        logger.warning(
+            "📊 Kwami API key for usage report: NOT SET (agent usage reports will get 503)"
+        )
     yield
     logger.info("👋 Shutting down...")
 
@@ -100,6 +102,12 @@ def run():
         port=settings.api_port,
         reload=settings.debug,
         log_level="debug" if settings.debug else "info",
+        # Fly terminates TLS and forwards over the internal network. Without
+        # these, request.url.scheme stays "http" (breaking Twilio signature
+        # validation, which signs the https URL) and request.client.host is the
+        # proxy rather than the caller. Only the Fly proxy can reach this port.
+        proxy_headers=True,
+        forwarded_allow_ips="*",
     )
 
 
