@@ -18,6 +18,10 @@ venv
 tests
 .pytest_cache
 .coverage
+coverage.unit
+coverage.integration
+coverage.json
+coverage.floors
 htmlcov
 *.egg-info
 .pytest_cache
@@ -27,6 +31,7 @@ htmlcov
 fly.toml
 .dockerignore
 .github
+.githooks
 
 # Misc
 __pycache__
