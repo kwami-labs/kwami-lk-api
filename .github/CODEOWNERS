@@ -3,26 +3,26 @@
 # Requesting a review is all this does by default; it does not block a merge. Turn it into a
 # requirement with CODEOWNER_REVIEW=1 ./scripts/branch-protection.sh.
 
-*                       @quantium-rock
+*                       @alexcolls
 
 # The pipeline and the rules that gate it.
-/.github/               @quantium-rock
-/scripts/               @quantium-rock
-/Makefile               @quantium-rock
+/.github/               @alexcolls
+/scripts/               @alexcolls
+/Makefile               @alexcolls
 
 # The coverage floors are a deliberate decision per module. Lowering one should be argued for,
 # not merged quietly.
-/coverage.floors        @quantium-rock
+/coverage.floors        @alexcolls
 
 # Money. Every change here is reviewable by definition: balances, idempotency keys, webhook
 # replay and the reconciliation that has to agree with Stripe afterwards.
-/src/services/credits.py            @quantium-rock
-/src/services/wallet_service.py     @quantium-rock
-/src/services/stripe_service.py     @quantium-rock
-/src/services/idempotency.py        @quantium-rock
-/src/api/routes/webhooks.py         @quantium-rock
-/migrations/                        @quantium-rock
+/src/services/credits.py            @alexcolls
+/src/services/wallet_service.py     @alexcolls
+/src/services/stripe_service.py     @alexcolls
+/src/services/idempotency.py        @alexcolls
+/src/api/routes/webhooks.py         @alexcolls
+/migrations/                        @alexcolls
 
 # Infrastructure and the release image.
-/Dockerfile             @quantium-rock
-/fly.toml               @quantium-rock
+/Dockerfile             @alexcolls
+/fly.toml               @alexcolls
