@@ -64,6 +64,9 @@ open("src/__init__.py", "w").write(new)
 PY
 
 # README badge. Absent is not an error: the badge is decoration, not a source of truth.
-sed -i -E "s|badge/release-v[0-9][0-9A-Za-z.+-]*|badge/release-v${version}|" README.md
+#
+# The character class stops at the first non-digit-or-dot on purpose: a shields.io badge is
+# `badge/release-v0.1.0-blue`, and a greedier pattern eats the `-blue` and the colour with it.
+sed -i -E "s|badge/release-v[0-9]+(\.[0-9]+)*|badge/release-v${version}|" README.md
 
 echo "version set to ${version} in pyproject.toml, uv.lock, src/__init__.py and README.md"
