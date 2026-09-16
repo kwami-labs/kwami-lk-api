@@ -1,20 +1,25 @@
 # Kwami LiveKit API
 
-[![release](https://img.shields.io/badge/release-v0.1.0-blue)](CHANGELOG.md)
+[![release](https://img.shields.io/badge/release-v0.1.1-blue)](CHANGELOG.md)
 [![ci](https://github.com/kwami-labs/kwami-lk-api/actions/workflows/ci.yml/badge.svg)](https://github.com/kwami-labs/kwami-lk-api/actions/workflows/ci.yml)
 [![cd](https://github.com/kwami-labs/kwami-lk-api/actions/workflows/cd.yml/badge.svg)](https://github.com/kwami-labs/kwami-lk-api/actions/workflows/cd.yml)
 [![license](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
 
-Backend API for **Kwami** voice agents: LiveKit token issuance, model and voice catalogs, Zep memory operations, and credits (Stripe). Used by [Kwami App](https://github.com/kwami-labs/kwami-app) and the Kwami LiveKit agent.
+Backend API for **Kwami** voice agents: LiveKit token issuance, model and voice catalogs, Zep memory operations, credits (Stripe), telephony, email, and wallets. Used by [Kwami App](https://github.com/kwami-labs/kwami-app) and the Kwami LiveKit agent.
+
+Long-form documentation lives in [`docs/`](docs/README.md): [architecture](docs/architecture.md), [API](docs/api.md), [security](docs/security.md), [billing](docs/billing.md), [data model](docs/data-model.md), [deployment](docs/deployment.md), [development](docs/development.md).
 
 ## Features
 
-- **LiveKit tokens** — Issue JWT tokens for app/agent participants; agent dispatch is handled by LiveKit Cloud
+- **LiveKit tokens** — Issue JWT tokens for app/agent participants; rooms are claimed server-side; agent dispatch is LiveKit Cloud
 - **Models** — STT, LLM, TTS model lists derived from LiveKit plugins (OpenAI, Anthropic, Deepgram, ElevenLabs, etc.)
 - **Voices & languages** — Voice and language catalogs for the app
 - **Memory** — Zep-backed memory endpoints (sessions, search, graph operations)
-- **Credits** — Balance, usage, and Stripe checkout for credit purchases
-- **Auth** — Supabase JWT verification for protected routes
+- **Credits** — Balance, usage settlement, Stripe checkout, admin reconciliation
+- **Channels** — Phone number search/purchase, SIP calls, SMS, WhatsApp
+- **Email & calendar** — SendGrid Smart Hub and per-kwami events
+- **Wallets** — Optional Solana custody funding into the credits ledger
+- **Auth** — Supabase JWT (JWKS), agent API keys, signed webhooks
 
 ## Prerequisites
 
@@ -51,17 +56,21 @@ API listens on `API_HOST:API_PORT` (default `0.0.0.0:8080`). OpenAPI docs at `/d
 
 ## API overview
 
-| Prefix    | Description                |
-|----------|----------------------------|
-| `/`      | Health                     |
-| `/token` | LiveKit token generation   |
-| `/memory`| Zep memory (sessions, etc.)|
-| `/models`| STT/LLM/TTS model lists    |
-| `/voices`| Voice catalog              |
-| `/languages` | Language catalog      |
-| `/credits`   | Balance, usage, Stripe |
+| Prefix | Description |
+|--------|-------------|
+| `/` `/health` | Liveness |
+| `/token` | LiveKit token generation and room claim |
+| `/memory` | Zep memory (sessions, graph, search) |
+| `/models` `/voices` `/languages` | Catalogs |
+| `/credits` | Balance, packs, Stripe, usage report |
+| `/channels` | Phone, SMS, WhatsApp, outbound calls |
+| `/contacts` `/email` `/calendar` | Per-kwami communications |
+| `/wallets` | Custody wallets and funding |
+| `/webhooks` | Twilio and SendGrid inbound |
+| `/internal` | Agent bootstrap (API key) |
+| `/admin/reconciliation` | Provider invoice diffs |
 
-The **token** endpoint expects a POST body with `roomName`, optional `participantName` / `participantIdentity`, permissions, and optional `kwamiId`. It returns a JWT for connecting to LiveKit.
+The **token** endpoint expects a POST body with optional `roomName`, `participantName` / `participantIdentity`, permissions, and optional `kwamiId`. Omitted room names are generated; a name owned by another user is rejected. Full route map and auth classes: [docs/api.md](docs/api.md).
 
 ## Environment variables
 
@@ -108,22 +117,16 @@ See `.env.sample` for a full list and comments.
 
 ```
 src/
-├── main.py           # FastAPI app, CORS, routes
+├── main.py              # FastAPI app, CORS, routes
 ├── api/
-│   ├── routes/       # health, token, memory, models, voices, languages, credits
-│   └── deps.py       # Auth dependencies
-├── core/
-│   ├── config.py     # Pydantic settings
-│   └── security.py    # JWT / auth helpers
-├── services/
-│   ├── livekit.py    # Token creation
-│   ├── models.py     # Model list from LiveKit plugins
-│   ├── voices.py     # Voice catalog
-│   ├── languages.py  # Language catalog
-│   ├── credits.py    # Balance, usage, Stripe
-│   └── ...
-config/               # LiveKit plugin YAML (inference, voices, languages)
-migrations/           # SQL migrations (credits, user kwamis)
+│   ├── routes/          # one module per HTTP surface
+│   ├── deps.py          # JWT, admin, agent API-key dependencies
+│   └── authz.py         # owned-kwami resolvers
+├── core/                # settings, JWKS, domain errors
+└── services/            # LiveKit, credits, channels, wallets, …
+config/                  # LiveKit plugin YAML (inference, voices, languages)
+migrations/              # numbered SQL, applied by scripts/migrate.py
+docs/                    # architecture, API, security, billing, …
 tests/
 ```
 
@@ -140,8 +143,9 @@ from a commit whose tests did not pass, and no version is ever bumped in a pull 
   full commit SHA.
 - **Docker** — `Dockerfile` builds the same image locally; set env via `--env-file`.
 
-[CONTRIBUTING.md](CONTRIBUTING.md) has the branch model, the release rules and what each CI check
-means. [SECURITY.md](SECURITY.md) is how to report a vulnerability.
+[docs/deployment.md](docs/deployment.md) is the pipeline in full. [CONTRIBUTING.md](CONTRIBUTING.md)
+has the branch model, the release rules and what each CI check means. [SECURITY.md](SECURITY.md) is
+how to report a vulnerability; [docs/security.md](docs/security.md) is the threat model.
 
 ## License
 

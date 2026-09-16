@@ -1,6 +1,6 @@
 [project]
 name = "kwami-lk-api"
-version = "0.1.0"
+version = "0.1.1"
 description = "LiveKit token endpoint API for Kwami AI"
 requires-python = ">=3.11"
 dependencies = [
