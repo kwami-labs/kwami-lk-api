@@ -7,6 +7,7 @@ Provides endpoints for:
 - Agent usage reporting (Kwami API key auth)
 """
 
+import hmac
 import logging
 from datetime import datetime
 from typing import Annotated, Optional
@@ -395,7 +396,8 @@ def _verify_kwami_api_key(
             status_code=503,
             detail="Kwami API key not configured (set KWAMI_API_KEY on the API server)",
         )
-    if x_api_key != settings.kwami_api_key:
+    # Constant-time: `!=` on a shared secret leaks length and prefix through timing.
+    if not x_api_key or not hmac.compare_digest(x_api_key, settings.kwami_api_key):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API key",

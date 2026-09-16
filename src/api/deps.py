@@ -1,5 +1,6 @@
 """API dependencies."""
 
+import hmac
 import logging
 from typing import Annotated, Optional
 
@@ -119,7 +120,13 @@ async def require_internal_api_key(
     x_kwami_api_key: Annotated[Optional[str], Header(alias="X-Kwami-API-Key")] = None,
 ) -> None:
     """Require the shared agent/API key for internal backend-to-backend routes."""
-    if not settings.kwami_api_key or x_kwami_api_key != settings.kwami_api_key:
+    if not settings.kwami_api_key or not x_kwami_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Valid internal API key required",
+        )
+    # Constant-time: `!=` on a shared secret leaks length and prefix through timing.
+    if not hmac.compare_digest(x_kwami_api_key, settings.kwami_api_key):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Valid internal API key required",
