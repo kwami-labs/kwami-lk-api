@@ -555,6 +555,7 @@ class FakeSupabase:
     def _add_credits(self, params: dict[str, Any]) -> int:
         amount = params["p_amount"]
         tx_type = params.get("p_type", "purchase")
+        key = params.get("p_idempotency_key")
         # Postgres rejects a value outside the credit_transaction_type enum with 22P02.
         # The previous fake ignored p_type entirely, which is why the wallet-funding
         # enum bug stayed invisible.
@@ -571,6 +572,14 @@ class FakeSupabase:
             )
         if amount is None or amount <= 0:
             raise_error("amount must be positive", "22023")
+
+        # Mirrors the ON CONFLICT claim inside add_credits: repeating a key that
+        # is already in the ledger is a no-op returning the current balance.
+        if key and any(
+            row.get("idempotency_key") == key for row in self.db.rows("credit_transactions")
+        ):
+            return self._credits_row(params["p_user_id"])["balance"]
+
         row = self._credits_row(params["p_user_id"])
         row["balance"] += amount
         row["lifetime_purchased"] += amount
@@ -584,6 +593,7 @@ class FakeSupabase:
                 "balance_after": row["balance"],
                 "description": params.get("p_description", ""),
                 "metadata": params.get("p_metadata") or {},
+                "idempotency_key": key,
                 "created_at": _now_iso(),
             }
         )
