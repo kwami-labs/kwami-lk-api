@@ -4,6 +4,9 @@ This repository is Apache-2.0 licensed — see [LICENSE](./LICENSE).
 Report security issues privately — [SECURITY.md](./SECURITY.md). Do not open a public issue or
 pull request for a vulnerability.
 
+Long-form documentation is in [`docs/`](./docs/README.md). Local setup, the two test lanes, and
+coverage floors are also spelled out in [docs/development.md](./docs/development.md).
+
 ## The rules, in one paragraph
 
 `main` is protected: you cannot push to it. Every change arrives as a pull request from a branch,
@@ -108,6 +111,10 @@ Two things about this suite catch people out:
   session `anyio_backend` fixture), which is what Starlette and httpx are native to. Two async
   plugins competing to collect the same coroutine silently skips tests; that is why the
   dependency is deliberately absent, and it is noted in `pyproject.toml` too.
+- **The interpreter is pinned.** [`.python-version`](.python-version) says `3.11`, which is what
+  `uv run` uses here, what CI uses, and what `python:3.11-slim` gives the release image. It is not
+  only tidiness: coverage percentages shift between Python versions, so an unpinned interpreter
+  would make the floors below flaky.
 - **`filterwarnings = ["error"]` and `xfail_strict = true`.** A new `DeprecationWarning` fails the
   suite unless it is from a dependency already listed, and an `xfail` that starts passing fails
   too — so a marker cannot go stale after the fix ships.
@@ -203,8 +210,38 @@ itself built or deployed — the image and the deploy both come from the commit 
 behind. The tag, the release and the changelog are all correct; only the deployed tree is a
 changelog commit short.
 
-That push lands on protected `main`, so the `github-actions` app is a bypass actor in
-[`main.json`](.github/rulesets/main.json). A release cannot open a pull request for itself.
+### The release needs `RELEASE_TOKEN`
+
+That push lands on protected `main` — a release cannot open a pull request for itself — so
+something has to bypass the rule. On most repositories that something is the `github-actions`
+app, named as a bypass actor. **This organisation cannot do that.** The Actions app is not
+installed on `kwami-labs`, and naming it makes GitHub reject the entire ruleset:
+
+```
+422  Actor GitHub Actions integration must be part of the ruleset source or owner organization
+```
+
+So the bypass actor in [`main.json`](.github/rulesets/main.json) is the **repository admin
+role**, and the release has to push *as* an admin. `GITHUB_TOKEN` does not: it acts as
+`github-actions[bot]`, which holds no repository role and is not covered.
+
+Hence one secret:
+
+| Secret | What it is |
+|---|---|
+| `RELEASE_TOKEN` | A **fine-grained personal access token** owned by a repository admin, scoped to this repository, with **Contents: Read and write**. `cd.yml` checks out and pushes with it, and semantic-release authenticates with it. |
+
+Create it at **Settings → Developer settings → Personal access tokens → Fine-grained tokens**, then
+add it under **Settings → Secrets and variables → Actions**.
+
+Without it, `cd.yml` refuses to start a release whenever a branch ruleset is active, rather than
+tagging and then failing to push — which would leave a tag and a GitHub Release whose changelog
+commit never landed, and a next run that computes its version from that tag. On an unprotected
+`main` the workflow falls back to `GITHUB_TOKEN` and warns.
+
+`scripts/branch-protection.sh` drops an Integration bypass actor that the organisation has not
+installed, with a warning, rather than letting the API reject the whole payload — so the same
+rulesets stay portable to a repository whose org *does* install it.
 
 ## Applying the rules to the repository
 
@@ -216,13 +253,22 @@ APPROVALS=0 ./scripts/branch-protection.sh  # solo repo — CI still gates every
 
 Re-run it after editing anything in `.github/rulesets/`; it reconciles rather than duplicating.
 
-### While the ruleset cannot be applied
+This repository is **public**, so rulesets apply to it on a free plan — `GET /repos/…/rulesets`
+answers `200 []` rather than the `403 Upgrade to GitHub Pro` a private repository on a free plan
+gets. That is worth stating because the sibling Go services are private on a free organisation and
+cannot apply theirs at all: their `.github/rulesets/` is aspirational, and this one is not.
 
-GitHub will not apply a ruleset — or classic branch protection — to a **private** repository on a
-free plan; the API answers `403 Upgrade to GitHub Pro or make this repository public`. Until the
-plan allows it, nothing server-side stops a direct push to `main`.
+Until `make rules` has actually been run, though, `main` is unprotected and the JSON in this
+repository is just JSON. `gh api repos/kwami-labs/kwami-lk-api/rulesets` answering `[]` is what
+"not applied yet" looks like; a named ruleset in that list is what applied looks like.
 
-The local stand-in, which every clone should install once:
+**On a solo repository, use `APPROVALS=0`.** The default asks for one approving review and sets
+`require_last_push_approval`, which nobody can satisfy alone — CI still gates every merge, and the
+pull request is still the only way in.
+
+### The local stand-in
+
+Whether or not the ruleset is applied, every clone should install the hook once:
 
 ```bash
 make hooks
@@ -233,8 +279,5 @@ would land on `main` and tells you how to open a branch instead.
 
 Be clear about what it is worth. It lives in the working copy, so it protects whoever installed it
 and nobody else, and `git push --no-verify` walks straight past it. It is a guardrail against the
-accident, not a control against intent — the checks in `ci.yml` are what actually establish that a
-change is good, and they run on every pull request regardless.
-
-The real rule is already written and committed. The day the plan allows it, `make rules` applies it
-unchanged.
+accident, not a control against intent — the ruleset is the control, and the checks in `ci.yml`
+are what establish that a change is good.

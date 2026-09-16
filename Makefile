@@ -42,9 +42,9 @@ dev: ## Run the API on :8080
 # Points git at .githooks/, whose pre-push refuses a direct push to main.
 #
 # It is a per-clone setting rather than something git picks up on its own -- hooks are
-# deliberately not transferable -- so every clone runs this once. It is the local stand-in for
-# the server-side ruleset GitHub will not apply to a private repository on a free plan; see
-# .github/rulesets/main.json and `make rules` for the real thing.
+# deliberately not transferable -- so every clone runs this once. It is the local half of the
+# rule; `make rules` applies the server-side one, which is the control. This repository is
+# public, so that ruleset does apply here -- see .github/rulesets/main.json.
 .PHONY: hooks
 hooks: ## Point git at .githooks/ (refuses a direct push to main)
 	git config core.hooksPath .githooks

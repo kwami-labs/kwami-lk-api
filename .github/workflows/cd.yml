@@ -57,13 +57,24 @@ jobs:
     env:
       TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The branch, not the tested SHA: semantic-release commits the changelog onto it. The
           # guard below refuses to release if the two have drifted apart.
           ref: main
           # Full history and tags — semantic-release derives every version from them.
           fetch-depth: 0
+          # RELEASE_TOKEN is what makes the push to protected `main` land. GITHUB_TOKEN acts as
+          # github-actions[bot], which holds no repository role, and the bypass actor in
+          # .github/rulesets/main.json is the repository ADMIN role — because this organisation
+          # cannot name the Actions app as a bypass actor at all (it is not installed on the org,
+          # and the API answers 422). A fine-grained PAT owned by an admin pushes as that admin,
+          # which the bypass does cover.
+          #
+          # The fallback keeps the workflow working on an unprotected `main`; the preflight below
+          # is what stops it from failing halfway through a release on a protected one.
+          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          persist-credentials: true
 
       # A merge that landed while ci was running has its own ci run behind it; let that one release
       # rather than shipping a commit these gates never saw.
@@ -76,8 +87,37 @@ jobs:
             echo 'skip=true' >> "$GITHUB_ENV"
           fi
 
+      # A release that tags but cannot push its changelog commit is the worst outcome: the tag
+      # and the GitHub Release exist, CHANGELOG.md and the version files do not, and the next run
+      # computes the next version from a tag whose commit never landed. Refuse up front instead.
+      - name: Refuse to release into a protected branch without a release token
+        if: env.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HAVE_TOKEN: ${{ secrets.RELEASE_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          if [ "$HAVE_TOKEN" = 'true' ]; then
+            echo '::notice::releasing with RELEASE_TOKEN'
+            exit 0
+          fi
+          branch_rulesets="$(gh api "repos/${GITHUB_REPOSITORY}/rulesets" \
+            --jq '[.[] | select(.target == "branch")] | length' 2>/dev/null || echo 0)"
+          if [ "${branch_rulesets:-0}" -gt 0 ]; then
+            echo "::error::RELEASE_TOKEN is not set and ${branch_rulesets} branch ruleset(s) protect this repository."
+            echo 'The release commit and tag are pushed straight to main, which GITHUB_TOKEN cannot do'
+            echo 'under a pull-request rule: github-actions[bot] holds no repository role, and the bypass'
+            echo 'actor is the repository admin role.'
+            echo
+            echo 'Create a fine-grained personal access token owned by a repository admin with'
+            echo 'Contents: Read and write on this repository, and save it as the RELEASE_TOKEN secret.'
+            echo 'See CONTRIBUTING.md, "Releases".'
+            exit 1
+          fi
+          echo '::warning::RELEASE_TOKEN is not set; releasing with GITHUB_TOKEN because no branch ruleset is active. Set it before protecting main.'
+
       - if: env.skip != 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 24
 
@@ -107,7 +147,9 @@ jobs:
         id: semantic
         if: env.skip != 'true'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The same token the checkout persisted, so the changelog push and the GitHub Release
+          # are made by one identity.
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           git tag | sort > "$RUNNER_TEMP/tags-before.txt"
@@ -153,13 +195,13 @@ jobs:
       # The default ref for workflow_run is the default branch tip, which is not necessarily the
       # commit that passed — and by now it is one changelog commit further on. Check out the exact
       # SHA that ci tested: the image is built from tested code, the tag names the version it is.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
       - uses: docker/setup-buildx-action@v3
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -167,7 +209,7 @@ jobs:
 
       # `sha-` and `main` are always written; the semver tags only when a version was cut.
       - id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
@@ -201,16 +243,23 @@ jobs:
         run: |
           set -euo pipefail
           gh release view "$TAG" --json body -q .body > "$RUNNER_TEMP/notes.md"
+          # shellcheck disable=SC2016  # the backticks are markdown; the values arrive through %s
           printf '\n---\n\nImage: `%s`\nDigest: `%s`\n' "$IMAGE" "$DIGEST" >> "$RUNNER_TEMP/notes.md"
           gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
 
+      # Through env rather than interpolated into the script: a `${{ }}` spliced into a shell
+      # body is executed by the shell, and the habit is worth keeping even where the value comes
+      # from an action rather than from a pull request.
       - name: Summary
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           {
             echo '### Published'
             echo '```'
-            echo '${{ steps.meta.outputs.tags }}'
-            echo 'digest: ${{ steps.build.outputs.digest }}'
+            echo "$TAGS"
+            echo "digest: $DIGEST"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -232,7 +281,7 @@ jobs:
       cancel-in-progress: false
     steps:
       # The commit ci tested, not the branch tip — by now that is one changelog commit further on.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
@@ -261,7 +310,7 @@ jobs:
       group: deploy-development
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
