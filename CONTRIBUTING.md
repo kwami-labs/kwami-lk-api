@@ -108,6 +108,10 @@ Two things about this suite catch people out:
   session `anyio_backend` fixture), which is what Starlette and httpx are native to. Two async
   plugins competing to collect the same coroutine silently skips tests; that is why the
   dependency is deliberately absent, and it is noted in `pyproject.toml` too.
+- **The interpreter is pinned.** [`.python-version`](.python-version) says `3.11`, which is what
+  `uv run` uses here, what CI uses, and what `python:3.11-slim` gives the release image. It is not
+  only tidiness: coverage percentages shift between Python versions, so an unpinned interpreter
+  would make the floors below flaky.
 - **`filterwarnings = ["error"]` and `xfail_strict = true`.** A new `DeprecationWarning` fails the
   suite unless it is from a dependency already listed, and an `xfail` that starts passing fails
   too — so a marker cannot go stale after the fix ships.
