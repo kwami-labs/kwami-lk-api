@@ -54,6 +54,44 @@ jobs:
           path: coverage.xml
           if-no-files-found: error
 
+  integration:
+    # Runs on every PR, not nightly. The atomicity guarantees live in SQL --
+    # conditional UPDATEs, partial unique indexes, enum domains, RLS policies --
+    # and no in-process fake can prove them. A nightly signal is a signal you
+    # ship past.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: kwami_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:test@localhost:5432/kwami_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Migrations and money invariants
+        run: |
+          uv run --extra dev --extra integration pytest -m integration \
+            --cov=src --cov-report=xml --cov-report=term-missing
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-integration
+          path: coverage.xml
+          if-no-files-found: error
+
   migrations-lint:
     runs-on: ubuntu-latest
     steps:
@@ -69,7 +107,7 @@ jobs:
         run: uv run python scripts/migrate.py --dry-run
 
   deploy:
-    needs: [lint, test, migrations-lint]
+    needs: [lint, test, integration, migrations-lint]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     concurrency: deploy-group

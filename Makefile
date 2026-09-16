@@ -45,8 +45,22 @@ test-cov:
 	uv run --extra dev pytest -m "not integration and not e2e" \
 		--cov=src --cov-report=term-missing --cov-report=xml
 
+# Spin up a throwaway Postgres for the integration suite.
+test-db-up:
+	docker rm -f kwami-test-pg 2>/dev/null || true
+	docker run -d --name kwami-test-pg \
+		-e POSTGRES_PASSWORD=test -e POSTGRES_DB=kwami_test \
+		-p 55433:5432 postgres:16-alpine
+	@until docker exec kwami-test-pg pg_isready -U postgres >/dev/null 2>&1; do sleep 1; done
+	@echo "postgres ready on 55433"
+
+test-db-down:
+	docker rm -f kwami-test-pg
+
+# Skips unless TEST_DATABASE_URL is set, so it never blocks an offline run.
 test-integration:
-	uv run --extra dev --extra integration pytest -m integration
+	TEST_DATABASE_URL=$${TEST_DATABASE_URL:-postgresql://postgres:test@localhost:55433/kwami_test} \
+		uv run --extra dev --extra integration pytest -m integration
 
 test-all:
 	uv run --extra dev --extra integration pytest
