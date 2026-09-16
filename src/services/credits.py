@@ -1,5 +1,7 @@
 """Credits ledger and settlement logic."""
 
+import hashlib
+import json
 import logging
 import uuid
 from dataclasses import dataclass
@@ -680,14 +682,48 @@ async def get_reconciliation_report(
     return report
 
 
+def build_report_key(user_id: str, session_id: str, usage_items: list[dict]) -> str:
+    """Stable key for one usage report.
+
+    Derived from the content so an agent that retries without supplying an
+    explicit key still cannot be charged twice. Canonical JSON, so key order in
+    the payload does not change the digest.
+    """
+    canonical = json.dumps(
+        {"user_id": user_id, "session_id": session_id, "items": usage_items},
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _find_usage_report(report_key: str) -> dict[str, Any] | None:
+    sb = get_supabase_admin()
+    result = (
+        sb.table("usage_reports")
+        .select("id, report_key, status, result")
+        .eq("report_key", report_key)
+        .limit(1)
+        .execute()
+    )
+    rows = getattr(result, "data", None) or []
+    return rows[0] if rows else None
+
+
 async def process_usage_report(
     user_id: str,
     session_id: str,
     usage_items: list[dict],
+    idempotency_key: str | None = None,
 ) -> dict:
     """Process a batch usage report from the agent.
 
     Each item in usage_items: {model_type, model_id, units_used}
+
+    Replay-safe: the report is claimed under a key before anything is charged, so
+    a redelivered report returns the original result rather than debiting the
+    user a second time.
 
     Returns summary with total_credits_charged and new_balance.
     """
@@ -698,6 +734,36 @@ async def process_usage_report(
             user_id,
             ledger_user_id,
         )
+
+    report_key = idempotency_key or build_report_key(user_id, session_id, usage_items)
+    existing = _find_usage_report(report_key)
+    if existing is not None:
+        # Return what the original call returned. Recomputing would settle against
+        # a balance that has since moved, and would charge again.
+        logger.info("Usage report %s already settled; returning the cached result", report_key)
+        cached = dict(existing.get("result") or {})
+        cached["idempotent_replay"] = True
+        return cached
+
+    sb = get_supabase_admin()
+    try:
+        sb.table("usage_reports").insert(
+            {
+                "report_key": report_key,
+                "user_id": ledger_user_id,
+                "session_id": session_id,
+                "status": "pending",
+                "items_count": len(usage_items),
+            }
+        ).execute()
+    except Exception as exc:
+        if "23505" in str(exc) or "duplicate key" in str(exc).lower():
+            # Lost a race with a concurrent delivery of the same report.
+            concurrent = _find_usage_report(report_key)
+            cached = dict((concurrent or {}).get("result") or {})
+            cached["idempotent_replay"] = True
+            return cached
+        raise
 
     total_requested_micro_credits = 0
     total_charged_micro_credits = 0
@@ -745,40 +811,76 @@ async def process_usage_report(
             }
         )
 
-    # Deduct total from user balance
+    # Settle. Charge what the user can actually pay rather than all-or-nothing:
+    # the previous behaviour charged ZERO whenever the total exceeded the balance,
+    # so anyone running a low balance got an unbounded free session. The
+    # shortfall is recorded instead of forgiven.
     new_balance = 0
     settlement_status = "skipped"
+    unpaid_micro_credits = 0
+
     if total_requested_micro_credits > 0:
-        try:
-            new_balance = await deduct_credits(
-                user_id=ledger_user_id,
-                amount_micro=total_requested_micro_credits,
-                description=f"Session usage: {session_id}",
-                metadata={
-                    "session_id": session_id,
-                    "items_count": len(logged_items),
-                },
-            )
-            settlement_status = "charged"
-            total_charged_micro_credits = total_requested_micro_credits
-        except ValueError:
+        balance_before = (await get_balance(ledger_user_id))["balance"]
+        charged = min(total_requested_micro_credits, max(balance_before, 0))
+        unpaid_micro_credits = total_requested_micro_credits - charged
+
+        if charged > 0:
+            try:
+                new_balance = await deduct_credits(
+                    user_id=ledger_user_id,
+                    amount_micro=charged,
+                    description=f"Session usage: {session_id}",
+                    metadata={
+                        "session_id": session_id,
+                        "items_count": len(logged_items),
+                        "requested_micro": total_requested_micro_credits,
+                        "unpaid_micro": unpaid_micro_credits,
+                    },
+                )
+                total_charged_micro_credits = charged
+                settlement_status = "charged" if not unpaid_micro_credits else "partially_charged"
+            except ValueError:
+                # Balance moved between the read and the deduct.
+                settlement_status = "insufficient_credits"
+                unpaid_micro_credits = total_requested_micro_credits
+                new_balance = balance_before
+        else:
             settlement_status = "insufficient_credits"
+            new_balance = balance_before
+
+        if unpaid_micro_credits:
             logger.warning(
-                f"Insufficient credits for user {ledger_user_id}, "
-                f"session {session_id}. Usage logged but not fully charged."
+                "Session %s for user %s was under-funded: requested %d, charged %d, "
+                "unpaid %d micro-credits",
+                session_id,
+                ledger_user_id,
+                total_requested_micro_credits,
+                total_charged_micro_credits,
+                unpaid_micro_credits,
             )
 
+    # Allocate what was actually charged across the items, in order, so the
+    # per-row settlement adds up to the ledger entry.
+    remaining = total_charged_micro_credits
     for logged_item in logged_items:
-        credits_charged = logged_item["requested_credits"] if settlement_status == "charged" else 0
+        requested = logged_item["requested_credits"]
+        if settlement_status in ("charged", "partially_charged") and remaining > 0:
+            credits_charged = min(requested, remaining)
+            remaining -= credits_charged
+            item_status = "charged" if credits_charged == requested else "partially_charged"
+        else:
+            credits_charged = 0
+            item_status = "written_off" if settlement_status != "skipped" else settlement_status
+
         await update_usage_settlement(
             logged_item["usage_log_id"],
             credits_charged=credits_charged,
-            settlement_status=settlement_status,
+            settlement_status=item_status,
         )
         logged_item["credits_charged"] = credits_charged
-        logged_item["settlement_status"] = settlement_status
+        logged_item["settlement_status"] = item_status
 
-    return {
+    result = {
         "total_credits_requested": total_requested_micro_credits,
         "total_credits_charged": total_charged_micro_credits,
         "new_balance": new_balance,
@@ -786,5 +888,43 @@ async def process_usage_report(
         "total_billed_cost_usd": _round_usd(total_billed_cost_usd),
         "total_margin_usd": _round_usd(total_margin_usd),
         "settlement_status": settlement_status,
+        "unpaid_credits": unpaid_micro_credits,
         "items": logged_items,
     }
+
+    # Cache the outcome so a replay returns this answer instead of re-settling.
+    _finalize_usage_report(
+        report_key,
+        status="settled" if not unpaid_micro_credits else "partially_settled",
+        requested_micro=total_requested_micro_credits,
+        charged_micro=total_charged_micro_credits,
+        unpaid_micro=unpaid_micro_credits,
+        result=result,
+    )
+    return result
+
+
+def _finalize_usage_report(
+    report_key: str,
+    *,
+    status: str,
+    requested_micro: int,
+    charged_micro: int,
+    unpaid_micro: int,
+    result: dict[str, Any],
+) -> None:
+    """Record the settled report. Best effort: never mask a completed settlement."""
+    sb = get_supabase_admin()
+    try:
+        sb.table("usage_reports").update(
+            {
+                "status": status,
+                "requested_micro": requested_micro,
+                "charged_micro": charged_micro,
+                "unpaid_micro": unpaid_micro,
+                "result": result,
+                "settled_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ).eq("report_key", report_key).execute()
+    except Exception:
+        logger.exception("Could not record the outcome of usage report %s", report_key)
