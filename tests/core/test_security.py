@@ -1,7 +1,7 @@
-import pytest
 import jwt
-from unittest.mock import patch, MagicMock
+import pytest
 
+from src.core.config import settings
 from src.core.security import (
     AuthUser,
     check_user_access,
@@ -9,7 +9,6 @@ from src.core.security import (
     is_valid_admin_api_key,
     verify_token,
 )
-from src.core.config import settings
 
 
 def test_auth_user_model():
@@ -24,17 +23,17 @@ def test_auth_user_model():
 def test_check_user_access():
     """Test access control logic."""
     user = AuthUser({"sub": "user123"})
-    
+
     # Can access own data
     assert check_user_access(user, "user123") is True
     assert check_user_access(user, "kwami_user123") is True
-    
+
     # Cannot access others
     assert check_user_access(user, "user456") is False
     assert check_user_access(user, "kwami_user456") is False
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_verify_token_no_jwks():
     """Test verification fails if JWKS not configured."""
     original_url = settings.supabase_url

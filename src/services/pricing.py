@@ -116,7 +116,6 @@ LLM_PRICING: dict[str, ModelPricing] = {
             cached_input_per_1m=0.025,
         ),
     ),
-    
     # Google Models (via LiveKit Inference)
     "google/gemini-2.0-flash": ModelPricing(
         model_id="google/gemini-2.0-flash",
@@ -162,7 +161,6 @@ LLM_PRICING: dict[str, ModelPricing] = {
             cached_input_per_1m=0.3125,
         ),
     ),
-    
     # DeepSeek Models (via LiveKit Inference)
     "deepseek-ai/deepseek-v3": ModelPricing(
         model_id="deepseek-ai/deepseek-v3",
@@ -175,7 +173,6 @@ LLM_PRICING: dict[str, ModelPricing] = {
             cached_input_per_1m=0.07,
         ),
     ),
-    
     # Kimi Models (via LiveKit Inference)
     "moonshotai/kimi-k2-instruct": ModelPricing(
         model_id="moonshotai/kimi-k2-instruct",
@@ -435,9 +432,7 @@ def calculate_realtime_cost(
     has_detailed_text = text_input_tokens > 0 or text_output_tokens > 0
 
     if not has_detailed_audio and not has_detailed_text:
-        average_audio = (
-            pricing.audio_input_per_minute + pricing.audio_output_per_minute
-        ) / 2
+        average_audio = (pricing.audio_input_per_minute + pricing.audio_output_per_minute) / 2
         return fallback_minutes * average_audio
 
     cost = 0.0

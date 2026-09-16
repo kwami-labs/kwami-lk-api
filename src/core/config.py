@@ -33,7 +33,8 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # Tests point KWAMI_ENV_FILE at tests/.env.test so the live .env is never read.
+        env_file=os.environ.get("KWAMI_ENV_FILE", ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -58,6 +59,7 @@ class Settings(BaseSettings):
         origins = [origin.strip() for origin in self.cors_origins_str.split(",") if origin.strip()]
         if self.app_env == "production" and "*" in origins:
             import logging
+
             logging.getLogger("kwami-api.config").warning(
                 "CORS_ORIGINS is set to '*' in production. "
                 "Set CORS_ORIGINS to specific origins for security."
@@ -91,6 +93,15 @@ class Settings(BaseSettings):
     livekit_agent_name: str = Field(
         default="kwami-agent",
         alias="LIVEKIT_AGENT_NAME",
+    )
+    # Tokens are redeemed at connect time, so they do not need a long life. The
+    # previous 6 hours meant a leaked token stayed usable for a working day.
+    # Raise via env if a client caches tokens across a session.
+    livekit_token_ttl_minutes: int = Field(
+        default=15,
+        ge=1,
+        le=360,
+        alias="LIVEKIT_TOKEN_TTL_MINUTES",
     )
 
     # Public URLs / webhooks
@@ -293,11 +304,9 @@ class Settings(BaseSettings):
     def admin_emails(self) -> list[str]:
         """Parse admin emails from a comma-separated string."""
         return [
-            email.strip().lower()
-            for email in self.admin_emails_str.split(",")
-            if email.strip()
+            email.strip().lower() for email in self.admin_emails_str.split(",") if email.strip()
         ]
-    
+
     @computed_field
     @property
     def supabase_jwks_url(self) -> str | None:

@@ -11,8 +11,8 @@ from . import (
     memory,
     models,
     token,
-    wallet,
     voices,
+    wallet,
     webhooks,
 )
 

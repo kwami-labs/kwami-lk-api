@@ -3,13 +3,20 @@
 from datetime import timedelta
 
 from livekit import api
-from livekit.protocol.room import RoomConfiguration
 from livekit.protocol.agent_dispatch import RoomAgentDispatch
+from livekit.protocol.room import RoomConfiguration
 
 from src.core.config import settings
 
-# Default agent name deployed to LiveKit Cloud
-DEFAULT_AGENT_NAME = "kwami-agent"
+
+def _default_agent_name() -> str:
+    """The agent to dispatch.
+
+    This was a module constant duplicating `settings.livekit_agent_name`, which
+    telephony.py already used -- two sources of truth for the same value, so a web
+    session and a phone call could dispatch different agents.
+    """
+    return settings.livekit_agent_name
 
 
 def create_token(
@@ -37,7 +44,7 @@ def create_token(
         room_name: Name of the room to join
         participant_name: Display name for the participant
         participant_identity: Unique identity (defaults to participant_name)
-        ttl: Token time-to-live (defaults to 6 hours)
+        ttl: Token time-to-live (defaults to LIVEKIT_TOKEN_TTL_MINUTES)
         can_publish: Allow publishing tracks
         can_subscribe: Allow subscribing to tracks
         can_publish_data: Allow publishing data messages
@@ -54,7 +61,7 @@ def create_token(
         JWT token string
     """
     identity = participant_identity or participant_name
-    token_ttl = ttl or timedelta(hours=6)
+    token_ttl = ttl or timedelta(minutes=settings.livekit_token_ttl_minutes)
 
     token = (
         api.AccessToken(settings.livekit_api_key, settings.livekit_api_secret)
@@ -78,7 +85,7 @@ def create_token(
 
     # Dispatch the Kwami agent to the room when participant joins
     if dispatch_agent:
-        target_agent = agent_name or DEFAULT_AGENT_NAME
+        target_agent = agent_name or _default_agent_name()
         metadata = kwami_id or ""
         token = token.with_room_config(
             RoomConfiguration(
