@@ -4,8 +4,8 @@
 -- outcome are tracked separately for every usage row.
 -- =============================================================================
 
-ALTER TYPE credit_model_type ADD VALUE IF NOT EXISTS 'tool';
-ALTER TYPE credit_model_type ADD VALUE IF NOT EXISTS 'memory';
+-- Enum additions moved to 012_enum_credit_model_type.sql: ALTER TYPE ... ADD
+-- VALUE cannot run inside a transaction block.
 
 ALTER TABLE credit_usage_logs
     ADD COLUMN IF NOT EXISTS provider_cost_usd double precision,
