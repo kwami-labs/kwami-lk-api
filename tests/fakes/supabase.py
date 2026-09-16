@@ -255,8 +255,21 @@ class _Query:
 
     # -- evaluation ------------------------------------------------------
     @staticmethod
-    def _matches(row: dict[str, Any], op: str, column: str, value: Any) -> bool:
-        current = row.get(column)
+    def _read_column(row: dict[str, Any], column: str) -> Any:
+        """Read a column, following PostgREST's `col->>key` json accessor."""
+        if "->>" in column:
+            base, _, key = column.partition("->>")
+            container = row.get(base.strip())
+            if not isinstance(container, dict):
+                return None
+            found = container.get(key.strip())
+            # `->>` yields text in Postgres, so compare as text.
+            return None if found is None else str(found)
+        return row.get(column)
+
+    @classmethod
+    def _matches(cls, row: dict[str, Any], op: str, column: str, value: Any) -> bool:
+        current = cls._read_column(row, column)
         if op == "eq":
             return str(current) == str(value) if isinstance(value, str) else current == value
         if op == "neq":
