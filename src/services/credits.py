@@ -257,8 +257,14 @@ async def add_credits(
     transaction_type: str = "purchase",
     description: str | None = None,
     metadata: dict | None = None,
+    idempotency_key: str | None = None,
 ) -> int:
     """Add credits to a user's balance using the DB function.
+
+    Passing ``idempotency_key`` makes the call safe to retry: the ledger insert
+    claims the key inside the same transaction as the balance update, so a repeat
+    is a no-op that returns the current balance. Without it, a redelivered
+    webhook credits the user again.
 
     Returns the new balance in micro-credits.
     """
@@ -271,6 +277,7 @@ async def add_credits(
             "p_type": transaction_type,
             "p_description": description or "",
             "p_metadata": metadata or {},
+            "p_idempotency_key": idempotency_key,
         },
     ).execute()
 
