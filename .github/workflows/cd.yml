@@ -64,6 +64,17 @@ jobs:
           ref: main
           # Full history and tags — semantic-release derives every version from them.
           fetch-depth: 0
+          # RELEASE_TOKEN is what makes the push to protected `main` land. GITHUB_TOKEN acts as
+          # github-actions[bot], which holds no repository role, and the bypass actor in
+          # .github/rulesets/main.json is the repository ADMIN role — because this organisation
+          # cannot name the Actions app as a bypass actor at all (it is not installed on the org,
+          # and the API answers 422). A fine-grained PAT owned by an admin pushes as that admin,
+          # which the bypass does cover.
+          #
+          # The fallback keeps the workflow working on an unprotected `main`; the preflight below
+          # is what stops it from failing halfway through a release on a protected one.
+          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          persist-credentials: true
 
       # A merge that landed while ci was running has its own ci run behind it; let that one release
       # rather than shipping a commit these gates never saw.
@@ -75,6 +86,35 @@ jobs:
             echo "::notice::main is at $tip, ahead of the tested commit $TESTED_SHA — its own run will release."
             echo 'skip=true' >> "$GITHUB_ENV"
           fi
+
+      # A release that tags but cannot push its changelog commit is the worst outcome: the tag
+      # and the GitHub Release exist, CHANGELOG.md and the version files do not, and the next run
+      # computes the next version from a tag whose commit never landed. Refuse up front instead.
+      - name: Refuse to release into a protected branch without a release token
+        if: env.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HAVE_TOKEN: ${{ secrets.RELEASE_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          if [ "$HAVE_TOKEN" = 'true' ]; then
+            echo '::notice::releasing with RELEASE_TOKEN'
+            exit 0
+          fi
+          branch_rulesets="$(gh api "repos/${GITHUB_REPOSITORY}/rulesets" \
+            --jq '[.[] | select(.target == "branch")] | length' 2>/dev/null || echo 0)"
+          if [ "${branch_rulesets:-0}" -gt 0 ]; then
+            echo "::error::RELEASE_TOKEN is not set and ${branch_rulesets} branch ruleset(s) protect this repository."
+            echo 'The release commit and tag are pushed straight to main, which GITHUB_TOKEN cannot do'
+            echo 'under a pull-request rule: github-actions[bot] holds no repository role, and the bypass'
+            echo 'actor is the repository admin role.'
+            echo
+            echo 'Create a fine-grained personal access token owned by a repository admin with'
+            echo 'Contents: Read and write on this repository, and save it as the RELEASE_TOKEN secret.'
+            echo 'See CONTRIBUTING.md, "Releases".'
+            exit 1
+          fi
+          echo '::warning::RELEASE_TOKEN is not set; releasing with GITHUB_TOKEN because no branch ruleset is active. Set it before protecting main.'
 
       - if: env.skip != 'true'
         uses: actions/setup-node@v4
@@ -107,7 +147,9 @@ jobs:
         id: semantic
         if: env.skip != 'true'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The same token the checkout persisted, so the changelog push and the GitHub Release
+          # are made by one identity.
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           git tag | sort > "$RUNNER_TEMP/tags-before.txt"
