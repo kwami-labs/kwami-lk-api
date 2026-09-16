@@ -1,0 +1,81 @@
+# Lint, test, then deploy -- in one workflow so `needs:` actually gates the deploy.
+#
+# This replaces the previous fly-deploy.yml, which ran `flyctl deploy` on every push
+# to main with no checks at all. Deploy must stay in this file: a separate workflow
+# keyed on `workflow_run` + `conclusion == success` is defeated by concurrent pushes.
+name: CI
+
+on:
+  push:
+    branches: [main, stg, dev]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Never cancel a run that could be mid-deploy.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  UV_FROZEN: "1"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv lock --check
+        name: Lockfile is up to date
+      - run: uv run --extra dev ruff check .
+      - run: uv run --extra dev ruff format --check .
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Unit and API tests
+        run: |
+          uv run --extra dev pytest -m "not integration and not e2e" \
+            --cov=src --cov-report=xml --cov-report=term-missing
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-unit
+          path: coverage.xml
+          if-no-files-found: error
+
+  migrations-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Migrations are ordered and unambiguous
+        # scripts/migrate.py refuses to run with duplicate version prefixes, which
+        # is how 002_billing_accounting_upgrade and 002_user_kwamis came to race.
+        # Reusing it here keeps one implementation of the rule.
+        run: uv run python scripts/migrate.py --dry-run
+
+  deploy:
+    needs: [lint, test, migrations-lint]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    concurrency: deploy-group
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
