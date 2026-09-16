@@ -2,13 +2,13 @@
 #
 # Refuses a push that would land directly on main.
 #
-# This is the local stand-in for the server-side ruleset in .github/rulesets/main.json, which
-# GitHub will not apply to a private repository on a free plan. It enforces the same first rule —
-# every change arrives as a pull request — from the one place that still can.
+# This is the local half of the server-side ruleset in .github/rulesets/main.json. It enforces the
+# same first rule — every change arrives as a pull request — on this clone, before a push leaves
+# the machine, and it keeps working in the window before `make rules` has been run.
 #
 # It is a guardrail, not a wall: it lives in the working copy, so it protects whoever installed it
 # and nobody else, and `--no-verify` walks straight past it. Treat a bypass as a decision worth
-# saying out loud, and apply the real ruleset the moment the plan allows it.
+# saying out loud. The ruleset is the control; this is the reminder.
 #
 # Install with `make hooks`. Git passes one line per ref being pushed on stdin:
 #   <local ref> <local sha> <remote ref> <remote sha>
