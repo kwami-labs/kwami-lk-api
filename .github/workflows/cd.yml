@@ -201,16 +201,23 @@ jobs:
         run: |
           set -euo pipefail
           gh release view "$TAG" --json body -q .body > "$RUNNER_TEMP/notes.md"
+          # shellcheck disable=SC2016  # the backticks are markdown; the values arrive through %s
           printf '\n---\n\nImage: `%s`\nDigest: `%s`\n' "$IMAGE" "$DIGEST" >> "$RUNNER_TEMP/notes.md"
           gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
 
+      # Through env rather than interpolated into the script: a `${{ }}` spliced into a shell
+      # body is executed by the shell, and the habit is worth keeping even where the value comes
+      # from an action rather than from a pull request.
       - name: Summary
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           {
             echo '### Published'
             echo '```'
-            echo '${{ steps.meta.outputs.tags }}'
-            echo 'digest: ${{ steps.build.outputs.digest }}'
+            echo "$TAGS"
+            echo "digest: $DIGEST"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 

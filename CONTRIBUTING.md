@@ -108,6 +108,10 @@ Two things about this suite catch people out:
   session `anyio_backend` fixture), which is what Starlette and httpx are native to. Two async
   plugins competing to collect the same coroutine silently skips tests; that is why the
   dependency is deliberately absent, and it is noted in `pyproject.toml` too.
+- **The interpreter is pinned.** [`.python-version`](.python-version) says `3.11`, which is what
+  `uv run` uses here, what CI uses, and what `python:3.11-slim` gives the release image. It is not
+  only tidiness: coverage percentages shift between Python versions, so an unpinned interpreter
+  would make the floors below flaky.
 - **`filterwarnings = ["error"]` and `xfail_strict = true`.** A new `DeprecationWarning` fails the
   suite unless it is from a dependency already listed, and an `xfail` that starts passing fails
   too — so a marker cannot go stale after the fix ships.
@@ -216,13 +220,22 @@ APPROVALS=0 ./scripts/branch-protection.sh  # solo repo — CI still gates every
 
 Re-run it after editing anything in `.github/rulesets/`; it reconciles rather than duplicating.
 
-### While the ruleset cannot be applied
+This repository is **public**, so rulesets apply to it on a free plan — `GET /repos/…/rulesets`
+answers `200 []` rather than the `403 Upgrade to GitHub Pro` a private repository on a free plan
+gets. That is worth stating because the sibling Go services are private on a free organisation and
+cannot apply theirs at all: their `.github/rulesets/` is aspirational, and this one is not.
 
-GitHub will not apply a ruleset — or classic branch protection — to a **private** repository on a
-free plan; the API answers `403 Upgrade to GitHub Pro or make this repository public`. Until the
-plan allows it, nothing server-side stops a direct push to `main`.
+Until `make rules` has actually been run, though, `main` is unprotected and the JSON in this
+repository is just JSON. `gh api repos/kwami-labs/kwami-lk-api/rulesets` answering `[]` is what
+"not applied yet" looks like; a named ruleset in that list is what applied looks like.
 
-The local stand-in, which every clone should install once:
+**On a solo repository, use `APPROVALS=0`.** The default asks for one approving review and sets
+`require_last_push_approval`, which nobody can satisfy alone — CI still gates every merge, and the
+pull request is still the only way in.
+
+### The local stand-in
+
+Whether or not the ruleset is applied, every clone should install the hook once:
 
 ```bash
 make hooks
@@ -233,8 +246,5 @@ would land on `main` and tells you how to open a branch instead.
 
 Be clear about what it is worth. It lives in the working copy, so it protects whoever installed it
 and nobody else, and `git push --no-verify` walks straight past it. It is a guardrail against the
-accident, not a control against intent — the checks in `ci.yml` are what actually establish that a
-change is good, and they run on every pull request regardless.
-
-The real rule is already written and committed. The day the plan allows it, `make rules` applies it
-unchanged.
+accident, not a control against intent — the ruleset is the control, and the checks in `ci.yml`
+are what establish that a change is good.
