@@ -34,7 +34,7 @@ def test_check_user_access():
     assert check_user_access(user, "kwami_user456") is False
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_verify_token_no_jwks():
     """Test verification fails if JWKS not configured."""
     original_url = settings.supabase_url

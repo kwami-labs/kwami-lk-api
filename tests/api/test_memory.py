@@ -45,8 +45,10 @@ async def test_get_user_facts(auth_client_with_zep: AsyncClient, mock_zep_client
     response = await auth_client_with_zep.get("/memory/test-user-id/facts")
     assert response.status_code == 200
     data = response.json()
-    assert isinstance(data, list)
-    assert "User likes pizza" in data
+    assert data["facts"] == ["User likes pizza"]
+    assert data["count"] == 1
+    assert data["total"] == 1
+    assert data["has_more"] is False
     
     # Verify Zep client was called correctly
     mock_zep_client.graph.search.assert_called_once()
