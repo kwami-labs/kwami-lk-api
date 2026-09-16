@@ -38,7 +38,9 @@ async def get_kwami_runtime_config(
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to load runtime config: {exc}") from exc
+        raise HTTPException(
+            status_code=500, detail=f"Failed to load runtime config: {exc}"
+        ) from exc
 
 
 @router.get("/channels/by-address")

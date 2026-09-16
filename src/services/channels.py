@@ -2,26 +2,41 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 import phonenumbers
 
+from src.core.errors import InvalidPhoneNumberError
 from src.services.credits import get_supabase_admin
 
 logger = logging.getLogger("kwami-api.channels")
 
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def normalize_phone_number(value: str, default_region: str = "US") -> str:
-    """Normalize input to E.164 for consistent channel/contact matching."""
-    parsed = phonenumbers.parse(value, default_region)
+    """Normalize input to E.164 for consistent channel/contact matching.
+
+    Raises ``InvalidPhoneNumberError`` (a DomainError -> HTTP 400) for anything
+    unparseable or invalid.
+
+    ``phonenumbers.NumberParseException`` is NOT a subclass of ``ValueError`` --
+    its bases are ``UnicodeMixin`` and ``Exception``. Every caller wrapped this in
+    ``except ValueError``, so garbage input escaped as a 500 rather than a 400.
+    On the Twilio webhooks that mattered twice over: a malformed inbound number
+    returned 5xx, which Twilio retries, turning one bad caller ID into a retry
+    storm.
+    """
+    try:
+        parsed = phonenumbers.parse(value, default_region)
+    except phonenumbers.NumberParseException as exc:
+        raise InvalidPhoneNumberError(f"Could not parse phone number: {exc}") from exc
     if not phonenumbers.is_valid_number(parsed):
-        raise ValueError("Phone number is not valid")
+        raise InvalidPhoneNumberError("Phone number is not valid")
     return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
 
 
@@ -29,6 +44,23 @@ def maybe_normalize_phone_number(value: str | None, default_region: str = "US") 
     if not value:
         return None
     return normalize_phone_number(value, default_region)
+
+
+def try_normalize_phone_number(value: str | None, default_region: str = "US") -> str | None:
+    """Normalize if possible, otherwise return None.
+
+    For inbound webhooks, where a provider sends whatever the network gave it.
+    Rejecting the request is the wrong response: the provider reads any non-2xx
+    as failure and redelivers, so a permanently malformed number would be retried
+    forever. Store what we can and carry on.
+    """
+    if not value:
+        return None
+    try:
+        return normalize_phone_number(value, default_region)
+    except InvalidPhoneNumberError:
+        logger.warning("Could not normalize an inbound phone number; using it verbatim")
+        return None
 
 
 def _single(result: Any) -> dict[str, Any] | None:
@@ -178,11 +210,7 @@ def upsert_channel(
         updated = _single(result)
         return updated or {**row, **payload}
 
-    result = (
-        sb.table("kwami_channels")
-        .insert(payload)
-        .execute()
-    )
+    result = sb.table("kwami_channels").insert(payload).execute()
     created = _single(result)
     if not created:
         raise RuntimeError("Failed to create channel")
@@ -212,13 +240,7 @@ def update_channel(
 def find_channel_by_address(address: str) -> dict[str, Any] | None:
     sb = get_supabase_admin()
     for field in ("phone_number", "provider_sender"):
-        result = (
-            sb.table("kwami_channels")
-            .select("*")
-            .eq(field, address)
-            .limit(1)
-            .execute()
-        )
+        result = sb.table("kwami_channels").select("*").eq(field, address).limit(1).execute()
         row = _single(result)
         if row:
             return row
@@ -277,12 +299,7 @@ def ensure_contact(
             "whatsapp_address": whatsapp_address or row.get("whatsapp_address"),
             "metadata": merged_metadata,
         }
-        updated = (
-            sb.table("kwami_contacts")
-            .update(update)
-            .eq("id", row["id"])
-            .execute()
-        )
+        updated = sb.table("kwami_contacts").update(update).eq("id", row["id"]).execute()
         return _single(updated) or {**row, **update}
 
     created = sb.table("kwami_contacts").insert(payload).execute()
@@ -301,10 +318,7 @@ def list_contacts_for_kwami(
 ) -> list[dict[str, Any]]:
     sb = get_supabase_admin()
     select_query = (
-        sb.table("kwami_contacts")
-        .select("*")
-        .eq("user_id", user_id)
-        .eq("kwami_id", kwami_id)
+        sb.table("kwami_contacts").select("*").eq("user_id", user_id).eq("kwami_id", kwami_id)
     )
     if query and query.strip():
         like = f"%{query.strip()}%"
@@ -428,12 +442,7 @@ def ensure_conversation(
             "external_thread_id": external_thread_id or row.get("external_thread_id"),
             "metadata": merged_metadata,
         }
-        updated = (
-            sb.table("kwami_conversations")
-            .update(update)
-            .eq("id", row["id"])
-            .execute()
-        )
+        updated = sb.table("kwami_conversations").update(update).eq("id", row["id"]).execute()
         return _single(updated) or {**row, **update}
 
     created = sb.table("kwami_conversations").insert(payload).execute()
@@ -517,7 +526,9 @@ def update_call_event_status(
         updates["error_message"] = error_message
     if provider_payload is not None:
         updates["provider_payload"] = provider_payload
-    sb.table("kwami_call_events").update(updates).eq("provider_call_sid", provider_call_sid).execute()
+    sb.table("kwami_call_events").update(updates).eq(
+        "provider_call_sid", provider_call_sid
+    ).execute()
 
 
 def create_message_event(

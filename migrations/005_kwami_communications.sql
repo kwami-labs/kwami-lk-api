@@ -183,4 +183,3 @@ CREATE TRIGGER kwami_message_events_updated_at
     FOR EACH ROW
     EXECUTE PROCEDURE set_kwami_communications_updated_at();
 
-ALTER TYPE kwami_channel_kind ADD VALUE IF NOT EXISTS 'sms';

@@ -63,7 +63,9 @@ async def create_contact_route(
         kwami_id=body.kwami_id,
         display_name=body.display_name.strip(),
         phone_number=phone_number,
-        whatsapp_address=maybe_normalize_phone_number(body.whatsapp_address, settings.twilio_phone_country)
+        whatsapp_address=maybe_normalize_phone_number(
+            body.whatsapp_address, settings.twilio_phone_country
+        )
         if body.whatsapp_address
         else None,
         email=body.email.strip().lower() if body.email and body.email.strip() else None,

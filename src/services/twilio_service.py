@@ -45,18 +45,62 @@ def webhook_url(path: str, explicit: str | None = None) -> str | None:
     return f"{settings.app_public_url.rstrip('/')}{path}"
 
 
+def signed_url_candidates(request: Request) -> list[str]:
+    """The URLs Twilio may have signed, most trustworthy first.
+
+    Twilio signs the exact URL configured on the number, which is derived from
+    ``APP_PUBLIC_URL``. Using ``str(request.url)`` alone is wrong in production:
+    Fly terminates TLS, so the scope's scheme is ``http`` while Twilio signed
+    ``https`` -- meaning signature validation could never pass on the deployed
+    service.
+
+    ``app_public_url`` is tried first precisely because it is configuration
+    rather than request data, so a spoofed ``Host`` header cannot influence it.
+    """
+    path = request.url.path
+    query = request.url.query
+    suffix = f"{path}?{query}" if query else path
+
+    candidates: list[str] = []
+    if settings.app_public_url:
+        candidates.append(f"{settings.app_public_url.rstrip('/')}{suffix}")
+
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    if forwarded_proto:
+        scheme = forwarded_proto.split(",")[0].strip()
+        candidates.append(str(request.url.replace(scheme=scheme)))
+
+    candidates.append(str(request.url))
+    return candidates
+
+
 async def validate_twilio_request(request: Request, form_payload: dict[str, str]) -> None:
-    """Validate webhook signatures when the auth token is configured."""
+    """Reject any request Twilio did not sign.
+
+    This used to `return` when ``TWILIO_AUTH_TOKEN`` was unset, which left all
+    four Twilio webhooks publicly writable: anyone could POST a forged form and
+    create contacts, conversations and call/message events inside *any* tenant,
+    because the handlers take user_id and kwami_id from the looked-up channel.
+    Missing configuration now fails closed.
+    """
     if not settings.twilio_auth_token:
-        return
+        logger.error(
+            "Twilio webhook received but TWILIO_AUTH_TOKEN is not configured; "
+            "refusing rather than accepting an unverified request"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Twilio webhook verification is not configured",
+        )
 
     signature = request.headers.get("X-Twilio-Signature", "")
     if not signature:
         raise HTTPException(status_code=401, detail="Missing Twilio signature")
 
     validator = RequestValidator(settings.twilio_auth_token)
-    url = str(request.url)
-    if not validator.validate(url, form_payload, signature):
+    if not any(
+        validator.validate(url, form_payload, signature) for url in signed_url_candidates(request)
+    ):
         raise HTTPException(status_code=401, detail="Invalid Twilio signature")
 
 

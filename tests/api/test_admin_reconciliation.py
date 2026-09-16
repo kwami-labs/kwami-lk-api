@@ -107,7 +107,9 @@ async def test_run_admin_reconciliation_builds_provider_delta(monkeypatch):
         finalized["error"] = error
 
     monkeypatch.setattr(admin_reconciliation, "create_reconciliation_run", fake_create_run)
-    monkeypatch.setattr(admin_reconciliation, "replace_reconciliation_findings", fake_replace_findings)
+    monkeypatch.setattr(
+        admin_reconciliation, "replace_reconciliation_findings", fake_replace_findings
+    )
     monkeypatch.setattr(admin_reconciliation, "finalize_reconciliation_run", fake_finalize_run)
     monkeypatch.setattr(
         admin_reconciliation,

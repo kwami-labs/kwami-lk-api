@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from src.services.channels import get_owned_kwami
@@ -24,7 +24,7 @@ def _parse_iso(value: str, field_name: str) -> datetime:
     except ValueError as exc:
         raise ValueError(f"Invalid {field_name}") from exc
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
     return parsed
 
 
@@ -145,8 +145,16 @@ def update_event(
         raise ValueError("Event not found")
     _ensure_kwami_owned(user_id, str(existing["kwami_id"]))
 
-    next_start = _parse_iso(starts_at, "starts_at") if starts_at else _parse_iso(str(existing["starts_at"]), "starts_at")
-    next_end = _parse_iso(ends_at, "ends_at") if ends_at else _parse_iso(str(existing["ends_at"]), "ends_at")
+    next_start = (
+        _parse_iso(starts_at, "starts_at")
+        if starts_at
+        else _parse_iso(str(existing["starts_at"]), "starts_at")
+    )
+    next_end = (
+        _parse_iso(ends_at, "ends_at")
+        if ends_at
+        else _parse_iso(str(existing["ends_at"]), "ends_at")
+    )
     if next_end < next_start:
         raise ValueError("ends_at must be after starts_at")
 

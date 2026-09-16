@@ -7,9 +7,10 @@ Provides endpoints for:
 - Agent usage reporting (Kwami API key auth)
 """
 
+import hmac
 import logging
 from datetime import datetime
-from typing import Annotated, Optional
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
@@ -131,14 +132,30 @@ class UsageReportItem(BaseModel):
     model_id: str = Field(..., description="Model identifier")
     units_used: float = Field(..., description="Tokens, minutes, or characters")
     prompt_tokens: int | None = Field(None, description="Prompt/input tokens for LLM usage")
-    completion_tokens: int | None = Field(None, description="Completion/output tokens for LLM usage")
-    cached_input_tokens: int | None = Field(None, description="Cached input tokens if the provider supports them")
-    audio_input_minutes: float | None = Field(None, description="Realtime audio input minutes when available")
-    audio_output_minutes: float | None = Field(None, description="Realtime audio output minutes when available")
-    text_input_tokens: int | None = Field(None, description="Realtime text input tokens when available")
-    text_output_tokens: int | None = Field(None, description="Realtime text output tokens when available")
-    request_count: int | None = Field(None, description="Request count for tool or memory operations")
-    event_count: int | None = Field(None, description="How many events were aggregated into this item")
+    completion_tokens: int | None = Field(
+        None, description="Completion/output tokens for LLM usage"
+    )
+    cached_input_tokens: int | None = Field(
+        None, description="Cached input tokens if the provider supports them"
+    )
+    audio_input_minutes: float | None = Field(
+        None, description="Realtime audio input minutes when available"
+    )
+    audio_output_minutes: float | None = Field(
+        None, description="Realtime audio output minutes when available"
+    )
+    text_input_tokens: int | None = Field(
+        None, description="Realtime text input tokens when available"
+    )
+    text_output_tokens: int | None = Field(
+        None, description="Realtime text output tokens when available"
+    )
+    request_count: int | None = Field(
+        None, description="Request count for tool or memory operations"
+    )
+    event_count: int | None = Field(
+        None, description="How many events were aggregated into this item"
+    )
 
 
 class UsageReportRequest(BaseModel):
@@ -160,6 +177,11 @@ class UsageReportResponse(BaseModel):
     total_margin_usd: float
     settlement_status: str
     items_processed: int
+    # What the session cost beyond the balance available. Non-zero means the
+    # service was delivered without being fully paid for.
+    unpaid_credits: int = 0
+    # True when this response is the cached outcome of an earlier identical report.
+    idempotent_replay: bool = False
 
 
 class ReconciliationSummary(BaseModel):
@@ -239,14 +261,16 @@ async def get_credit_packs():
     """Get available credit packs for purchase."""
     packs = []
     for pack in CREDIT_PACKS.values():
-        packs.append(CreditPackResponse(
-            id=pack["id"],
-            name=pack["name"],
-            credits=pack["credits"],
-            price_cents=pack["price_cents"],
-            price_display=f"${pack['price_cents'] / 100:.2f}",
-            popular=pack["popular"],
-        ))
+        packs.append(
+            CreditPackResponse(
+                id=pack["id"],
+                name=pack["name"],
+                credits=pack["credits"],
+                price_cents=pack["price_cents"],
+                price_display=f"${pack['price_cents'] / 100:.2f}",
+                popular=pack["popular"],
+            )
+        )
     return CreditPacksResponse(packs=packs)
 
 
@@ -302,7 +326,7 @@ async def get_credit_usage(
     user: Annotated[AuthUser, Depends(require_auth)],
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    session_id: Optional[str] = Query(None),
+    session_id: str | None = Query(None),
 ):
     """Get the user's credit usage logs."""
     logs = await get_usage_logs(
@@ -313,24 +337,24 @@ async def get_credit_usage(
     )
     items = [
         UsageLogItem(
-            id=l["id"],
-            session_id=l["session_id"],
-            model_type=l["model_type"],
-            model_id=l["model_id"],
-            units_used=l["units_used"],
-            cost_usd=l["cost_usd"],
-            provider_cost_usd=l.get("provider_cost_usd"),
-            billed_cost_usd=l.get("billed_cost_usd"),
-            margin_usd=l.get("margin_usd"),
-            requested_credits=l.get("requested_credits"),
-            credits_charged=l["credits_charged"],
-            settlement_status=l.get("settlement_status"),
-            pricing_version=l.get("pricing_version"),
-            pricing_source=l.get("pricing_source"),
-            usage_metadata=l.get("usage_metadata"),
-            created_at=l["created_at"],
+            id=log["id"],
+            session_id=log["session_id"],
+            model_type=log["model_type"],
+            model_id=log["model_id"],
+            units_used=log["units_used"],
+            cost_usd=log["cost_usd"],
+            provider_cost_usd=log.get("provider_cost_usd"),
+            billed_cost_usd=log.get("billed_cost_usd"),
+            margin_usd=log.get("margin_usd"),
+            requested_credits=log.get("requested_credits"),
+            credits_charged=log["credits_charged"],
+            settlement_status=log.get("settlement_status"),
+            pricing_version=log.get("pricing_version"),
+            pricing_source=log.get("pricing_source"),
+            usage_metadata=log.get("usage_metadata"),
+            created_at=log["created_at"],
         )
-        for l in logs
+        for log in logs
     ]
     return UsageLogsResponse(logs=items, count=len(items))
 
@@ -339,9 +363,9 @@ async def get_credit_usage(
 async def get_credit_reconciliation(
     user: Annotated[AuthUser, Depends(require_auth)],
     limit: int = Query(500, ge=1, le=2000),
-    session_id: Optional[str] = Query(None),
-    created_after: Optional[datetime] = Query(None),
-    created_before: Optional[datetime] = Query(None),
+    session_id: str | None = Query(None),
+    created_after: datetime | None = Query(None),
+    created_before: datetime | None = Query(None),
 ):
     """Get a reconciliation-ready ledger summary for the current user."""
     report = await get_reconciliation_report(
@@ -387,7 +411,7 @@ async def stripe_webhook(request: Request):
 
 
 def _verify_kwami_api_key(
-    x_api_key: Annotated[Optional[str], Header(alias="X-API-Key")] = None,
+    x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
 ) -> None:
     """Verify the Kwami API key used by the agent to report usage."""
     if not settings.kwami_api_key or not settings.kwami_api_key.strip():
@@ -395,7 +419,8 @@ def _verify_kwami_api_key(
             status_code=503,
             detail="Kwami API key not configured (set KWAMI_API_KEY on the API server)",
         )
-    if x_api_key != settings.kwami_api_key:
+    # Constant-time: `!=` on a shared secret leaks length and prefix through timing.
+    if not x_api_key or not hmac.compare_digest(x_api_key, settings.kwami_api_key):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API key",
@@ -406,11 +431,16 @@ def _verify_kwami_api_key(
 async def report_usage(
     request: UsageReportRequest,
     _: Annotated[None, Depends(_verify_kwami_api_key)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ):
     """Report AI usage from the agent after a session ends.
 
     This endpoint is called by the LiveKit agent (not the frontend).
     Authenticated via Kwami API key (X-API-Key header).
+
+    Send an ``Idempotency-Key`` header to make a retry safe. Without one a key is
+    derived from the report's contents, so a redelivered identical report is
+    still settled only once.
     """
     logger.info(
         f"Usage report received: user={request.user_id}, "
@@ -436,18 +466,23 @@ async def report_usage(
     ]
 
     result = await process_usage_report(
+        idempotency_key=idempotency_key,
         user_id=request.user_id,
         session_id=request.session_id,
         usage_items=usage_items,
     )
 
+    # `.get` throughout: a replay returns the cached result of the original
+    # settlement, which may predate any field added since.
     return UsageReportResponse(
-        total_credits_requested=result["total_credits_requested"],
-        total_credits_charged=result["total_credits_charged"],
-        new_balance=result["new_balance"],
-        total_provider_cost_usd=result["total_provider_cost_usd"],
-        total_billed_cost_usd=result["total_billed_cost_usd"],
-        total_margin_usd=result["total_margin_usd"],
-        settlement_status=result["settlement_status"],
-        items_processed=len(result["items"]),
+        total_credits_requested=result.get("total_credits_requested", 0),
+        total_credits_charged=result.get("total_credits_charged", 0),
+        new_balance=result.get("new_balance", 0),
+        total_provider_cost_usd=result.get("total_provider_cost_usd", 0.0),
+        total_billed_cost_usd=result.get("total_billed_cost_usd", 0.0),
+        total_margin_usd=result.get("total_margin_usd", 0.0),
+        settlement_status=result.get("settlement_status", "skipped"),
+        items_processed=len(result.get("items", [])),
+        unpaid_credits=result.get("unpaid_credits", 0),
+        idempotent_replay=bool(result.get("idempotent_replay", False)),
     )

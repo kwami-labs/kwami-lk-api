@@ -41,11 +41,26 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# NOTE: pytest-asyncio is deliberately absent. The suite drives async tests through
+# the anyio plugin (`@pytest.mark.anyio` + the session `anyio_backend` fixture), and
+# Starlette/httpx are anyio-native. Two async plugins competing to collect the same
+# coroutine is a real source of silently-skipped tests, not a style preference.
 dev = [
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.24.0",
+    "pytest>=8.3.0",
+    "pytest-cov>=6.0.0",
+    "pytest-randomly>=3.15.0",
+    "anyio>=4.4.0",
     "httpx>=0.27.0",
+    "respx>=0.22.0",          # httpx transport: supabase/postgrest, zep, sendgrid
+    "responses>=0.25.0",      # requests transport: stripe, twilio
+    "aioresponses>=0.7.6",    # aiohttp transport: livekit twirp
+    "freezegun>=1.5.0",
+    "dirty-equals>=0.8.0",
     "ruff>=0.8.0",
+]
+integration = [
+    "testcontainers[postgres]>=4.8.0",
+    "psycopg[binary]>=3.2.0",
 ]
 
 [project.scripts]
@@ -56,5 +71,85 @@ line-length = 100
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "W", "UP"]
-ignore = ["E501"]
+# ASYNC (flake8-async) is what keeps the async-I/O work from regressing: it flags
+# blocking HTTP/file/sleep calls inside `async def`, which is the defect class that
+# made every Supabase call stall the event loop.
+select = ["E", "F", "I", "N", "W", "UP", "B", "ASYNC"]
+ignore = [
+    "E501",
+    # B904 (`raise ... from err`) fires 44 times, almost all inside the per-route
+    # `except` blocks that the shared domain-error layer deletes outright. Fixing
+    # them now would be churn against that work. Re-enable once it lands.
+    "B904",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's whole dependency system is function calls in argument defaults;
+# B008 is a false positive for every one of them.
+extend-immutable-calls = [
+    "fastapi.Body",
+    "fastapi.Depends",
+    "fastapi.File",
+    "fastapi.Form",
+    "fastapi.Header",
+    "fastapi.Path",
+    "fastapi.Query",
+    "fastapi.Security",
+]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+# The project is run as `python -m src.main` rather than installed, so the repo
+# root must be importable. Setting it here makes `pytest` and `python -m pytest`
+# behave identically -- `uv run pytest` does not add the CWD on its own.
+pythonpath = ["."]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--import-mode=importlib",
+    "--durations=10",
+]
+markers = [
+    "unit: fast, no network, no database (the default)",
+    "integration: requires Postgres + PostgREST",
+    "e2e: requires the full docker-compose stack",
+    "slow: takes more than one second",
+]
+# A test marked xfail that starts passing is a fix that shipped without anyone
+# removing the marker -- fail, so the marker cannot go stale.
+xfail_strict = true
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning:livekit.*",
+    "ignore::DeprecationWarning:google.*",
+    "ignore::DeprecationWarning:pydantic.*",
+    "ignore::DeprecationWarning:websockets.*",
+]
+log_cli_level = "WARNING"
+
+[tool.coverage.run]
+source = ["src"]
+branch = true
+parallel = true
+relative_files = true
+omit = ["src/**/__init__.py"]
+
+[tool.coverage.paths]
+source = ["src", "/app/src"]
+
+[tool.coverage.report]
+show_missing = true
+precision = 1
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "def run\\(\\):",
+    "@(abc\\.)?abstractmethod",
+    "^\\s*\\.\\.\\.$",
+]

@@ -18,9 +18,7 @@ def test_calculate_usage_charge_llm_uses_detailed_tokens():
     breakdown = credits.calculate_usage_charge(item)
 
     expected_provider = (
-        ((1000 - 200) / 1_000_000) * 0.15
-        + (500 / 1_000_000) * 0.60
-        + (200 / 1_000_000) * 0.075
+        ((1000 - 200) / 1_000_000) * 0.15 + (500 / 1_000_000) * 0.60 + (200 / 1_000_000) * 0.075
     )
     expected_billed = expected_provider * settings.billing_markup_multiplier
 
@@ -52,9 +50,13 @@ async def test_process_usage_report_marks_insufficient_credits(monkeypatch):
     async def fake_deduct_credits(**kwargs):
         raise ValueError("Insufficient credits")
 
+    async def zero_balance(_user_id):
+        return {"balance": 0}
+
     monkeypatch.setattr(credits, "log_usage", fake_log_usage)
     monkeypatch.setattr(credits, "update_usage_settlement", fake_update_usage_settlement)
     monkeypatch.setattr(credits, "deduct_credits", fake_deduct_credits)
+    monkeypatch.setattr(credits, "get_balance", zero_balance)
 
     result = await credits.process_usage_report(
         user_id="user-1",
@@ -73,12 +75,14 @@ async def test_process_usage_report_marks_insufficient_credits(monkeypatch):
     assert result["total_credits_requested"] > 0
     assert result["total_credits_charged"] == 0
     assert result["settlement_status"] == "insufficient_credits"
+    # The usage still has to be accounted for even when it cannot be charged.
+    assert result["unpaid_credits"] == result["total_credits_requested"]
     assert inserted_logs
     assert settlements == [
         {
             "usage_log_id": "log-1",
             "credits_charged": 0,
-            "settlement_status": "insufficient_credits",
+            "settlement_status": "written_off",
         }
     ]
 
@@ -101,7 +105,10 @@ async def test_token_credit_check_can_fail_closed(auth_client, monkeypatch):
     )
 
     assert response.status_code == 503
-    assert response.json()["detail"] == "Credit verification is temporarily unavailable. Please try again shortly."
+    assert (
+        response.json()["detail"]
+        == "Credit verification is temporarily unavailable. Please try again shortly."
+    )
 
 
 def test_build_reconciliation_report_summarizes_margin_and_anomalies():

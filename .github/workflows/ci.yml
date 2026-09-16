@@ -1,0 +1,291 @@
+# The test gate. Every job here except `vuln` is a required status check on `main` — see
+# .github/rulesets/main.json, which names them, and scripts/branch-protection.sh, which applies it.
+#
+# The lanes are separate jobs rather than one `make check` because the PR checks UI is where a
+# failure gets read: "integration" going red says something different from "unit" going red, and
+# collapsing them into one line throws that away. They also run in parallel, so the split costs
+# wall-clock nothing.
+name: ci
+
+# `dev` and `stg` are tested; `main` is what releases and deploys. Release, publish and the
+# deploys all live in cd.yml, which runs only after this workflow goes green on the same commit.
+#
+# A push to `dev` runs the FAST LANE only: pr-title is not applicable, and lint, unit and
+# migrations run. `dev` is the branch people push to repeatedly, and the rest — a Postgres
+# service container, a network fetch against the advisory database, a full image build — costs
+# minutes per push. The full suite still runs on every pull request, so nothing reaches `main`
+# without it; the fast lane is a shorter feedback loop, not a lower bar.
+#
+# The condition is spelled out on each job rather than hoisted into one, because GitHub does not
+# expand YAML anchors in workflows and a job whose only output is a boolean is a worse trade than
+# four copies of one line in one file. They are all in this file: grep FAST LANE.
+on:
+  pull_request:
+  push:
+    branches: [main, stg, dev]
+
+# A force-push should cancel the run it superseded. `main` is excluded: those runs are what CD
+# keys off, so they always finish. `dev` and `stg` gate nothing downstream, so superseding a run
+# on either is free.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+# Refuse to resolve anything the lockfile does not already pin. Without it a stale uv.lock is
+# silently repaired in CI and the failure lands on the next person to run `uv sync` locally.
+env:
+  UV_FROZEN: "1"
+
+jobs:
+  # Conventional Commits, checked on the PR title rather than on every commit in the branch.
+  # The ruleset requires a squash merge, so the PR title IS the commit message that lands on
+  # main — linting individual commits would gate text that never reaches the history.
+  pr-title:
+    name: pr-title
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Conventional Commits format
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        shell: bash
+        run: |
+          # The pattern lives in a variable: an inline regex in [[ =~ ]] loses its backslashes to
+          # quote removal, which silently turns \( into a capture group and lets "feature: x" pass.
+          pattern='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9._/-]+\))?!?: .+$'
+          if [[ ! "$TITLE" =~ $pattern ]]; then
+            echo "::error::PR title is not a Conventional Commit: $TITLE"
+            echo "Expected: <type>(<optional scope>): <description>"
+            echo "Types: feat fix docs style refactor perf test build ci chore revert"
+            echo "See CONTRIBUTING.md"
+            exit 1
+          fi
+          echo "ok: $TITLE"
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      # A lockfile that no longer matches pyproject.toml is the one failure that reproduces
+      # nowhere else: every job here runs with UV_FROZEN, so they all pass against the stale
+      # pins while a fresh `uv sync` on a laptop resolves something different.
+      - name: Lockfile is current
+        run: uv lock --check
+
+      - name: ruff check
+        run: uv run --extra dev ruff check .
+
+      - name: ruff format
+        run: uv run --extra dev ruff format --check .
+
+  # The hermetic lane: no network, no database. Everything outbound is faked at its transport —
+  # respx for httpx, responses for requests, aioresponses for aiohttp. If this needs a service
+  # container, something has leaked out of a test seam.
+  unit:
+    name: unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: pytest -m "not integration and not e2e"
+        run: |
+          uv run --extra dev pytest -m "not integration and not e2e" \
+            --cov=src --cov-report=term-missing
+
+      # Renamed off the dotfile: upload-artifact excludes hidden files by default, so an
+      # uploaded `.coverage` arrives as an empty artifact and the coverage job fails two jobs
+      # later with a confusing "no data to combine".
+      - name: Stage the profile
+        if: always()
+        run: mv .coverage coverage.unit
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-unit
+          path: coverage.unit
+          if-no-files-found: error
+          retention-days: 7
+
+  # The money invariants, against a real Postgres with migrations/*.sql applied unchanged.
+  #
+  # Runs on every PR, not nightly. The guarantees that matter here are not in Python —
+  # `UPDATE ... WHERE balance >= p_amount` in a single statement, partial unique indexes,
+  # ON CONFLICT DO NOTHING, RLS policies — and no in-process fake can prove them. A nightly
+  # signal is a signal you ship past.
+  integration:
+    name: integration
+    # FAST LANE: skipped on a push to `dev` — see the note on `on:` above.
+    if: github.event_name != 'push' || github.ref != 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: kwami_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      # These tests SKIP without it rather than failing, which is what keeps `make test` fast and
+      # offline on a laptop — and exactly why it has to be set here on purpose.
+      TEST_DATABASE_URL: postgresql://postgres:test@localhost:5432/kwami_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: pytest -m integration
+        run: |
+          uv run --extra dev --extra integration pytest -m integration \
+            --cov=src --cov-report=term-missing
+
+      - name: Stage the profile
+        if: always()
+        run: mv .coverage coverage.integration
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-integration
+          path: coverage.integration
+          if-no-files-found: error
+          retention-days: 7
+
+  # The gate runs in its own job because neither lane's profile is complete on its own. Today the
+  # integration lane exercises SQL rather than Python and adds nothing to these numbers, but it is
+  # merged anyway: the first integration test that drives a service through Postgres should count
+  # towards its floor, not fail the gate for a module the unit lane deliberately fakes.
+  coverage:
+    name: coverage
+    needs: [unit, integration]
+    # FAST LANE: skipped on a push to `dev` — see the note on `on:` above.
+    if: github.event_name != 'push' || github.ref != 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: coverage-unit
+      - uses: actions/download-artifact@v4
+        with:
+          name: coverage-integration
+
+      # relative_files and [tool.coverage.paths] in pyproject.toml are what make two profiles
+      # recorded on two different runners merge into one set of file paths.
+      - name: Merge profiles
+        run: uv run --extra dev coverage combine coverage.unit coverage.integration
+
+      # Fails on a module below its floor AND on a module listed in neither the floors nor the
+      # exclusions — a new module must be given a coverage decision on purpose.
+      - name: Per-module floors
+        run: make coverage-gate
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo '### Coverage'
+            echo '```'
+            uv run --extra dev coverage report --skip-covered || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # scripts/migrate.py refuses to run with duplicate version prefixes, which is how
+  # 002_billing_accounting_upgrade and 002_user_kwamis came to race. Reusing the migrator here
+  # keeps one implementation of the rule instead of a second one that drifts.
+  migrations:
+    name: migrations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Migrations are ordered and unambiguous
+        run: uv run python scripts/migrate.py --dry-run
+
+  # ADVISORY, not a gate — and deliberately not in .github/rulesets/main.json.
+  #
+  # pip-audit reports every advisory against the resolved dependency set, with no reachability
+  # analysis: today that is 78 advisories across 15 packages, most of them transitive and none
+  # of them introduced by a pull request. Requiring it now would mean every PR is red for
+  # something nobody in the PR can fix, which is how a security check gets ignored.
+  #
+  # Dependabot (.github/dependabot.yml) opens the bumps weekly. Once this job is green, delete
+  # `continue-on-error` and add `vuln` to the required checks in main.json — that is the whole
+  # change, and it is the point of running it advisory in the meantime.
+  vuln:
+    name: vuln
+    # FAST LANE: skipped on a push to `dev` — see the note on `on:` above.
+    if: github.event_name != 'push' || github.ref != 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      # The status is preserved rather than swallowed by the pipe: `continue-on-error` already
+      # keeps the job green, and a step that shows red is the only thing that says the log is
+      # worth opening.
+      - name: pip-audit
+        run: |
+          set -o pipefail
+          make vuln 2>&1 | tee "$RUNNER_TEMP/audit.txt"
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo '### Dependency advisories'
+            echo ''
+            echo 'Advisory only — see the note in ci.yml.'
+            echo '```'
+            tail -n 80 "$RUNNER_TEMP/audit.txt" 2>/dev/null || echo 'pip-audit produced no output'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Proves the release image still builds on every PR. CD pushes it; this only builds.
+  build:
+    name: build
+    # FAST LANE: skipped on a push to `dev` — see the note on `on:` above.
+    if: github.event_name != 'push' || github.ref != 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: docker build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

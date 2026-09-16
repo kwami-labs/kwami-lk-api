@@ -1,0 +1,131 @@
+name: Deploy to Fly.io
+description: >-
+  Deploy this repository to a Fly.io app with `flyctl deploy --remote-only`, refusing the two
+  misconfigurations that otherwise ship silently.
+
+# Ported from the Railway deploy action in aurea-highlights-api / aurea-feed-api, keeping the two
+# rules that matter and dropping everything Railway-specific.
+#
+#   1. A tier that is HALF configured FAILS. The original `exit 0`'d on an unset variable, so a run
+#      reported "success · deploy" while shipping nothing. Here, an app with no token is an error;
+#      only a tier that is entirely absent is a skip, and only where the caller says so.
+#   2. A non-production tier cannot deploy onto the production app. `flyctl deploy` with no --app
+#      silently falls back to the `app` in fly.toml, so an unset FLY_APP on the development
+#      Environment would push `dev` straight to production. `require-distinct-app` makes that the
+#      one thing this action refuses outright.
+#
+# The app name is read out of the config file rather than repeated in the workflow, so fly.toml
+# stays the only place production is named.
+
+inputs:
+  app:
+    description: >-
+      Fly app to deploy to. Empty falls back to the `app` in the config file — which is the
+      production app, so see require-distinct-app.
+    default: ''
+  config:
+    description: Path to fly.toml, relative to the repository root.
+    default: fly.toml
+  fly-api-token:
+    description: Fly API token. Required whenever an app is resolved.
+    required: true
+  require-distinct-app:
+    description: >-
+      Set to "true" on every tier that is not production. An empty app then means "this tier does
+      not exist yet" and the deploy is skipped green; an app equal to the config file's means the
+      tier would deploy onto production, and the deploy fails.
+    default: 'false'
+  strategy:
+    description: Fly deployment strategy (immediate, rolling, canary, bluegreen). Empty uses Fly's default.
+    default: ''
+
+outputs:
+  deployed:
+    description: '"true" when a deploy actually happened.'
+    value: ${{ steps.resolve.outputs.deploy }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve the target app
+      id: resolve
+      shell: bash
+      env:
+        APP: ${{ inputs.app }}
+        CONFIG: ${{ inputs.config }}
+        TOKEN: ${{ inputs.fly-api-token }}
+        DISTINCT: ${{ inputs.require-distinct-app }}
+      run: |
+        set -euo pipefail
+
+        [ -f "$CONFIG" ] || { echo "::error::$CONFIG not found"; exit 1; }
+        # The first `app = '...'` or `app = "..."` at the top level of fly.toml.
+        config_app="$(sed -nE "s/^[[:space:]]*app[[:space:]]*=[[:space:]]*['\"]([^'\"]+)['\"].*/\1/p" "$CONFIG" | head -1)"
+        [ -n "$config_app" ] || { echo "::error::no app name in $CONFIG"; exit 1; }
+
+        app="${APP:-}"
+
+        if [ "$DISTINCT" = "true" ]; then
+          if [ -z "$app" ]; then
+            echo "::warning::No Fly app configured for this tier (FLY_APP is unset on this Environment) — nothing was deployed."
+            echo '- **Deploy skipped**: this tier has no Fly app yet. Set `FLY_APP` on the Environment to enable it.' >> "$GITHUB_STEP_SUMMARY"
+            echo 'deploy=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$app" = "$config_app" ]; then
+            echo "::error::FLY_APP is '$app', which is the production app named in $CONFIG. A non-production tier needs its own Fly app."
+            exit 1
+          fi
+        fi
+
+        app="${app:-$config_app}"
+
+        # An app with no token is a misconfiguration, not an unconfigured tier: a green deploy
+        # that shipped nothing is worse than a red one.
+        if [ -z "${TOKEN:-}" ]; then
+          echo "::error::FLY_API_TOKEN is not set, but this tier deploys to '$app'. Add it to this Environment or the repository secrets."
+          exit 1
+        fi
+
+        {
+          echo "app=$app"
+          echo 'deploy=true'
+        } >> "$GITHUB_OUTPUT"
+        echo "deploying to Fly app: $app"
+
+    - uses: superfly/flyctl-actions/setup-flyctl@master
+      if: steps.resolve.outputs.deploy == 'true'
+
+    - name: flyctl deploy
+      if: steps.resolve.outputs.deploy == 'true'
+      shell: bash
+      env:
+        FLY_API_TOKEN: ${{ inputs.fly-api-token }}
+        APP: ${{ steps.resolve.outputs.app }}
+        CONFIG: ${{ inputs.config }}
+        STRATEGY: ${{ inputs.strategy }}
+      run: |
+        set -euo pipefail
+        # --remote-only: the image is built on Fly's builders, so this job needs no Docker daemon
+        # and the build is identical to the one `fly deploy` does from a laptop.
+        args=(deploy --remote-only --app "$APP" --config "$CONFIG")
+        [ -n "$STRATEGY" ] && args+=(--strategy "$STRATEGY")
+        flyctl "${args[@]}"
+
+    - name: Summary
+      if: steps.resolve.outputs.deploy == 'true'
+      shell: bash
+      env:
+        FLY_API_TOKEN: ${{ inputs.fly-api-token }}
+        APP: ${{ steps.resolve.outputs.app }}
+      run: |
+        set -euo pipefail
+        {
+          echo '### Deployed'
+          echo ''
+          echo "Fly app \`${APP}\`, from \`${GITHUB_SHA}\`"
+          echo ''
+          echo '```'
+          flyctl status --app "$APP" 2>&1 | head -30 || echo '(status unavailable)'
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"

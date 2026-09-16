@@ -22,22 +22,27 @@ logger = logging.getLogger("kwami-api.email")
 # Request / response models
 # ---------------------------------------------------------------------------
 
+
 class CheckUsernameRequest(BaseModel):
     username: str = Field(..., min_length=1, max_length=30)
+
 
 class CheckUsernameResponse(BaseModel):
     available: bool
     error: str | None = None
 
+
 class ActivateRequest(BaseModel):
     kwami_id: str
     username: str = Field(..., min_length=3, max_length=30)
+
 
 class AccountResponse(BaseModel):
     id: str
     username: str
     email_address: str
     is_active: bool
+
 
 class SendEmailRequest(BaseModel):
     kwami_id: str
@@ -48,6 +53,7 @@ class SendEmailRequest(BaseModel):
     body_html: str = ""
     reply_to_message_id: str | None = None
 
+
 class MessagePatchRequest(BaseModel):
     is_read: bool | None = None
     is_starred: bool | None = None
@@ -57,6 +63,7 @@ class MessagePatchRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
 
 @router.post("/check-username", response_model=CheckUsernameResponse)
 async def check_username(

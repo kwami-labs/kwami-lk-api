@@ -1,0 +1,45 @@
+{
+  "tagFormat": "v${version}",
+  "branches": ["main"],
+  "plugins": [
+    [
+      "@semantic-release/commit-analyzer",
+      {
+        "preset": "angular",
+        "releaseRules": [
+          { "breaking": true, "release": "minor" },
+          { "type": "*", "release": "patch" }
+        ]
+      }
+    ],
+    ["@semantic-release/release-notes-generator", { "preset": "angular" }],
+    [
+      "@semantic-release/changelog",
+      {
+        "changelogFile": "CHANGELOG.md",
+        "changelogTitle": "# kwami-lk-api — Changelog\n\nAll notable changes to this service are documented here. This file is generated from the commit history by semantic-release — do not edit it by hand.\n\n`v0.1.0` is a baseline tag placed at the commit that introduced this automation. Everything before it lives in the git log rather than here: it shipped before there was a release line to put it on."
+      }
+    ],
+    [
+      "@semantic-release/exec",
+      {
+        "prepareCmd": "./scripts/set-version.sh ${nextRelease.version}"
+      }
+    ],
+    [
+      "@semantic-release/git",
+      {
+        "assets": ["CHANGELOG.md", "README.md", "pyproject.toml", "uv.lock", "src/__init__.py"],
+        "message": "chore(release): v${nextRelease.version} [skip actions]\n\n${nextRelease.notes}"
+      }
+    ],
+    [
+      "@semantic-release/github",
+      {
+        "successComment": false,
+        "releasedLabels": false,
+        "failTitle": "The automated release is failing 🚨"
+      }
+    ]
+  ]
+}

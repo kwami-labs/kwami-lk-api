@@ -97,11 +97,7 @@ def _json_request(
     """Perform a JSON GET request using the stdlib."""
     if query:
         encoded = parse.urlencode(
-            {
-                key: value
-                for key, value in query.items()
-                if value is not None
-            },
+            {key: value for key, value in query.items() if value is not None},
             doseq=True,
         )
         url = f"{url}?{encoded}"
@@ -340,7 +336,8 @@ def _pull_livekit_usage(
                 metadata={
                     "bandwidth_bytes": bandwidth_bytes,
                     "bandwidth_gb": round(bandwidth_gb, 6),
-                    "num_participants": detail.get("numParticipants") or session.get("numParticipants"),
+                    "num_participants": detail.get("numParticipants")
+                    or session.get("numParticipants"),
                     "pricing_note": "Estimated from analytics API using configured LiveKit rates.",
                 },
                 raw_line=detail or session,
@@ -361,7 +358,9 @@ def _pull_livekit_usage(
     }
 
 
-def _normalize_zep_usage_payload(payload: Any, period_start: datetime, period_end: datetime) -> list[ProviderUsageLine]:
+def _normalize_zep_usage_payload(
+    payload: Any, period_start: datetime, period_end: datetime
+) -> list[ProviderUsageLine]:
     if isinstance(payload, dict):
         if isinstance(payload.get("data"), list):
             raw_items = payload.get("data", [])
@@ -385,9 +384,7 @@ def _normalize_zep_usage_payload(payload: Any, period_start: datetime, period_en
                 usage_unit=str(item.get("usage_unit") or item.get("unit") or "request"),
                 usage_quantity=float(item.get("usage_quantity") or item.get("count") or 1),
                 raw_cost_usd=(
-                    float(item["cost_usd"])
-                    if item.get("cost_usd") is not None
-                    else None
+                    float(item["cost_usd"]) if item.get("cost_usd") is not None else None
                 ),
                 estimated_cost_usd=(
                     float(item["estimated_cost_usd"])
@@ -401,25 +398,30 @@ def _normalize_zep_usage_payload(payload: Any, period_start: datetime, period_en
                 started_at=_parse_datetime(item.get("started_at")) or period_start,
                 ended_at=_parse_datetime(item.get("ended_at")) or period_end,
                 external_reference=item.get("external_reference"),
-                metadata={key: value for key, value in item.items() if key not in {
-                    "service",
-                    "endpoint",
-                    "usage_unit",
-                    "unit",
-                    "usage_quantity",
-                    "count",
-                    "cost_usd",
-                    "estimated_cost_usd",
-                    "currency",
-                    "project_id",
-                    "resource_id",
-                    "thread_id",
-                    "session_id",
-                    "user_id",
-                    "started_at",
-                    "ended_at",
-                    "external_reference",
-                }},
+                metadata={
+                    key: value
+                    for key, value in item.items()
+                    if key
+                    not in {
+                        "service",
+                        "endpoint",
+                        "usage_unit",
+                        "unit",
+                        "usage_quantity",
+                        "count",
+                        "cost_usd",
+                        "estimated_cost_usd",
+                        "currency",
+                        "project_id",
+                        "resource_id",
+                        "thread_id",
+                        "session_id",
+                        "user_id",
+                        "started_at",
+                        "ended_at",
+                        "external_reference",
+                    }
+                },
                 raw_line=item,
             )
         )
@@ -516,9 +518,7 @@ def normalize_manual_import_lines(
                 usage_unit=str(line.get("usage_unit") or "unit"),
                 usage_quantity=float(line.get("usage_quantity") or 0),
                 raw_cost_usd=(
-                    float(line["raw_cost_usd"])
-                    if line.get("raw_cost_usd") is not None
-                    else None
+                    float(line["raw_cost_usd"]) if line.get("raw_cost_usd") is not None else None
                 ),
                 estimated_cost_usd=(
                     float(line["estimated_cost_usd"])
@@ -615,17 +615,23 @@ async def create_provider_usage_import(
     imported_by: str | None = None,
 ) -> str:
     sb = get_supabase_admin()
-    result = sb.table("provider_usage_imports").insert({
-        "provider": _normalize_provider(provider),
-        "import_mode": import_mode,
-        "status": "pending",
-        "source_label": source_label,
-        "invoice_period_start": _datetime_to_iso(invoice_period_start),
-        "invoice_period_end": _datetime_to_iso(invoice_period_end),
-        "currency": currency.lower(),
-        "external_reference": external_reference,
-        "imported_by": imported_by,
-    }).execute()
+    result = (
+        sb.table("provider_usage_imports")
+        .insert(
+            {
+                "provider": _normalize_provider(provider),
+                "import_mode": import_mode,
+                "status": "pending",
+                "source_label": source_label,
+                "invoice_period_start": _datetime_to_iso(invoice_period_start),
+                "invoice_period_end": _datetime_to_iso(invoice_period_end),
+                "currency": currency.lower(),
+                "external_reference": external_reference,
+                "imported_by": imported_by,
+            }
+        )
+        .execute()
+    )
     if result.data:
         return result.data[0]["id"]
     raise RuntimeError("Failed to create provider usage import")
@@ -640,12 +646,14 @@ async def finalize_provider_usage_import(
     error: str | None = None,
 ) -> None:
     sb = get_supabase_admin()
-    sb.table("provider_usage_imports").update({
-        "status": status,
-        "summary": summary or {},
-        "raw_payload": raw_payload or {},
-        "error": error,
-    }).eq("id", import_id).execute()
+    sb.table("provider_usage_imports").update(
+        {
+            "status": status,
+            "summary": summary or {},
+            "raw_payload": raw_payload or {},
+            "error": error,
+        }
+    ).eq("id", import_id).execute()
 
 
 async def insert_provider_usage_lines(import_id: str, lines: list[ProviderUsageLine]) -> None:
@@ -680,7 +688,9 @@ async def import_provider_usage_manual(
         await insert_provider_usage_lines(import_id, normalized_lines)
         summary = {
             "lines_count": len(normalized_lines),
-            "raw_cost_usd": _round_usd(sum(_provider_cost(asdict(line)) for line in normalized_lines)),
+            "raw_cost_usd": _round_usd(
+                sum(_provider_cost(asdict(line)) for line in normalized_lines)
+            ),
         }
         await finalize_provider_usage_import(
             import_id,
@@ -795,7 +805,9 @@ def _filter_period_rows(
     return filtered
 
 
-def _summarize_internal_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _summarize_internal_rows(
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     provider_rows: dict[str, dict[str, Any]] = {}
     session_rows: dict[str, dict[str, Any]] = {}
     findings: list[dict[str, Any]] = []
@@ -890,7 +902,9 @@ def _summarize_internal_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str,
     }
 
 
-def _summarize_imported_lines(lines: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _summarize_imported_lines(
+    lines: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     provider_rows: dict[str, dict[str, Any]] = {}
     matched_session_ids: set[str] = set()
 
@@ -953,15 +967,21 @@ async def create_reconciliation_run(
     created_by: str | None,
 ) -> str:
     sb = get_supabase_admin()
-    result = sb.table("provider_reconciliation_runs").insert({
-        "trigger_mode": trigger_mode,
-        "provider_filters": provider_filters,
-        "import_ids": import_ids,
-        "period_start": _datetime_to_iso(period_start),
-        "period_end": _datetime_to_iso(period_end),
-        "status": "pending",
-        "created_by": created_by,
-    }).execute()
+    result = (
+        sb.table("provider_reconciliation_runs")
+        .insert(
+            {
+                "trigger_mode": trigger_mode,
+                "provider_filters": provider_filters,
+                "import_ids": import_ids,
+                "period_start": _datetime_to_iso(period_start),
+                "period_end": _datetime_to_iso(period_end),
+                "status": "pending",
+                "created_by": created_by,
+            }
+        )
+        .execute()
+    )
     if result.data:
         return result.data[0]["id"]
     raise RuntimeError("Failed to create reconciliation run")
@@ -975,11 +995,13 @@ async def finalize_reconciliation_run(
     error: str | None = None,
 ) -> None:
     sb = get_supabase_admin()
-    sb.table("provider_reconciliation_runs").update({
-        "status": status,
-        "summary": summary or {},
-        "error": error,
-    }).eq("id", run_id).execute()
+    sb.table("provider_reconciliation_runs").update(
+        {
+            "status": status,
+            "summary": summary or {},
+            "error": error,
+        }
+    ).eq("id", run_id).execute()
 
 
 async def replace_reconciliation_findings(
@@ -1040,10 +1062,7 @@ async def run_admin_reconciliation(
     period_end: datetime | None = None,
     created_by: str | None = None,
 ) -> dict[str, Any]:
-    normalized_filters = [
-        _normalize_provider(provider)
-        for provider in (provider_filters or [])
-    ]
+    normalized_filters = [_normalize_provider(provider) for provider in (provider_filters or [])]
     run_id = await create_reconciliation_run(
         trigger_mode="manual",
         provider_filters=normalized_filters,
@@ -1134,9 +1153,7 @@ async def run_admin_reconciliation(
         for line in imported_lines:
             line_cost = _provider_cost(line)
             session_candidates = {
-                value
-                for value in (line.get("session_id"), line.get("external_reference"))
-                if value
+                value for value in (line.get("session_id"), line.get("external_reference")) if value
             }
             matched_session = next(
                 (candidate for candidate in session_candidates if candidate in known_session_ids),
@@ -1175,9 +1192,13 @@ async def run_admin_reconciliation(
                             "external_reference": line.get("external_reference"),
                             "expected_cost_usd": _round_usd(line_cost),
                             "actual_cost_usd": _round_usd(session_summary["billed_cost_usd"]),
-                            "delta_cost_usd": _round_usd(session_summary["billed_cost_usd"] - line_cost),
+                            "delta_cost_usd": _round_usd(
+                                session_summary["billed_cost_usd"] - line_cost
+                            ),
                             "metadata": {
-                                "internal_provider_cost_usd": _round_usd(session_summary["provider_cost_usd"]),
+                                "internal_provider_cost_usd": _round_usd(
+                                    session_summary["provider_cost_usd"]
+                                ),
                             },
                         }
                     )
@@ -1185,10 +1206,18 @@ async def run_admin_reconciliation(
         summary = {
             "providers": provider_summary,
             "totals": {
-                "imported_cost_usd": _round_usd(sum(item["imported_cost_usd"] for item in provider_summary)),
-                "internal_provider_cost_usd": _round_usd(sum(item["internal_provider_cost_usd"] for item in provider_summary)),
-                "internal_billed_cost_usd": _round_usd(sum(item["internal_billed_cost_usd"] for item in provider_summary)),
-                "realized_margin_usd": _round_usd(sum(item["realized_margin_usd"] for item in provider_summary)),
+                "imported_cost_usd": _round_usd(
+                    sum(item["imported_cost_usd"] for item in provider_summary)
+                ),
+                "internal_provider_cost_usd": _round_usd(
+                    sum(item["internal_provider_cost_usd"] for item in provider_summary)
+                ),
+                "internal_billed_cost_usd": _round_usd(
+                    sum(item["internal_billed_cost_usd"] for item in provider_summary)
+                ),
+                "realized_margin_usd": _round_usd(
+                    sum(item["realized_margin_usd"] for item in provider_summary)
+                ),
             },
             "counts": {
                 "imported_usage_lines": len(imported_lines),
