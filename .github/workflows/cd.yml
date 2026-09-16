@@ -1,0 +1,274 @@
+# Continuous delivery: cut the release, publish the image, ship it.
+#
+# This runs only after `ci` has gone green on the same commit — `workflow_run` rather than a second
+# `push` trigger, so nothing is released, published or deployed from a commit whose tests never
+# passed.
+#
+# The order matters. semantic-release runs *first*, because it is what decides the version: the
+# image is then tagged with the version that was just cut, in the same run, from a single build.
+#
+# It also means the release tag is created with GITHUB_TOKEN, which by design triggers no workflow.
+# That is what stops `cd → tag → cd`, and it is why there is no `push: tags` trigger here: tags are
+# cut by this workflow, never pushed by hand. `[skip actions]` in the release commit message is the
+# belt to that braces, for anything watching the repo from outside Actions.
+name: cd
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    # Two branches, two different sets of jobs:
+    #   main — release, publish, deploy production. This is the branch that ships.
+    #   dev  — deploy development, once a Fly app and token exist for it. No release, no image.
+    # `stg` is tested by ci and reaches nothing here; add a job beside deploy-development and
+    # `stg` to the list below when a staging Fly app exists.
+    branches: [main, dev]
+
+# Keyed on the branch that triggered ci, NOT github.ref: a workflow_run event always runs in the
+# context of the default branch, so every run — a `main` release and a `dev` deploy alike — would
+# otherwise share one group and queue behind each other for no reason.
+concurrency:
+  group: cd-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Versions, tags, CHANGELOG.md and the GitHub Release, all derived from the Conventional Commits
+  # since the last tag. Nothing here is hand-maintained; no pull request ever bumps a version.
+  release:
+    name: release
+    # workflow_run fires on failure too, so the conclusion has to be checked explicitly: a red
+    # ci run must not cut a version or publish an image. The branch check is belt-and-braces
+    # against the trigger filter above.
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # semantic-release pushes the changelog commit and the tag, and opens an issue if it fails.
+    # The push lands on protected `main`; .github/rulesets/main.json bypasses the Actions app for it.
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      version: ${{ steps.semantic.outputs.version }}
+      minor: ${{ steps.semantic.outputs.minor }}
+    env:
+      TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The branch, not the tested SHA: semantic-release commits the changelog onto it. The
+          # guard below refuses to release if the two have drifted apart.
+          ref: main
+          # Full history and tags — semantic-release derives every version from them.
+          fetch-depth: 0
+
+      # A merge that landed while ci was running has its own ci run behind it; let that one release
+      # rather than shipping a commit these gates never saw.
+      - name: Refuse to release an untested tip
+        run: |
+          set -euo pipefail
+          tip="$(git rev-parse HEAD)"
+          if [ "$tip" != "$TESTED_SHA" ]; then
+            echo "::notice::main is at $tip, ahead of the tested commit $TESTED_SHA — its own run will release."
+            echo 'skip=true' >> "$GITHUB_ENV"
+          fi
+
+      - if: env.skip != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # Without a `v*` tag semantic-release would call this a first release and jump straight to
+      # 1.0.0, dragging the whole pre-automation history into the changelog with it. Tagging the
+      # tip we start from makes the first real release a normal bump over that baseline, and it
+      # matches the 0.1.0 that pyproject.toml has always claimed.
+      - name: Ensure a release baseline exists
+        if: env.skip != 'true'
+        run: |
+          set -euo pipefail
+          if [ -n "$(git tag --list 'v*')" ]; then
+            echo "already released — no baseline needed"
+            exit 0
+          fi
+          echo "tagging v0.1.0 at $(git rev-parse --short HEAD) as the release baseline"
+          git tag v0.1.0
+          git push origin v0.1.0
+
+      # semantic-release bundles commit-analyzer, release-notes-generator and github; changelog,
+      # exec (scripts/set-version.sh) and git are the ones that have to be asked for. Pinned to
+      # majors rather than floated, so a release cannot change shape under an unattended bump.
+      #
+      # semantic-release has no version output of its own, so the tag it created is read back as the
+      # difference between the tag list before and after.
+      - name: semantic-release
+        id: semantic
+        if: env.skip != 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git tag | sort > "$RUNNER_TEMP/tags-before.txt"
+          npx --yes \
+            -p semantic-release@25 \
+            -p @semantic-release/changelog@7 \
+            -p @semantic-release/exec@7 \
+            -p @semantic-release/git@11 \
+            semantic-release
+          git tag | sort > "$RUNNER_TEMP/tags-after.txt"
+          tag="$(comm -13 "$RUNNER_TEMP/tags-before.txt" "$RUNNER_TEMP/tags-after.txt" | head -1)"
+          version="${tag#v}"
+          {
+            echo "version=${version}"
+            echo "minor=${version%.*}"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo '### Release'
+            echo ''
+            echo "${tag:-No releasable changes.}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # GHCR is the archive: an immutable, versioned image for every release, addressable by digest.
+  # It is not what Fly runs — `flyctl deploy --remote-only` builds on Fly's own builders from the
+  # same Dockerfile and the same commit. Pointing Fly at this image instead would need registry
+  # credentials on the Fly side for a package that is private by default; the trade taken here is
+  # a second build rather than a second credential.
+  publish:
+    name: publish
+    needs: release
+    # `needs: release` alone would skip this whenever release is skipped. always() + an explicit
+    # conclusion check keeps the semantics readable if a second branch is added later.
+    if: >-
+      always()
+      && github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.head_branch == 'main'
+      && (needs.release.result == 'success' || needs.release.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      # The default ref for workflow_run is the default branch tip, which is not necessarily the
+      # commit that passed — and by now it is one changelog commit further on. Check out the exact
+      # SHA that ci tested: the image is built from tested code, the tag names the version it is.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # `sha-` and `main` are always written; the semver tags only when a version was cut.
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=${{ needs.release.outputs.version }},enable=${{ needs.release.outputs.version != '' }}
+            type=raw,value=${{ needs.release.outputs.minor }},enable=${{ needs.release.outputs.version != '' }}
+            type=raw,value=main
+            type=sha,format=long
+
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+
+      # The image is only known after the release exists, so the coordinates are appended to the
+      # notes rather than written into them. Without this a release says what changed but not what
+      # to pull.
+      - name: Name the image on the release
+        if: needs.release.outputs.version != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v${{ needs.release.outputs.version }}
+          IMAGE: ghcr.io/${{ github.repository }}:${{ needs.release.outputs.version }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --json body -q .body > "$RUNNER_TEMP/notes.md"
+          printf '\n---\n\nImage: `%s`\nDigest: `%s`\n' "$IMAGE" "$DIGEST" >> "$RUNNER_TEMP/notes.md"
+          gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+
+      - name: Summary
+        run: |
+          {
+            echo '### Published'
+            echo '```'
+            echo '${{ steps.meta.outputs.tags }}'
+            echo 'digest: ${{ steps.build.outputs.digest }}'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Production. `needs: publish` rather than `needs: release`, so a run with no releasable
+  # changes still deploys: every green commit on `main` is meant to be running, whether or not it
+  # earned a version number.
+  deploy-production:
+    name: deploy · production
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Holds FLY_API_TOKEN, and optionally FLY_APP as a variable. Repository-level secrets are
+    # visible to an environment job too, so the token that deploys today keeps working unchanged.
+    environment: production
+    # Never two deploys racing onto one Fly app: the loser wins the rollout and it is whichever
+    # finished last, not whichever was newer.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      # The commit ci tested, not the branch tip — by now that is one changelog commit further on.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      # No `app`: production is the app named in fly.toml, which stays the only place it is
+      # written down. `vars.FLY_APP` on the production Environment overrides it if one is ever
+      # needed.
+      - uses: ./.github/actions/fly-deploy
+        with:
+          app: ${{ vars.FLY_APP }}
+          fly-api-token: ${{ secrets.FLY_API_TOKEN }}
+
+  # Development. There is one Fly app today, so this job skips — green — until `FLY_APP` is set
+  # as a variable on the `development` Environment. It is FLY_APP rather than the token that
+  # enables the tier because the token is a repository secret already: without a second app name
+  # there is nowhere for `dev` to go except production, which the action refuses.
+  #
+  # Deliberately NOT `needs: [release, publish]`: both are gated to `main`, and a job that needs
+  # a skipped job is itself skipped.
+  deploy-development:
+    name: deploy · development
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: development
+    concurrency:
+      group: deploy-development
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: ./.github/actions/fly-deploy
+        with:
+          app: ${{ vars.FLY_APP }}
+          fly-api-token: ${{ secrets.FLY_API_TOKEN }}
+          # Not production: an unset FLY_APP is a tier that does not exist yet, and an FLY_APP
+          # equal to fly.toml's is a misconfiguration the action refuses.
+          require-distinct-app: 'true'
