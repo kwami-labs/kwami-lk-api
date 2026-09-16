@@ -8,4 +8,4 @@ along with pyproject.toml, uv.lock and the README badge. Do not edit it by hand;
 disagrees with the tag is worse than one that is a release behind.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
