@@ -216,6 +216,9 @@ async def _handle_checkout_completed(session: dict) -> dict:
         description=f"Purchased {pack_name} pack ({credits:,} credits)",
         metadata={
             "stripe_session_id": stripe_session_id,
+            # Recorded so a later charge.refunded can find the credit it reverses:
+            # refund events carry the payment intent, not the checkout session.
+            "stripe_payment_intent": session.get("payment_intent"),
             "pack_id": pack_id,
             "credits": credits,
             "amount_paid_cents": session.get("amount_total"),
