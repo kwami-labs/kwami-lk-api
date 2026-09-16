@@ -1,6 +1,6 @@
 # Kwami LiveKit API
 
-[![release](https://img.shields.io/badge/release-v0.1.0-blue)](CHANGELOG.md)
+[![release](https://img.shields.io/badge/release-v0.1.1-blue)](CHANGELOG.md)
 [![ci](https://github.com/kwami-labs/kwami-lk-api/actions/workflows/ci.yml/badge.svg)](https://github.com/kwami-labs/kwami-lk-api/actions/workflows/ci.yml)
 [![cd](https://github.com/kwami-labs/kwami-lk-api/actions/workflows/cd.yml/badge.svg)](https://github.com/kwami-labs/kwami-lk-api/actions/workflows/cd.yml)
 [![license](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
