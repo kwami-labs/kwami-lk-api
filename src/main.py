@@ -7,6 +7,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src import __version__
 from src.api.routes import (
     admin_reconciliation,
     calendar,
@@ -38,7 +39,7 @@ logger = logging.getLogger("kwami-api")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
-    logger.info(f"🚀 Starting {settings.app_name} v0.1.0")
+    logger.info(f"🚀 Starting {settings.app_name} v{__version__}")
     logger.info(f"🌐 Listening on {settings.api_host}:{settings.api_port}")
     logger.info(f"📡 LiveKit URL: {settings.livekit_url}")
     logger.info(f"🌍 Environment: {settings.app_env}")
@@ -55,7 +56,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Kwami AI LiveKit API",
     description="Token endpoint and configuration API for Kwami AI agents",
-    version="0.1.0",
+    version=__version__,
     lifespan=lifespan,
     docs_url="/docs" if settings.show_docs else None,
     redoc_url="/redoc" if settings.show_docs else None,
