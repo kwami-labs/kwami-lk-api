@@ -59,6 +59,9 @@ _TABLES_WITH_UUID_PK = frozenset(
         "provider_reconciliation_runs",
         "provider_reconciliation_findings",
         "user_app_settings",
+        "payment_events",
+        "usage_reports",
+        "livekit_sessions",
     }
 )
 
@@ -92,6 +95,10 @@ DEFAULT_UNIQUE_INDEXES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("wallet_funding_intents", ("idempotency_key",)),
     ("wallet_funding_events", ("provider", "provider_event_id")),
     ("wallet_token_allowlist", ("chain", "mint_address")),
+    ("payment_events", ("provider", "event_id")),
+    ("usage_reports", ("report_key",)),
+    ("credit_transactions", ("idempotency_key",)),
+    ("livekit_sessions", ("room_name",)),
 )
 
 
