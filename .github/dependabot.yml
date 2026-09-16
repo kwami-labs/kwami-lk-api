@@ -1,0 +1,49 @@
+# Version updates open against `dev`, not `main`. They still go through the same CI gate as
+# everything else: no update lands without lint, unit, integration, coverage and build going
+# green on the pull request. Promote `dev` to `main` the usual way.
+#
+# Dependabot reads this file from the default branch, so this setting only takes effect once it
+# is on `main`. Security updates ignore target-branch and still open against the default branch.
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      # LiveKit releases the agents SDK and every plugin in lockstep; splitting them produces
+      # pull requests that cannot resolve on their own.
+      livekit:
+        patterns: ["livekit*"]
+      # The test tooling moves together and never touches the running service.
+      dev-tooling:
+        patterns: ["pytest*", "ruff", "respx", "responses", "aioresponses", "freezegun", "dirty-equals", "anyio", "httpx", "testcontainers*"]
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: build

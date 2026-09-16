@@ -1,5 +1,10 @@
 # Kwami LiveKit API
 
+[![release](https://img.shields.io/badge/release-v0.1.0-blue)](CHANGELOG.md)
+[![ci](https://github.com/kwami-labs/kwami-lk-api/actions/workflows/ci.yml/badge.svg)](https://github.com/kwami-labs/kwami-lk-api/actions/workflows/ci.yml)
+[![cd](https://github.com/kwami-labs/kwami-lk-api/actions/workflows/cd.yml/badge.svg)](https://github.com/kwami-labs/kwami-lk-api/actions/workflows/cd.yml)
+[![license](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
+
 Backend API for **Kwami** voice agents: LiveKit token issuance, model and voice catalogs, Zep memory operations, and credits (Stripe). Used by [Kwami App](https://github.com/kwami-labs/kwami-app) and the Kwami LiveKit agent.
 
 ## Features
@@ -81,15 +86,23 @@ See `.env.sample` for a full list and comments.
 
 ## Commands
 
+`make` on its own runs the whole gate. `make help` lists every target.
+
 | Command | Description |
 |---------|-------------|
-| `make install` | Install dependencies (`uv sync`) |
-| `make dev` | Run API in dev mode |
-| `make test` | Run tests |
-| `make lint` | Run Ruff linter |
-| `make format` | Format and fix with Ruff |
-| `make docker-build` | Build Docker image |
-| `make docker-up` / `make docker-down` | Run or stop container |
+| `make check` | The full gate: lint, format, both test lanes, coverage floors, migrations |
+| `make install` | Sync the venv, dev extra included |
+| `make dev` | Run the API on :8080 |
+| `make test` | Unit and API tests — no database, no network |
+| `make test-db-up` | Start a throwaway Postgres on 55433 for the integration lane |
+| `make test-integration` | Migrations and money invariants against that Postgres |
+| `make coverage` | Run both lanes and merge their profiles |
+| `make coverage-gate` | Enforce the per-module floors in `coverage.floors` |
+| `make lint` / `make format` | Ruff check / format and fix |
+| `make vuln` | pip-audit over the locked dependency set (network) |
+| `make hooks` | Install the pre-push hook that refuses a direct push to `main` |
+| `make docker-build` | Build the release image CD publishes |
+| `make docker-up` / `make docker-down` | Run or stop that container |
 
 ## Project structure
 
@@ -116,8 +129,19 @@ tests/
 
 ## Deployment
 
-- **Fly.io** — `fly.toml` is included. Set secrets with `fly secrets set` and deploy with `fly deploy`.
-- **Docker** — Use `Dockerfile` and set env via `--env-file` or environment.
+Deploys are automatic. A green `ci` run on `main` triggers [`cd.yml`](.github/workflows/cd.yml),
+which cuts the version and the changelog with semantic-release, publishes the image to GHCR, and
+deploys to Fly.io — in that order, all from the commit CI tested. Nothing is released or shipped
+from a commit whose tests did not pass, and no version is ever bumped in a pull request.
+
+- **Fly.io** — `fly.toml` names the production app. Secrets live in `fly secrets`, not the repo;
+  `FLY_API_TOKEN` is the one GitHub needs. `make deploy` is the manual escape hatch.
+- **GHCR** — `ghcr.io/kwami-labs/kwami-lk-api`, tagged with the version, the minor, `main` and the
+  full commit SHA.
+- **Docker** — `Dockerfile` builds the same image locally; set env via `--env-file`.
+
+[CONTRIBUTING.md](CONTRIBUTING.md) has the branch model, the release rules and what each CI check
+means. [SECURITY.md](SECURITY.md) is how to report a vulnerability.
 
 ## License
 
