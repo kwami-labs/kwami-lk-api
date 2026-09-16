@@ -4,17 +4,29 @@
   "enforcement": "active",
   "conditions": {
     "ref_name": {
-      "include": ["~DEFAULT_BRANCH"],
+      "include": [
+        "~DEFAULT_BRANCH"
+      ],
       "exclude": []
     }
   },
   "bypass_actors": [
-    { "actor_id": 15368, "actor_type": "Integration", "bypass_mode": "always" }
+    {
+      "actor_id": 5,
+      "actor_type": "RepositoryRole",
+      "bypass_mode": "always"
+    }
   ],
   "rules": [
-    { "type": "deletion" },
-    { "type": "non_fast_forward" },
-    { "type": "required_linear_history" },
+    {
+      "type": "deletion"
+    },
+    {
+      "type": "non_fast_forward"
+    },
+    {
+      "type": "required_linear_history"
+    },
     {
       "type": "pull_request",
       "parameters": {
@@ -24,7 +36,9 @@
         "require_last_push_approval": true,
         "required_review_thread_resolution": true,
         "automatic_copilot_code_review_enabled": false,
-        "allowed_merge_methods": ["squash"]
+        "allowed_merge_methods": [
+          "squash"
+        ]
       }
     },
     {
@@ -33,13 +47,27 @@
         "strict_required_status_checks_policy": true,
         "do_not_enforce_on_create": false,
         "required_status_checks": [
-          { "context": "pr-title" },
-          { "context": "lint" },
-          { "context": "unit" },
-          { "context": "integration" },
-          { "context": "coverage" },
-          { "context": "migrations" },
-          { "context": "build" }
+          {
+            "context": "pr-title"
+          },
+          {
+            "context": "lint"
+          },
+          {
+            "context": "unit"
+          },
+          {
+            "context": "integration"
+          },
+          {
+            "context": "coverage"
+          },
+          {
+            "context": "migrations"
+          },
+          {
+            "context": "build"
+          }
         ]
       }
     }
