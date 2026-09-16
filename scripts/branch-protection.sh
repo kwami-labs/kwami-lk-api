@@ -64,23 +64,55 @@ fi
 # literal for. Resolve it from the app itself; the id in the JSON is only the fallback.
 ACTIONS_APP_ID="$(gh api /apps/github-actions --jq .id 2>/dev/null || true)"
 
+# An Integration bypass actor is only legal if that app is installed on the owner organisation.
+# It is not enough for the app to exist: GitHub answers
+#
+#   422 Actor GitHub Actions integration must be part of the ruleset source or owner organization
+#
+# and the whole POST fails, which is a confusing way to learn that an org never installed it.
+# kwami-labs is such an org. So the installed app ids are resolved here and render() drops any
+# Integration actor that is not among them, rather than letting the API reject the payload.
+OWNER="${REPO%%/*}"
+INSTALLED_APP_IDS="$(gh api "orgs/$OWNER/installations" --jq '.installations[].app_id' 2>/dev/null | tr '\n' ',' || true)"
+
 # The two knobs a repository actually differs on. A solo repository with APPROVALS=1 and no second
 # maintainer is a deadlock — nobody can approve their own pull request — so it is settable rather
 # than baked into the JSON.
 render() {
   APPROVALS="$APPROVALS" CODEOWNER_REVIEW="$CODEOWNER_REVIEW" ACTIONS_APP_ID="$ACTIONS_APP_ID" \
+  INSTALLED_APP_IDS="$INSTALLED_APP_IDS" \
     python3 - "$1" <<'PY'
 import json, os, sys
+
 ruleset = json.load(open(sys.argv[1]))
+
 for rule in ruleset["rules"]:
     if rule["type"] == "pull_request":
         rule["parameters"]["required_approving_review_count"] = int(os.environ["APPROVALS"])
         rule["parameters"]["require_code_owner_review"] = os.environ["CODEOWNER_REVIEW"] == "1"
+
 app_id = os.environ.get("ACTIONS_APP_ID")
-if app_id:
-    for actor in ruleset.get("bypass_actors", []):
-        if actor.get("actor_type") == "Integration":
-            actor["actor_id"] = int(app_id)
+installed = {int(x) for x in os.environ.get("INSTALLED_APP_IDS", "").split(",") if x.strip()}
+
+kept = []
+for actor in ruleset.get("bypass_actors", []):
+    if actor.get("actor_type") != "Integration":
+        kept.append(actor)
+        continue
+    if app_id:
+        actor["actor_id"] = int(app_id)
+    # An empty install list means the lookup failed (a user-owned repository has no org
+    # installations endpoint); trust the JSON rather than silently stripping the actor.
+    if installed and actor["actor_id"] not in installed:
+        print(
+            f"  warn     dropping bypass actor: app {actor['actor_id']} is not installed on "
+            "this organisation, and GitHub rejects the whole ruleset if it is named",
+            file=sys.stderr,
+        )
+        continue
+    kept.append(actor)
+ruleset["bypass_actors"] = kept
+
 json.dump(ruleset, sys.stdout)
 PY
 }
@@ -130,6 +162,9 @@ if [[ "$DRY_RUN" != "1" ]]; then
 
   echo
   echo "main is protected: pull requests only, $APPROVALS approval(s), all required CI checks green."
-  echo "github-actions (app ${ACTIONS_APP_ID:-15368}) bypasses it, so cd.yml can push the release commit and tag."
+  echo "Repository admins bypass it, so cd.yml can push the release commit and tag — but only when"
+  echo "it pushes AS an admin. That is what the RELEASE_TOKEN secret is for: GITHUB_TOKEN acts as"
+  echo "github-actions[bot], which holds no repository role and is NOT covered by that bypass."
+  echo "See CONTRIBUTING.md, section Releases."
   [[ "$APPROVALS" == "0" ]] && echo "note: APPROVALS=0 — CI still gates every merge, but no human review is required."
 fi
