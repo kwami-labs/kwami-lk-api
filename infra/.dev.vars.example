@@ -1,0 +1,19 @@
+# Local secrets for `pnpm --dir infra dev` / `wrangler dev`.
+# Copy to infra/.dev.vars (gitignored) and fill real values.
+# Production secrets: `wrangler secret put NAME --env production`
+
+LIVEKIT_URL=wss://your-project.livekit.cloud
+LIVEKIT_API_KEY=
+LIVEKIT_API_SECRET=
+
+# Optional — only needed for the surfaces you exercise locally
+# SUPABASE_URL=
+# SUPABASE_SECRET_KEY=
+# KWAMI_API_KEY=
+# STRIPE_SECRET_KEY=
+# STRIPE_WEBHOOK_SECRET=
+# ZEP_API_KEY=
+# TWILIO_ACCOUNT_SID=
+# TWILIO_AUTH_TOKEN=
+# SENDGRID_API_KEY=
+# APP_PUBLIC_URL=http://localhost:8787
