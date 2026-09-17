@@ -222,6 +222,68 @@ deploy: ## fly deploy (CD normally does this)
 	fly deploy --remote-only
 
 # =============================================================================
+# Cloudflare Workers (infra/)
+# =============================================================================
+#
+# The FastAPI process runs as a Cloudflare Container; the Worker in infra/src
+# is the public proxy. Terraform in infra/terraform attaches a custom domain
+# after the first wrangler deploy. Secrets: ./infra/scripts/put-secrets.sh
+
+.PHONY: cf-install
+cf-install: ## Install the Worker toolchain in infra/
+	pnpm --dir infra install --config.confirmModulesPurge=false --no-frozen-lockfile
+
+.PHONY: cf-dev
+cf-dev: ## wrangler dev (needs Docker + infra/.dev.vars)
+	pnpm --dir infra dev
+
+.PHONY: cf-types
+cf-types: ## Regenerate infra/worker-configuration.d.ts from wrangler.jsonc
+	pnpm --dir infra types
+
+.PHONY: cf-deploy
+cf-deploy: ## wrangler deploy (top-level / default Worker)
+	pnpm --dir infra deploy
+
+.PHONY: cf-deploy-development
+cf-deploy-development: ## wrangler deploy --env development
+	pnpm --dir infra deploy:development
+
+.PHONY: cf-deploy-staging
+cf-deploy-staging: ## wrangler deploy --env staging
+	pnpm --dir infra deploy:staging
+
+.PHONY: cf-deploy-production
+cf-deploy-production: ## wrangler deploy --env production
+	pnpm --dir infra deploy:production
+
+.PHONY: cf-secrets
+cf-secrets: ## Interactive wrangler secret put (ENV=development|staging|production)
+	./infra/scripts/put-secrets.sh $(ENV)
+
+.PHONY: tf-init
+tf-init: ## terraform init in infra/terraform
+	terraform -chdir=infra/terraform init
+
+.PHONY: tf-fmt
+tf-fmt: ## terraform fmt in infra/terraform
+	terraform -chdir=infra/terraform fmt -recursive
+
+.PHONY: tf-validate
+tf-validate: ## terraform validate (run tf-init first)
+	terraform -chdir=infra/terraform validate
+
+.PHONY: tf-plan
+tf-plan: ## terraform plan (TFVARS=environments/<tier>.tfvars)
+	@[ -n "$(TFVARS)" ] || { echo "usage: TFVARS=environments/development.tfvars make tf-plan" >&2; exit 1; }
+	terraform -chdir=infra/terraform plan -var-file="$(TFVARS)"
+
+.PHONY: tf-apply
+tf-apply: ## terraform apply (TFVARS=environments/<tier>.tfvars)
+	@[ -n "$(TFVARS)" ] || { echo "usage: TFVARS=environments/development.tfvars make tf-apply" >&2; exit 1; }
+	terraform -chdir=infra/terraform apply -var-file="$(TFVARS)"
+
+# =============================================================================
 # Cleanup
 # =============================================================================
 

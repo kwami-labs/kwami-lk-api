@@ -1,0 +1,10 @@
+account_id   = "your-cloudflare-account-id"
+environment  = "development"
+worker_name  = "kwami-lk-api-dev"
+zone_id      = "your-zone-id"
+zone_name    = "kwami.io"
+api_hostname = "api-dev.kwami.io"
+
+# Keep false until the Worker has been deployed at least once.
+enable_custom_domain = false
+enable_zone_tls      = false

@@ -1,0 +1,23 @@
+{
+  "name": "kwami-lk-api-infra",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "deploy:development": "wrangler deploy --env development",
+    "deploy:staging": "wrangler deploy --env staging",
+    "deploy:production": "wrangler deploy --env production",
+    "types": "wrangler types",
+    "secret:list": "wrangler secret list",
+    "tail": "wrangler tail"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "^0.3.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "typescript": "^5.9.2",
+    "wrangler": "4.132.0"
+  }
+}
