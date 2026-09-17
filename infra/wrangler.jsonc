@@ -25,13 +25,6 @@
     "ENABLE_DOCS": "false",
     "CONTAINER_INSTANCES": "2"
   },
-  "secrets": {
-    "required": [
-      "LIVEKIT_URL",
-      "LIVEKIT_API_KEY",
-      "LIVEKIT_API_SECRET"
-    ]
-  },
   "containers": [
     {
       "class_name": "KwamiApiContainer",
@@ -74,13 +67,6 @@
         "ENABLE_DOCS": "true",
         "CONTAINER_INSTANCES": "1"
       },
-      "secrets": {
-        "required": [
-          "LIVEKIT_URL",
-          "LIVEKIT_API_KEY",
-          "LIVEKIT_API_SECRET"
-        ]
-      },
       "containers": [
         {
           "class_name": "KwamiApiContainer",
@@ -108,13 +94,6 @@
         "ENABLE_DOCS": "false",
         "CONTAINER_INSTANCES": "2"
       },
-      "secrets": {
-        "required": [
-          "LIVEKIT_URL",
-          "LIVEKIT_API_KEY",
-          "LIVEKIT_API_SECRET"
-        ]
-      },
       "containers": [
         {
           "class_name": "KwamiApiContainer",
@@ -141,16 +120,6 @@
         "DEBUG": "false",
         "ENABLE_DOCS": "false",
         "CONTAINER_INSTANCES": "3"
-      },
-      "secrets": {
-        "required": [
-          "LIVEKIT_URL",
-          "LIVEKIT_API_KEY",
-          "LIVEKIT_API_SECRET",
-          "SUPABASE_URL",
-          "SUPABASE_SECRET_KEY",
-          "KWAMI_API_KEY"
-        ]
       },
       "containers": [
         {

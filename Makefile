@@ -231,7 +231,7 @@ deploy: ## fly deploy (CD normally does this)
 
 .PHONY: cf-install
 cf-install: ## Install the Worker toolchain in infra/
-	pnpm --dir infra install
+	pnpm --dir infra install --config.confirmModulesPurge=false --no-frozen-lockfile
 
 .PHONY: cf-dev
 cf-dev: ## wrangler dev (needs Docker + infra/.dev.vars)
