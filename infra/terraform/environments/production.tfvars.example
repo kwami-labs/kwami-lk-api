@@ -1,0 +1,10 @@
+account_id   = "your-cloudflare-account-id"
+environment  = "production"
+worker_name  = "kwami-lk-api"
+zone_id      = "your-zone-id"
+zone_name    = "kwami.io"
+# Do not point this at the live Fly hostname until you are ready to cut over.
+api_hostname = "api.kwami.io"
+
+enable_custom_domain = false
+enable_zone_tls      = false

@@ -1,0 +1,134 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // Worker that terminates TLS and proxies into the FastAPI container.
+  // The Python app cannot run on the Workers isolate (native wheels,
+  // uvicorn, livekit-agents). Cloudflare Containers run the existing
+  // Dockerfile; this Worker is the public entrypoint.
+  //
+  // Terraform (infra/terraform) owns zone/DNS/custom-domain attachment.
+  // Do not add `routes` / `custom_domain` here — that would fight Terraform.
+  "name": "kwami-lk-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-17",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": true,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "vars": {
+    "APP_ENV": "development",
+    "API_HOST": "0.0.0.0",
+    "API_PORT": "8080",
+    "DEBUG": "false",
+    "ENABLE_DOCS": "false",
+    "CONTAINER_INSTANCES": "2"
+  },
+  "containers": [
+    {
+      "class_name": "KwamiApiContainer",
+      // Build context is the repo root (parent of this config).
+      "image": "../Dockerfile",
+      "instance_type": "basic",
+      "max_instances": 2
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "KWAMI_API",
+        "class_name": "KwamiApiContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["KwamiApiContainer"]
+    }
+  ],
+  "env": {
+    "development": {
+      "name": "kwami-lk-api-dev",
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "KWAMI_API",
+            "class_name": "KwamiApiContainer"
+          }
+        ]
+      },
+      "vars": {
+        "APP_ENV": "development",
+        "API_HOST": "0.0.0.0",
+        "API_PORT": "8080",
+        "DEBUG": "false",
+        "ENABLE_DOCS": "true",
+        "CONTAINER_INSTANCES": "1"
+      },
+      "containers": [
+        {
+          "class_name": "KwamiApiContainer",
+          "image": "../Dockerfile",
+          "instance_type": "basic",
+          "max_instances": 1
+        }
+      ]
+    },
+    "staging": {
+      "name": "kwami-lk-api-stg",
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "KWAMI_API",
+            "class_name": "KwamiApiContainer"
+          }
+        ]
+      },
+      "vars": {
+        "APP_ENV": "staging",
+        "API_HOST": "0.0.0.0",
+        "API_PORT": "8080",
+        "DEBUG": "false",
+        "ENABLE_DOCS": "false",
+        "CONTAINER_INSTANCES": "2"
+      },
+      "containers": [
+        {
+          "class_name": "KwamiApiContainer",
+          "image": "../Dockerfile",
+          "instance_type": "basic",
+          "max_instances": 2
+        }
+      ]
+    },
+    "production": {
+      "name": "kwami-lk-api",
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "KWAMI_API",
+            "class_name": "KwamiApiContainer"
+          }
+        ]
+      },
+      "vars": {
+        "APP_ENV": "production",
+        "API_HOST": "0.0.0.0",
+        "API_PORT": "8080",
+        "DEBUG": "false",
+        "ENABLE_DOCS": "false",
+        "CONTAINER_INSTANCES": "3"
+      },
+      "containers": [
+        {
+          "class_name": "KwamiApiContainer",
+          "image": "../Dockerfile",
+          "instance_type": "standard-1",
+          "max_instances": 3
+        }
+      ]
+    }
+  }
+}

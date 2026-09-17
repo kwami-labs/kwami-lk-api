@@ -1,0 +1,9 @@
+account_id   = "your-cloudflare-account-id"
+environment  = "staging"
+worker_name  = "kwami-lk-api-stg"
+zone_id      = "your-zone-id"
+zone_name    = "kwami.io"
+api_hostname = "api-stg.kwami.io"
+
+enable_custom_domain = false
+enable_zone_tls      = false
