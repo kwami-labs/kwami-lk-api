@@ -216,3 +216,9 @@ coverage.unit
 coverage.integration
 coverage.json
 htmlcov/
+
+# Cloudflare Workers / Terraform (see also infra/.gitignore)
+.wrangler/
+.dev.vars
+*.tfstate
+*.tfstate.*

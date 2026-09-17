@@ -1,0 +1,109 @@
+name: Deploy to Cloudflare Workers
+description: >-
+  Build the FastAPI image and deploy the Worker + Container with Wrangler. Skips green when the
+  tier is entirely unconfigured; fails when it is only half-configured.
+
+# Same two rules as the Fly action:
+#   1. A tier with a token but no account id is an error, not a skip.
+#   2. Only a tier with neither token nor account id is skipped, and only when skip-if-unconfigured.
+
+inputs:
+  wrangler-env:
+    description: Wrangler environment name (development, staging, production). Empty uses the top-level config.
+    default: ''
+  cloudflare-api-token:
+    description: Cloudflare API token with Workers Scripts Write and Containers Write.
+    required: true
+  cloudflare-account-id:
+    description: Cloudflare account ID. Required whenever a token is present.
+    required: true
+  skip-if-unconfigured:
+    description: >-
+      Set to "true" so a missing token+account means "this tier does not exist yet" and the
+      job stays green. A token without an account is still a failure.
+    default: 'true'
+  working-directory:
+    description: Directory that contains wrangler.jsonc.
+    default: infra
+
+outputs:
+  deployed:
+    description: '"true" when a deploy actually happened.'
+    value: ${{ steps.resolve.outputs.deploy }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve whether this tier deploys
+      id: resolve
+      shell: bash
+      env:
+        TOKEN: ${{ inputs.cloudflare-api-token }}
+        ACCOUNT: ${{ inputs.cloudflare-account-id }}
+        SKIP: ${{ inputs.skip-if-unconfigured }}
+        WRANGLER_ENV: ${{ inputs.wrangler-env }}
+      run: |
+        set -euo pipefail
+
+        if [ -z "${TOKEN:-}" ] && [ -z "${ACCOUNT:-}" ]; then
+          if [ "$SKIP" = "true" ]; then
+            echo "::warning::No Cloudflare credentials on this Environment — nothing was deployed."
+            echo '- **Deploy skipped**: this tier has no Cloudflare token yet. Set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` to enable it.' >> "$GITHUB_STEP_SUMMARY"
+            echo 'deploy=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::error::CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are not set."
+          exit 1
+        fi
+
+        if [ -z "${TOKEN:-}" ] || [ -z "${ACCOUNT:-}" ]; then
+          echo "::error::Cloudflare deploy is half-configured: both CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are required."
+          exit 1
+        fi
+
+        echo 'deploy=true' >> "$GITHUB_OUTPUT"
+        echo "deploying Worker env: ${WRANGLER_ENV:-'(top-level)'}"
+
+    - uses: pnpm/action-setup@v4
+      if: steps.resolve.outputs.deploy == 'true'
+      with:
+        version: 10
+
+    - uses: actions/setup-node@v7
+      if: steps.resolve.outputs.deploy == 'true'
+      with:
+        node-version: 24
+        cache: pnpm
+        cache-dependency-path: ${{ inputs.working-directory }}/pnpm-lock.yaml
+
+    - name: Install Worker toolchain
+      if: steps.resolve.outputs.deploy == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: pnpm install --frozen-lockfile
+
+    - name: wrangler deploy
+      if: steps.resolve.outputs.deploy == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ inputs.cloudflare-account-id }}
+        WRANGLER_ENV: ${{ inputs.wrangler-env }}
+      run: |
+        set -euo pipefail
+        args=(deploy)
+        [ -n "${WRANGLER_ENV:-}" ] && args+=(--env "$WRANGLER_ENV")
+        pnpm exec wrangler "${args[@]}"
+
+    - name: Summary
+      if: steps.resolve.outputs.deploy == 'true'
+      shell: bash
+      env:
+        WRANGLER_ENV: ${{ inputs.wrangler-env }}
+      run: |
+        {
+          echo '### Deployed'
+          echo ''
+          echo "Cloudflare Workers \`${WRANGLER_ENV:-top-level}\`, from \`${GITHUB_SHA}\`"
+        } >> "$GITHUB_STEP_SUMMARY"
