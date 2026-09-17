@@ -293,6 +293,34 @@ jobs:
           app: ${{ vars.FLY_APP }}
           fly-api-token: ${{ secrets.FLY_API_TOKEN }}
 
+  # Cloudflare production. Skips — green — until CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID
+  # are set on the production Environment. Fly stays the live origin until the custom domain
+  # is attached in infra/terraform (enable_custom_domain).
+  deploy-production-cloudflare:
+    name: deploy · production · cloudflare
+    needs: publish
+    if: >-
+      always()
+      && github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.head_branch == 'main'
+      && (needs.publish.result == 'success' || needs.publish.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: production
+    concurrency:
+      group: deploy-production-cloudflare
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: ./.github/actions/cloudflare-deploy
+        with:
+          wrangler-env: production
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          cloudflare-account-id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+
   # Development. There is one Fly app today, so this job skips — green — until `FLY_APP` is set
   # as a variable on the `development` Environment. It is FLY_APP rather than the token that
   # enables the tier because the token is a repository secret already: without a second app name
@@ -321,3 +349,23 @@ jobs:
           # Not production: an unset FLY_APP is a tier that does not exist yet, and an FLY_APP
           # equal to fly.toml's is a misconfiguration the action refuses.
           require-distinct-app: 'true'
+
+  deploy-development-cloudflare:
+    name: deploy · development · cloudflare
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: development
+    concurrency:
+      group: deploy-development-cloudflare
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: ./.github/actions/cloudflare-deploy
+        with:
+          wrangler-env: development
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          cloudflare-account-id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
