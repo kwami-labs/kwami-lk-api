@@ -1,0 +1,93 @@
+"""The module-level helpers in `src.api.routes.memory`.
+
+`thread_belongs_to` and `iter_all_threads` are covered in
+tests/unit/api/test_memory_tenancy.py; this covers the rest.
+"""
+
+from __future__ import annotations
+
+import pytest
+from fastapi import HTTPException
+
+from src.api.routes import memory as mem_mod
+from src.api.routes.memory import (
+    DEFAULT_EDGE_TYPES,
+    DEFAULT_ENTITY_TYPES,
+    _build_ontology_models,
+    get_zep_client,
+    verify_user_access,
+)
+from src.core.security import AuthUser
+
+
+class TestGetZepClient:
+    @pytest.mark.anyio
+    async def test_an_unconfigured_key_is_a_503(self, monkeypatch):
+        monkeypatch.setattr(mem_mod.settings, "zep_api_key", None, raising=False)
+        with pytest.raises(HTTPException) as exc:
+            await get_zep_client()
+        assert exc.value.status_code == 503
+        assert "ZEP_API_KEY" in exc.value.detail
+
+    @pytest.mark.anyio
+    async def test_a_configured_key_builds_a_client(self, monkeypatch):
+        built: list[str] = []
+        monkeypatch.setattr(mem_mod.settings, "zep_api_key", "z-key", raising=False)
+        monkeypatch.setattr(mem_mod, "AsyncZep", lambda api_key: built.append(api_key) or "CLIENT")
+        assert await get_zep_client() == "CLIENT"
+        assert built == ["z-key"]
+
+
+class TestVerifyUserAccess:
+    def test_your_own_namespace_is_allowed(self):
+        assert verify_user_access(AuthUser({"sub": "u1"}), "u1") is None
+
+    def test_a_per_kwami_namespace_is_allowed(self):
+        assert verify_user_access(AuthUser({"sub": "u1"}), "kwami_u1_abc") is None
+
+    def test_another_users_namespace_is_a_403(self):
+        with pytest.raises(HTTPException) as exc:
+            verify_user_access(AuthUser({"sub": "u1"}), "u2")
+        assert exc.value.status_code == 403
+        assert "only access your own memory" in exc.value.detail
+
+    def test_a_substring_namespace_is_a_403(self):
+        """The anchored rules in `check_user_access` are what this leans on."""
+        with pytest.raises(HTTPException):
+            verify_user_access(AuthUser({"sub": "u1"}), "kwami_u12_abc")
+
+
+class TestBuildOntologyModels:
+    def test_the_shipped_defaults_build(self):
+        entities, edges = _build_ontology_models(DEFAULT_ENTITY_TYPES, DEFAULT_EDGE_TYPES)
+        assert set(entities) == {e["name"] for e in DEFAULT_ENTITY_TYPES}
+        assert set(edges) == {e["name"] for e in DEFAULT_EDGE_TYPES}
+
+    def test_an_entity_becomes_a_model_class_carrying_its_description(self):
+        entities, _ = _build_ontology_models(
+            [{"name": "Preference", "description": "What the user likes."}], []
+        )
+        model = entities["Preference"]
+        assert model.__name__ == "Preference"
+        assert model.__doc__ == "What the user likes."
+
+    def test_an_edge_carries_a_source_target_pair(self):
+        _, edges = _build_ontology_models([], [{"name": "KNOWS", "description": "d"}])
+        model_cls, targets = edges["KNOWS"]
+        assert model_cls.__name__ == "KNOWS"
+        assert targets[0].source == "User"
+
+    def test_a_missing_description_falls_back_to_the_name(self):
+        entities, edges = _build_ontology_models([{"name": "Thing"}], [{"name": "LINKS"}])
+        assert entities["Thing"].__doc__ == "Thing"
+        assert edges["LINKS"][0].__doc__ == "LINKS"
+
+    def test_empty_input_yields_empty_models(self):
+        assert _build_ontology_models([], []) == ({}, {})
+
+    def test_the_default_sets_are_non_trivial(self):
+        """A truncated default ontology would quietly degrade every new user."""
+        assert len(DEFAULT_ENTITY_TYPES) >= 10
+        assert len(DEFAULT_EDGE_TYPES) >= 10
+        assert all("description" in e for e in DEFAULT_ENTITY_TYPES)
+        assert all("description" in e for e in DEFAULT_EDGE_TYPES)

@@ -149,7 +149,7 @@ async def purchase_kwami_phone_number(
     if purchase.get("sid"):
         try:
             trunk_phone_sid = attach_phone_number_to_sip_trunk(str(purchase["sid"]))
-        except Exception as exc:  # pragma: no cover - provider failure
+        except Exception as exc:
             logger.warning("Failed to attach number to Twilio SIP trunk: %s", exc)
         try:
             shared_infra_sync = await sync_shared_livekit_trunks(phone_number)
@@ -161,7 +161,7 @@ async def purchase_kwami_phone_number(
             )
             if not voice_outbound_ready and settings.livekit_sip_outbound_trunk_id:
                 voice_status = "routing_pending"
-        except Exception as exc:  # pragma: no cover - provider failure
+        except Exception as exc:
             voice_status = "routing_pending"
             voice_outbound_ready = False
             shared_infra_sync = {"error": str(exc), "strategy": "shared_trunks"}
