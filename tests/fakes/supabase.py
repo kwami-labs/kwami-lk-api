@@ -62,6 +62,7 @@ _TABLES_WITH_UUID_PK = frozenset(
         "payment_events",
         "usage_reports",
         "livekit_sessions",
+        "browser_contexts",
     }
 )
 
@@ -78,6 +79,7 @@ _TABLES_WITH_UPDATED_AT = frozenset(
         "kwami_wallets",
         "wallet_funding_intents",
         "wallet_balances_cache",
+        "browser_contexts",
     }
 )
 
@@ -99,6 +101,7 @@ DEFAULT_UNIQUE_INDEXES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("usage_reports", ("report_key",)),
     ("credit_transactions", ("idempotency_key",)),
     ("livekit_sessions", ("room_name",)),
+    ("browser_contexts", ("owner_key", "vendor")),
 )
 
 
