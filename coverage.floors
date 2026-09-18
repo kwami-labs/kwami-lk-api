@@ -11,114 +11,123 @@
 # (`branch = true` in pyproject.toml), measured on the unit and integration profiles merged.
 # `__init__.py` files are omitted from the report in pyproject.toml and so are absent here.
 #
-# WHAT THESE NUMBERS ARE. They were recorded from the suite as it stood when this gate was added
-# (38.5% overall), rounded down to the integer below. They are a ratchet, not a target: the
-# floor says "this module may not get worse", and the gate prints every module that now measures
-# above its floor so the next pull request can raise it. That is the opposite of the sibling Go
-# services, where every floor is 100 -- this tree is not there, and a file full of aspirational
-# hundreds would fail every build and teach everyone to bypass it.
+# WHAT THESE NUMBERS ARE. Every module is at 100, and the suite measures 100% -- statements
+# and branches, on the unit and integration profiles merged. These are no longer a ratchet
+# climbing towards something; they are the line, and the same one the sibling Go services hold.
 #
-# Raising a floor needs no discussion. LOWERING one is a reviewable change: say why in the pull
-# request, because the only honest reasons are that a module was split or that a test was
-# deleted on purpose.
+# The earlier version of this file recorded the suite as it stood when the gate was added
+# (38.5% overall) and said a file full of aspirational hundreds "would fail every build and
+# teach everyone to bypass it". That was true of aspirations. These are measurements: the
+# hundreds are what the suite does today, so the build stays green without anyone bypassing
+# anything.
+#
+# There are no `# pragma: no cover` comments anywhere in src/. The only exclusions are the
+# structural ones in pyproject.toml's `exclude_also` (TYPE_CHECKING blocks, `__main__` guards,
+# abstract methods, bare `...` bodies, and `def run():` -- the uvicorn entry point, which
+# cannot be called without starting a server).
+#
+# Raising a floor needs no discussion; there is nowhere left to raise one to. LOWERING one is a
+# reviewable change: say why in the pull request, because the only honest reasons are that a
+# module was split or that a test was deleted on purpose. A new module starts at 100 like the
+# rest -- write the tests with it, not after it.
 
 # ---- Entry point and core ------------------------------------------
 
 # Settings parsing and validation. Boot fails closed on a missing required variable, which is
 # the behaviour worth keeping covered: the alternative is a process that starts and then 500s.
-src/core/config.py                           83
+src/core/config.py                           100
 
 # The domain-error layer every route maps through. Each error class has to keep producing the
 # status code the app relies on; a silent remap here turns a 402 into a 500 for every caller.
-src/core/errors.py                           92
+src/core/errors.py                           100
 
 # Supabase JWT verification. The uncovered arms are the ones that reject -- expired, wrong
 # audience, bad signature. They are the whole point of the module: raise the floor here first.
-src/core/security.py                         81
+src/core/security.py                         100
 
 # The app factory: route mounting, CORS, the lifespan log. The uncovered arm is `run()`,
 # which is the uvicorn entry point and is excluded from the report by `exclude_also` rather
 # than tested.
-src/main.py                                  77
+src/main.py                                  100
 
 # ---- HTTP surface --------------------------------------------------
 
 # Ownership checks. Every route that takes a resource id leans on this to decide whether the
 # caller may see it.
-src/api/authz.py                             85
+src/api/authz.py                             100
 
 # Request-scoped dependencies. Low because the client constructors are exercised through the
 # routes rather than directly.
-src/api/deps.py                              46
-src/api/routes/admin_reconciliation.py       65
-src/api/routes/calendar.py                   61
-src/api/routes/channels.py                   22
-src/api/routes/contacts.py                   50
+src/api/deps.py                              100
+src/api/routes/admin_reconciliation.py       100
+src/api/routes/calendar.py                   100
+src/api/routes/channels.py                   100
+src/api/routes/contacts.py                   100
 
 # Balance, usage reports and the Stripe checkout hand-off. Idempotency-Key handling, the unpaid
 # response and the replay path are covered; the remaining arms are the admin-facing reads.
-src/api/routes/credits.py                    85
-src/api/routes/email.py                      45
+src/api/routes/credits.py                    100
+src/api/routes/email.py                      100
 src/api/routes/health.py                     100
-src/api/routes/internal.py                   49
-src/api/routes/languages.py                  38
+src/api/routes/internal.py                   100
+src/api/routes/languages.py                  100
 
 # By far the largest module in the tree (1162 statements) and the lowest-covered surface of any
 # size. It is a thin-ish layer over Zep, so most of it is reachable with a faked transport; the
 # floor is where it is because nobody has written those tests yet, not because they are hard.
-src/api/routes/memory.py                     15
-src/api/routes/models.py                     53
+src/api/routes/memory.py                     100
+src/api/routes/models.py                     100
 
 # LiveKit token issuance -- the endpoint the app cannot work without, and the one that decides
 # which room a participant may join.
-src/api/routes/token.py                      86
-src/api/routes/voices.py                     47
-src/api/routes/wallet.py                     64
+src/api/routes/token.py                      100
+src/api/routes/voices.py                     100
+src/api/routes/wallet.py                     100
 
 # Stripe and Twilio webhooks. The signature checks, the replay guard and the refund clawback are
 # covered by tests/unit/api/; the long tail is per-event handling. This is the lowest floor on a
 # surface that takes unauthenticated input -- treat it as the next one to move.
-src/api/routes/webhooks.py                   29
+src/api/routes/webhooks.py                   100
 
 # ---- Services ------------------------------------------------------
 
 # Reconciliation against Stripe. It reads more than it writes, which is why a floor this low is
 # survivable, but a wrong answer here is a wrong answer about money.
-src/services/admin_reconciliation.py         38
+src/services/admin_reconciliation.py         100
 # Remembers which persisted cloud-browser profile belongs to which user. Small, but losing a row
 # is not a cache miss: the user is signed out of every site they had signed in to, and the old
 # vendor-side profile is orphaned and still billed. Covered at the service and the route.
-src/services/browser_sessions.py             95
+src/services/browser_sessions.py             100
 
-src/services/calendar_service.py             11
-src/services/channels.py                     24
+src/services/calendar_service.py             100
+src/services/channels.py                     100
 
 # Where money is decided: what a session costs, what the user can pay, and what happens when they
 # cannot. `deduct_credits` is safe because of SQL, not because of this file -- see
 # tests/integration/db/ -- but the settlement arithmetic above it is Python and is covered here.
-src/services/credits.py                      70
-src/services/custody_service.py              52
-src/services/email_classifier.py             23
-src/services/email_service.py                15
+src/services/credits.py                      100
+src/services/custody_service.py              100
+src/services/email_classifier.py             100
+src/services/email_service.py                100
 
 # The claim-once wrapper every webhook and usage report goes through. A regression here is a
 # double charge or a double credit.
-src/services/idempotency.py                  67
-src/services/kwamis.py                       54
-src/services/languages.py                    21
-src/services/livekit.py                      94
-src/services/models.py                       32
-src/services/pricing.py                      48
-src/services/sendgrid_service.py             19
-src/services/sessions.py                     75
+src/services/idempotency.py                  100
+src/services/kwamis.py                       100
+src/services/languages.py                    100
+src/services/livekit.py                      100
+src/services/models.py                       100
+src/services/pricing.py                      100
+src/services/sendgrid_service.py             100
+src/services/sessions.py                     100
 
 # Checkout sessions, payment intents and refunds. The purchase path stores the payment intent so
 # a later refund can match it; that is the arm worth keeping covered.
-src/services/stripe_service.py               55
-src/services/telephony.py                    15
-src/services/twilio_service.py               26
-src/services/voices.py                       20
+src/services/stripe_service.py               100
+src/services/telephony.py                    100
+src/services/twilio_service.py               100
+src/services/voices.py                       100
 
 # Deposits, USD quotes and settlement. Funding is idempotent and recoverable after a failed
 # settle -- the tests that prove it are in tests/unit/services/.
-src/services/wallet_service.py               41
+src/services/wallet_service.py               100
