@@ -52,7 +52,7 @@ make docker-build
 make docker-up
 ```
 
-API listens on `API_HOST:API_PORT` (default `0.0.0.0:8080`). OpenAPI docs at `/docs` and `/redoc` when `ENABLE_DOCS=true`.
+API listens on `API_HOST:API_PORT` (default `0.0.0.0:8080`). OpenAPI docs at `/docs` and `/redoc`, and the schema at `/openapi.json`, when `ENABLE_DOCS=true`.
 
 ## API overview
 
@@ -89,7 +89,7 @@ The **token** endpoint expects a POST body with optional `roomName`, `participan
 | `CORS_ORIGINS` | No | Comma-separated origins (default `*` in dev) |
 | `API_HOST` / `API_PORT` | No | Bind address and port (default `0.0.0.0:8080`) |
 | `APP_ENV` | No | `development` \| `staging` \| `production` |
-| `ENABLE_DOCS` | No | Set to `true` to expose `/docs` and `/redoc` in production |
+| `ENABLE_DOCS` | No | Set to `true` to expose `/docs`, `/redoc` and `/openapi.json` in production |
 
 See `.env.sample` for a full list and comments.
 
@@ -112,6 +112,9 @@ See `.env.sample` for a full list and comments.
 | `make hooks` | Install the pre-push hook that refuses a direct push to `main` |
 | `make docker-build` | Build the release image CD publishes |
 | `make docker-up` / `make docker-down` | Run or stop that container |
+| `make cf-dev` | `wrangler dev` — the Worker and Container locally |
+| `make cf-deploy-production` | `wrangler deploy --env production` (CD normally does this) |
+| `make deploy` | `fly deploy --remote-only` (CD normally does this) |
 
 ## Project structure
 
@@ -126,6 +129,7 @@ src/
 └── services/            # LiveKit, credits, channels, wallets, …
 config/                  # LiveKit plugin YAML (inference, voices, languages)
 migrations/              # numbered SQL, applied by scripts/migrate.py
+infra/                   # Cloudflare Worker + Container, Terraform for DNS
 docs/                    # architecture, API, security, billing, …
 tests/
 ```
@@ -134,14 +138,21 @@ tests/
 
 Deploys are automatic. A green `ci` run on `main` triggers [`cd.yml`](.github/workflows/cd.yml),
 which cuts the version and the changelog with semantic-release, publishes the image to GHCR, and
-deploys to Fly.io — in that order, all from the commit CI tested. Nothing is released or shipped
-from a commit whose tests did not pass, and no version is ever bumped in a pull request.
+deploys to Fly.io and Cloudflare — in that order, all from the commit CI tested. Nothing is
+released or shipped from a commit whose tests did not pass, and no version is ever bumped in a
+pull request.
 
-- **Fly.io** — `fly.toml` names the production app. Secrets live in `fly secrets`, not the repo;
-  `FLY_API_TOKEN` is the one GitHub needs. `make deploy` is the manual escape hatch.
+- **Fly.io** — the live origin. `fly.toml` names the production app. Secrets live in
+  `fly secrets`, not the repo; `FLY_API_TOKEN` is the one GitHub needs. `make deploy` is the
+  manual escape hatch.
+- **Cloudflare** — the same image as a Container behind a Worker; [`infra/`](infra) holds
+  `wrangler.jsonc`, the Worker, and Terraform for DNS. Deployed on every green `main` run, dark
+  until a custom domain is attached. Needs `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`;
+  without both, the job skips green.
 - **GHCR** — `ghcr.io/kwami-labs/kwami-lk-api`, tagged with the version, the minor, `main` and the
   full commit SHA.
-- **Docker** — `Dockerfile` builds the same image locally; set env via `--env-file`.
+- **Docker** — `Dockerfile` builds the same image locally; set env via `--env-file`. Fly, GHCR and
+  the Cloudflare Container all build this one file.
 
 [docs/deployment.md](docs/deployment.md) is the pipeline in full. [CONTRIBUTING.md](CONTRIBUTING.md)
 has the branch model, the release rules and what each CI check means. [SECURITY.md](SECURITY.md) is
