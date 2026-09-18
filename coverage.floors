@@ -39,7 +39,7 @@ src/core/security.py                         81
 # The app factory: route mounting, CORS, the lifespan log. The uncovered arm is `run()`,
 # which is the uvicorn entry point and is excluded from the report by `exclude_also` rather
 # than tested.
-src/main.py                                  73
+src/main.py                                  77
 
 # ---- HTTP surface --------------------------------------------------
 
@@ -60,7 +60,7 @@ src/api/routes/contacts.py                   50
 src/api/routes/credits.py                    85
 src/api/routes/email.py                      45
 src/api/routes/health.py                     100
-src/api/routes/internal.py                   32
+src/api/routes/internal.py                   49
 src/api/routes/languages.py                  38
 
 # By far the largest module in the tree (1162 statements) and the lowest-covered surface of any
@@ -85,6 +85,11 @@ src/api/routes/webhooks.py                   29
 # Reconciliation against Stripe. It reads more than it writes, which is why a floor this low is
 # survivable, but a wrong answer here is a wrong answer about money.
 src/services/admin_reconciliation.py         38
+# Remembers which persisted cloud-browser profile belongs to which user. Small, but losing a row
+# is not a cache miss: the user is signed out of every site they had signed in to, and the old
+# vendor-side profile is orphaned and still billed. Covered at the service and the route.
+src/services/browser_sessions.py             95
+
 src/services/calendar_service.py             11
 src/services/channels.py                     24
 
