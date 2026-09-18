@@ -8,7 +8,7 @@ Provides endpoints for:
 """
 
 import logging
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal, Union, get_args, get_origin
 
@@ -259,7 +259,7 @@ def _get_realtime_models() -> dict[str, Any]:
 # =============================================================================
 
 
-class ModelTypeEnum(str, Enum):
+class ModelTypeEnum(StrEnum):
     llm = "llm"
     stt = "stt"
     tts = "tts"
