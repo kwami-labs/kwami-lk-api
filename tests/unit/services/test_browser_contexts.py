@@ -33,21 +33,21 @@ TELEPHONY_IDENTITY = "sip_+14155552671"
 class FakeQuery:
     """Records the query the service built, and replays a canned result."""
 
-    def __init__(self, table: "FakeTable", op: str) -> None:
+    def __init__(self, table: FakeTable, op: str) -> None:
         self.table = table
         self.op = op
         self.filters: dict[str, Any] = {}
         self.payload: Any = None
         self.on_conflict: str | None = None
 
-    def select(self, *_columns: str) -> "FakeQuery":
+    def select(self, *_columns: str) -> FakeQuery:
         return self
 
-    def eq(self, column: str, value: Any) -> "FakeQuery":
+    def eq(self, column: str, value: Any) -> FakeQuery:
         self.filters[column] = value
         return self
 
-    def limit(self, _n: int) -> "FakeQuery":
+    def limit(self, _n: int) -> FakeQuery:
         return self
 
     def execute(self) -> Any:

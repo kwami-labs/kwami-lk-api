@@ -134,15 +134,9 @@ def save_browser_context(owner_key: str, vendor: str, context_id: str) -> dict[s
         payload["user_id"] = user_id
 
     sb = get_supabase_admin()
-    result = (
-        sb.table(TABLE)
-        .upsert(payload, on_conflict="owner_key,vendor")
-        .execute()
-    )
+    result = sb.table(TABLE).upsert(payload, on_conflict="owner_key,vendor").execute()
     row = _single(result) or payload
-    logger.info(
-        "Saved %s browser context for owner %s...", normalized_vendor, owner[:8]
-    )
+    logger.info("Saved %s browser context for owner %s...", normalized_vendor, owner[:8])
     return row
 
 
