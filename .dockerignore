@@ -43,3 +43,6 @@ __pycache__
 *.tmp
 .DS_Store
 Thumbs.db
+
+# Worker toolchain: node_modules and the pnpm store have no business in the Python image.
+infra
