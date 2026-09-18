@@ -53,13 +53,26 @@ async def lifespan(app: FastAPI):
     logger.info("👋 Shutting down...")
 
 
+def docs_urls(show_docs: bool) -> dict[str, str | None]:
+    """The two UIs and the schema they fetch are one decision, not three.
+
+    Gating only `docs_url` and `redoc_url` left `/openapi.json` served in
+    production with `ENABLE_DOCS=false` -- the same route map, parameters and
+    models the UIs render, minus the HTML. Returning all three together is what
+    stops the next edit from closing one and leaving another open; it is a
+    function rather than three ternaries so a test can assert on it directly.
+    """
+    if not show_docs:
+        return {"docs_url": None, "redoc_url": None, "openapi_url": None}
+    return {"docs_url": "/docs", "redoc_url": "/redoc", "openapi_url": "/openapi.json"}
+
+
 app = FastAPI(
     title="Kwami AI LiveKit API",
     description="Token endpoint and configuration API for Kwami AI agents",
     version=__version__,
     lifespan=lifespan,
-    docs_url="/docs" if settings.show_docs else None,
-    redoc_url="/redoc" if settings.show_docs else None,
+    **docs_urls(settings.show_docs),
 )
 
 app.add_middleware(

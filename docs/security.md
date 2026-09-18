@@ -187,8 +187,12 @@ object logs a warning if `*` is still present — set explicit origins.
 `allow_credentials=True` with `*` is a browser-incompatible combination;
 do not ship it.
 
-OpenAPI (`/docs`, `/redoc`) is off in production unless `ENABLE_DOCS=true`.
-The schema describes admin and webhook routes; treat it as sensitive.
+OpenAPI is off in production unless `ENABLE_DOCS=true` — all three of
+`/docs`, `/redoc` and `/openapi.json`. The schema describes admin and webhook
+routes; treat it as sensitive. It is the schema that matters: the two UIs only
+render it, and closing them while leaving `/openapi.json` served published the
+whole route map anyway. `src.main.docs_urls` returns the three together for that
+reason, and `tests/unit/api/test_docs_exposure.py` holds them together.
 
 ## Dependency advisories
 
