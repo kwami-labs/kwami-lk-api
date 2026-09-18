@@ -1370,7 +1370,7 @@ requires-dist = [
     { name = "responses", marker = "extra == 'dev'", specifier = ">=0.25.0" },
     { name = "respx", marker = "extra == 'dev'", specifier = ">=0.22.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8.0" },
-    { name = "stripe", specifier = ">=8.0.0" },
+    { name = "stripe", specifier = ">=15.0.0" },
     { name = "supabase", specifier = ">=2.0.0" },
     { name = "testcontainers", extras = ["postgres"], marker = "extra == 'integration'", specifier = ">=4.8.0" },
     { name = "thefuzz", extras = ["speedup"], specifier = ">=0.22.0" },

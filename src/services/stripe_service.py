@@ -105,7 +105,7 @@ async def handle_webhook_event(payload: bytes, sig_header: str) -> dict:
         raise RuntimeError("STRIPE_WEBHOOK_SECRET must be set")
 
     try:
-        event = stripe.Webhook.construct_event(
+        signed_event = stripe.Webhook.construct_event(
             payload,
             sig_header,
             settings.stripe_webhook_secret,
@@ -116,13 +116,24 @@ async def handle_webhook_event(payload: bytes, sig_header: str) -> dict:
         logger.warning(f"Stripe webhook signature verification failed: {e}")
         raise ValueError("Invalid signature") from e
 
+    # `to_dict()` at the boundary, once, and plain dicts from here down.
+    #
+    # stripe>=15 stopped making StripeObject a subclass of dict, so `.get()`,
+    # iteration and `dict(event)` are all gone. The failure mode was not a clean
+    # break either: `event.get("id")` raised AttributeError, but `dict(event)`
+    # quietly returned `{}` -- an idempotency claim recorded with an empty
+    # payload. Converting here keeps every handler below on the `dict` their
+    # signatures already promise, and keeps this module off the SDK's object
+    # model, which has now changed shape twice.
+    event = signed_event.to_dict()
+
     event_id = event.get("id", "")
     event_type = event["type"]
     logger.info(f"Received Stripe webhook: {event_type} ({event_id})")
 
     # Claim before processing. Stripe retries on any non-2xx and can redeliver an
     # event it already sent; without this, each retry credited the user again.
-    if not claim_event("stripe", event_id, event_type, payload=dict(event)):
+    if not claim_event("stripe", event_id, event_type, payload=event):
         return {"status": "duplicate", "event_id": event_id, "event_type": event_type}
 
     try:

@@ -29,7 +29,12 @@ dependencies = [
     # Note: AWS plugin requires aws-sdk-bedrock-runtime for full functionality
     # Model listing uses fallback, so plugin is optional
     # Credits & payments
-    "stripe>=8.0.0",
+    #
+    # >=15 is a real floor, not a formality. stripe 15 stopped making StripeObject a
+    # subclass of dict, and src/services/stripe_service.py is written against that: it
+    # calls `.to_dict()` on the verified webhook event and works in plain dicts below.
+    # The declared floor said >=8, where the same code path silently behaved differently.
+    "stripe>=15.0.0",
     "supabase>=2.0.0",
     "twilio>=9.8.0",
     "phonenumbers>=8.13.55",
@@ -127,6 +132,10 @@ filterwarnings = [
     "error",
     "ignore::DeprecationWarning:livekit.*",
     "ignore::DeprecationWarning:google.*",
+    # google-auth warns about its October 2026 grpcio floor on the grpc transport
+    # import, which the Gemini voice extractor triggers lazily. A FutureWarning
+    # rather than a DeprecationWarning, so the line above does not catch it.
+    "ignore::FutureWarning:google.*",
     "ignore::DeprecationWarning:pydantic.*",
     "ignore::DeprecationWarning:websockets.*",
 ]
