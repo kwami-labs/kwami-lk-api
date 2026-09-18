@@ -141,6 +141,10 @@ jobs:
       # exec (scripts/set-version.sh) and git are the ones that have to be asked for. Pinned to
       # majors rather than floated, so a release cannot change shape under an unattended bump.
       #
+      # conventional-changelog-conventionalcommits is NOT bundled: semantic-release ships only the
+      # `angular` preset, and .releaserc.json asks for `conventionalcommits` — the one that honours
+      # the `!` breaking marker. Without this line the release fails at plugin load.
+      #
       # semantic-release has no version output of its own, so the tag it created is read back as the
       # difference between the tag list before and after.
       - name: semantic-release
@@ -158,6 +162,7 @@ jobs:
             -p @semantic-release/changelog@7 \
             -p @semantic-release/exec@7 \
             -p @semantic-release/git@11 \
+            -p conventional-changelog-conventionalcommits@8 \
             semantic-release
           git tag | sort > "$RUNNER_TEMP/tags-after.txt"
           tag="$(comm -13 "$RUNNER_TEMP/tags-before.txt" "$RUNNER_TEMP/tags-after.txt" | head -1)"
