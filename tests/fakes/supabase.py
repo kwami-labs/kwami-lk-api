@@ -83,6 +83,20 @@ _TABLES_WITH_UPDATED_AT = frozenset(
     }
 )
 
+# Columns Postgres computes on write, as `GENERATED ALWAYS AS (...) STORED`.
+# Keyed by table, then by column, to a callable over the row being written.
+#
+# Without these the fake hands back a row missing the column entirely, and a
+# route that reads it raises KeyError -- a 500 in a test for behaviour that works
+# against a real database. `email_address` is the only one today
+# (migrations/007_kwami_email.sql:25).
+GENERATED_COLUMNS: dict[str, dict[str, Any]] = {
+    "kwami_email_accounts": {
+        "email_address": lambda row: f"{row.get('username')}@kwami.io",
+    },
+}
+
+
 # (table, columns) pairs that carry a UNIQUE index in the migrations.
 DEFAULT_UNIQUE_INDEXES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("user_credits", ("user_id",)),
@@ -327,6 +341,11 @@ class _Query:
             row.setdefault("created_at", _now_iso())
         if self.table_name in _TABLES_WITH_UPDATED_AT:
             row.setdefault("updated_at", _now_iso())
+        # GENERATED ALWAYS is not a default: Postgres recomputes it on every
+        # write and ignores whatever the client sent, so this overwrites rather
+        # than setdefault.
+        for column, compute in GENERATED_COLUMNS.get(self.table_name, {}).items():
+            row[column] = compute(row)
         return row
 
     def _check_unique(self, row: dict[str, Any], existing: list[dict[str, Any]]) -> None:
