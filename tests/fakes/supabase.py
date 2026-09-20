@@ -9,16 +9,25 @@ suite against a real Postgres.
 
 Two rules keep it honest:
 
-1. Every method implemented here is covered by
+1. Every builder method implemented here is covered by
    ``tests/integration/contracts/test_fake_supabase_conformance.py``, which runs the
-   same assertions against this fake and against a real PostgREST. Behaviour the
-   fake claims but PostgREST does not is a CI failure.
+   same query against this fake and against a real Postgres reached through
+   ``PgClient``, an adapter that issues the SQL PostgREST would. Behaviour the fake
+   claims but the database does not is a CI failure. (That file is newer than this
+   docstring, which asserted the guarantee for a long time before anything provided
+   it -- and the first run found four divergences.)
 2. It models what the database actually enforces -- server-generated ids and
-   timestamps, unique indexes, and the ``credit_transaction_type`` enum domain --
-   because those are exactly the things the old hand-rolled fake silently ignored.
+   timestamps, unique indexes, GENERATED columns, and the ``credit_transaction_type``
+   enum domain -- because those are exactly the things the old hand-rolled fake
+   silently ignored.
+
+One documented gap: ordinary column ``DEFAULT`` clauses are **not** modelled. A test
+that inserts a partial row and reads a defaulted column back gets ``None`` here and a
+value from Postgres; it belongs in the integration lane. The gap is pinned by a
+strict xfail in the conformance file.
 
 The query builder core is shared; only ``execute()`` differs between the sync and
-async variants, so the planned migration to ``acreate_client`` flips one flag.
+async variants, and the conformance file runs every scenario through both.
 """
 
 from __future__ import annotations
@@ -98,11 +107,20 @@ GENERATED_COLUMNS: dict[str, dict[str, Any]] = {
 
 
 # (table, columns) pairs that carry a UNIQUE index in the migrations.
+#
+# These are COLUMN names, not index names. Two entries here read `provider_sid`
+# for a long time -- the tail of the *index* names `idx_kwami_call_events_provider_sid`
+# and `idx_kwami_message_events_provider_sid` -- while the columns are actually
+# `provider_call_sid` and `provider_message_sid`. A constraint on a column that does
+# not exist never fires, so every duplicate-webhook test passed against a fake that
+# accepted the row and a database that would have refused it.
+# `test_declared_unique_indexes_exist_in_the_database` now cross-checks this tuple
+# against pg_indexes so the two cannot drift again.
 DEFAULT_UNIQUE_INDEXES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("user_credits", ("user_id",)),
     ("kwami_channels", ("provider", "kind", "phone_number")),
-    ("kwami_call_events", ("provider_sid",)),
-    ("kwami_message_events", ("provider_sid",)),
+    ("kwami_call_events", ("provider_call_sid",)),
+    ("kwami_message_events", ("provider_message_sid",)),
     ("kwami_email_accounts", ("user_id", "kwami_id")),
     ("kwami_email_accounts", ("username",)),
     ("kwami_email_messages", ("sendgrid_message_id",)),
@@ -167,11 +185,18 @@ class _Query:
     # object as its default.
     _single: bool = False
     _maybe_single: bool = False
+    projection: tuple[str, ...] = ()
 
     # -- builder surface -------------------------------------------------
-    def select(self, *_args: Any, **kwargs: Any) -> _Query:
+    def select(self, *args: Any, **kwargs: Any) -> _Query:
         if kwargs.get("count"):
             self.wants_count = True
+        # The column list used to be ignored, so `select("id")` returned whole
+        # rows and a test could assert on a column the query never asked for --
+        # then pass against a database that does not return it. Caught by
+        # tests/integration/contracts/test_fake_supabase_conformance.py.
+        if args and args[0] and str(args[0]).strip() != "*":
+            self.projection = tuple(c.strip() for c in str(args[0]).split(",") if c.strip())
         return self
 
     def eq(self, column: str, value: Any) -> _Query:
@@ -440,8 +465,26 @@ class _Query:
                 return columns
         return ()
 
+    def _project(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Return only the selected columns, as PostgREST does."""
+        if not self.projection:
+            return rows
+        # A `col->>key` accessor or an embedded resource is not a plain column;
+        # leaving such a row whole is closer than dropping everything.
+        if any("->" in c or "(" in c for c in self.projection):
+            return rows
+        return [{c: row[c] for c in self.projection if c in row} for row in rows]
+
     def _shape(self, rows: list[dict[str, Any]], count: int | None = None) -> FakeResult:
+        rows = self._project(rows)
         if self._single or self._maybe_single:
+            # PostgREST refuses to collapse many rows into one object: both
+            # `.single()` and `.maybe_single()` answer PGRST116. The fake used to
+            # return the first row instead, which made a query that is an error
+            # against the database look like a successful read of an arbitrary
+            # row -- the worst possible direction for this to be wrong in.
+            if len(rows) > 1:
+                raise_error("JSON object requested, multiple (or no) rows returned", "PGRST116")
             if not rows:
                 if self._single:
                     raise_error("JSON object requested, multiple (or no) rows returned", "PGRST116")

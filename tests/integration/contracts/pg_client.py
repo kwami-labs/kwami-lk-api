@@ -222,7 +222,7 @@ class PgQuery:
             return PgResult(rows[0] if rows else None, count)
         return PgResult(rows, count)
 
-    async def _run_select(self) -> PgResult:
+    def _run_select(self) -> PgResult:
         where, params = self._where()
         total = None
         if self._wants_count:
@@ -242,7 +242,7 @@ class PgQuery:
             cur.execute(sql, params)
             return self._shape(self._rows(cur), total)
 
-    async def _run_write(self, mode: str) -> PgResult:
+    def _run_write(self, mode: str) -> PgResult:
         payloads = self._insert if mode == "insert" else self._upsert
         payloads = payloads if isinstance(payloads, list) else [payloads]
         out: list[dict[str, Any]] = []
@@ -266,7 +266,7 @@ class PgQuery:
                 raise _as_api_error(exc) from exc
         return self._shape(out)
 
-    async def _run_update(self) -> PgResult:
+    def _run_update(self) -> PgResult:
         where, params = self._where()
         assignments = ", ".join(f'"{c}" = %(set_{c})s' for c in self._update)
         params.update({f"set_{c}": v for c, v in self._update.items()})
@@ -278,7 +278,7 @@ class PgQuery:
         except Exception as exc:
             raise _as_api_error(exc) from exc
 
-    async def _run_delete(self) -> PgResult:
+    def _run_delete(self) -> PgResult:
         where, params = self._where()
         with self._conn.cursor() as cur:
             cur.execute(f'DELETE FROM "{self._table}"{where} RETURNING *', params)

@@ -102,16 +102,10 @@ SCENARIOS: dict[str, Any] = {
     "order_asc": lambda c: c.table(TABLE).select("*").order("name").execute(),
     "order_desc": lambda c: c.table(TABLE).select("*").order("name", desc=True).execute(),
     "range": lambda c: c.table(TABLE).select("*").order("name").range(0, 1).execute(),
-    "range_beyond_end": lambda c: (
-        c.table(TABLE).select("*").order("name").range(5, 9).execute()
-    ),
+    "range_beyond_end": lambda c: c.table(TABLE).select("*").order("name").range(5, 9).execute(),
     "limit": lambda c: c.table(TABLE).select("*").order("name").limit(2).execute(),
-    "single_one_row": lambda c: (
-        c.table(TABLE).select("*").eq("name", "beta").single().execute()
-    ),
-    "single_no_rows": lambda c: (
-        c.table(TABLE).select("*").eq("name", "nope").single().execute()
-    ),
+    "single_one_row": lambda c: c.table(TABLE).select("*").eq("name", "beta").single().execute(),
+    "single_no_rows": lambda c: c.table(TABLE).select("*").eq("name", "nope").single().execute(),
     "single_many_rows": lambda c: c.table(TABLE).select("*").single().execute(),
     "maybe_single_one_row": lambda c: (
         c.table(TABLE).select("*").eq("name", "beta").maybe_single().execute()
@@ -126,26 +120,21 @@ SCENARIOS: dict[str, Any] = {
     "json_accessor_numeric_as_text": lambda c: (
         c.table(TABLE).select("*").eq("config->>rank", "2").execute()
     ),
-    "update_one": lambda c: (
-        c.table(TABLE).update({"emoji": "Z"}).eq("name", "beta").execute()
-    ),
-    "update_no_match": lambda c: (
-        c.table(TABLE).update({"emoji": "Z"}).eq("name", "nope").execute()
-    ),
+    "update_one": lambda c: c.table(TABLE).update({"emoji": "Z"}).eq("name", "beta").execute(),
+    "update_no_match": lambda c: c.table(TABLE).update({"emoji": "Z"}).eq("name", "nope").execute(),
     "delete_one": lambda c: c.table(TABLE).delete().eq("name", "beta").execute(),
     "delete_no_match": lambda c: c.table(TABLE).delete().eq("name", "nope").execute(),
 }
 
 
-@pytest.mark.anyio
 @pytest.fixture
-async def pg(db, user_id):
+def pg(db, user_id):
     """A PgClient over the migrated database, seeded with SEED."""
     import json
 
     with db.cursor() as cur:
         for row in SEED:
-            await cur.execute(
+            cur.execute(
                 "INSERT INTO user_kwamis (user_id, name, emoji, config) VALUES (%s,%s,%s,%s)",
                 (user_id, row["name"], row["emoji"], json.dumps(row["config"])),
             )
@@ -193,8 +182,7 @@ async def test_async_mode_matches_sync_mode(scenario_name, user_id):
     assert sync_outcome == async_outcome, scenario_name
 
 
-@pytest.mark.anyio
-async def test_declared_unique_indexes_exist_in_the_database(migrated_database):
+def test_declared_unique_indexes_exist_in_the_database(migrated_database):
     """Every constraint the fake enforces must be one the database also enforces.
 
     `DEFAULT_UNIQUE_INDEXES` is a hand-copied list of (table, columns). Two entries
@@ -212,7 +200,7 @@ async def test_declared_unique_indexes_exist_in_the_database(migrated_database):
     from tests.fakes.supabase import DEFAULT_UNIQUE_INDEXES
 
     with psycopg.connect(migrated_database) as conn, conn.cursor() as cur:
-        await cur.execute(
+        cur.execute(
             """
             SELECT t.relname,
                    array_agg(a.attname ORDER BY a.attname)
@@ -236,24 +224,21 @@ async def test_declared_unique_indexes_exist_in_the_database(migrated_database):
 class TestServerSideValues:
     """What the database fills in, which the fake has to fill in too."""
 
-    @pytest.mark.anyio
-    async def test_an_inserted_row_gets_a_uuid_id_and_timestamps(self, pg, fake_sync, user_id):
+    def test_an_inserted_row_gets_a_uuid_id_and_timestamps(self, pg, fake_sync, user_id):
         payload = {"user_id": user_id, "name": "delta", "emoji": "D"}
         for client in (fake_sync, pg):
-            row = await client.table(TABLE).insert(dict(payload)).execute().data[0]
+            row = client.table(TABLE).insert(dict(payload)).execute().data[0]
             assert uuid.UUID(str(row["id"]))
             assert row["created_at"] is not None
             assert row["updated_at"] is not None
 
-    @pytest.mark.anyio
-    async def test_the_database_applies_column_defaults(self, pg, user_id):
+    def test_the_database_applies_column_defaults(self, pg, user_id):
         """The behaviour the fake is measured against."""
-        row = await pg.table(TABLE).insert({"user_id": user_id}).execute().data[0]
+        row = pg.table(TABLE).insert({"user_id": user_id}).execute().data[0]
         assert row["name"] == "Kwami"
         assert row["emoji"] == "🌸"
         assert row["config"] == {}
 
-    @pytest.mark.anyio
     @pytest.mark.xfail(
         strict=True,
         reason=(
@@ -266,6 +251,6 @@ class TestServerSideValues:
             "defaults, this xfail turns red (xfail_strict) and should be deleted."
         ),
     )
-    async def test_the_fake_does_not_apply_column_defaults(self, fake_sync, user_id):
-        row = await fake_sync.table(TABLE).insert({"user_id": user_id}).execute().data[0]
-        assert await row.get("name") == "Kwami"
+    def test_the_fake_does_not_apply_column_defaults(self, fake_sync, user_id):
+        row = fake_sync.table(TABLE).insert({"user_id": user_id}).execute().data[0]
+        assert row.get("name") == "Kwami"
