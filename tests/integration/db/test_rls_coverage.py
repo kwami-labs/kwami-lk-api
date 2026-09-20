@@ -22,7 +22,7 @@ import pytest
 pytestmark = pytest.mark.integration
 
 
-async def test_every_public_table_has_rls_enabled(migrated_database):
+def test_every_public_table_has_rls_enabled(migrated_database):
     import psycopg
 
     with psycopg.connect(migrated_database) as conn, conn.cursor() as cur:
@@ -47,7 +47,7 @@ async def test_every_public_table_has_rls_enabled(migrated_database):
     )
 
 
-async def test_service_role_only_tables_are_revoked_from_the_public_roles(migrated_database):
+def test_service_role_only_tables_are_revoked_from_the_public_roles(migrated_database):
     """RLS is the mechanism; REVOKE is the belt.
 
     The tables with no policies at all are the ones only the service role should
