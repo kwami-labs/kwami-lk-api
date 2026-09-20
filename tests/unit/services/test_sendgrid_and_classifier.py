@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import time
 
 import httpx
 import pytest
 import respx
+from fastapi import HTTPException
 
 from src.services import sendgrid_service
 from src.services.email_classifier import (
@@ -184,33 +186,84 @@ class TestSendEmail:
 
 
 class TestVerifyInboundWebhook:
-    def test_no_configured_secret_skips_the_check(self, monkeypatch):
-        """Development mode: the check is skipped, not failed."""
+    """The mirror of `validate_twilio_request`: unconfigured means refused.
+
+    It returns None and raises, rather than returning a bool, so the route cannot
+    forget to check -- the shape that let the old `return True` go unnoticed.
+    """
+
+    @pytest.fixture
+    def secret(self, monkeypatch):
+        monkeypatch.setattr(
+            sendgrid_service.settings, "sendgrid_inbound_webhook_secret", "shh", raising=False
+        )
+
+    @staticmethod
+    def _sign(timestamp: str, token: str) -> str:
+        return hmac.new(b"shh", (timestamp + token).encode(), hashlib.sha256).hexdigest()
+
+    @staticmethod
+    def _now() -> str:
+        return str(int(time.time()))
+
+    def test_no_configured_secret_is_refused_not_skipped(self, monkeypatch):
+        """This used to `return True`, which made the endpoint publicly writable."""
         monkeypatch.setattr(
             sendgrid_service.settings, "sendgrid_inbound_webhook_secret", None, raising=False
         )
-        assert verify_inbound_webhook("t", "123", "anything") is True
+        with pytest.raises(HTTPException) as excinfo:
+            verify_inbound_webhook("t", "123", "anything")
+        assert excinfo.value.status_code == 503
 
-    def test_a_correct_signature_is_accepted(self, monkeypatch):
-        monkeypatch.setattr(
-            sendgrid_service.settings, "sendgrid_inbound_webhook_secret", "shh", raising=False
-        )
-        expected = hmac.new(b"shh", b"123token", hashlib.sha256).hexdigest()
-        assert verify_inbound_webhook("token", "123", expected) is True
+    def test_a_correct_signature_is_accepted(self, secret):
+        now = self._now()
+        assert verify_inbound_webhook("token", now, self._sign(now, "token")) is None
 
-    def test_a_wrong_signature_is_refused(self, monkeypatch):
-        monkeypatch.setattr(
-            sendgrid_service.settings, "sendgrid_inbound_webhook_secret", "shh", raising=False
-        )
-        assert verify_inbound_webhook("token", "123", "deadbeef") is False
+    def test_a_wrong_signature_is_refused(self, secret):
+        with pytest.raises(HTTPException) as excinfo:
+            verify_inbound_webhook("token", self._now(), "deadbeef")
+        assert excinfo.value.status_code == 401
 
-    def test_the_timestamp_is_part_of_the_signed_payload(self, monkeypatch):
-        """Otherwise a captured signature replays against any timestamp."""
-        monkeypatch.setattr(
-            sendgrid_service.settings, "sendgrid_inbound_webhook_secret", "shh", raising=False
-        )
-        sig = hmac.new(b"shh", b"123token", hashlib.sha256).hexdigest()
-        assert verify_inbound_webhook("token", "999", sig) is False
+    def test_a_missing_signature_is_refused(self, secret):
+        with pytest.raises(HTTPException) as excinfo:
+            verify_inbound_webhook("token", self._now(), "")
+        assert excinfo.value.detail == "Missing SendGrid signature"
+
+    def test_a_missing_timestamp_is_refused(self, secret):
+        with pytest.raises(HTTPException) as excinfo:
+            verify_inbound_webhook("token", "", "deadbeef")
+        assert excinfo.value.detail == "Missing SendGrid signature"
+
+    def test_a_non_numeric_timestamp_is_refused(self, secret):
+        with pytest.raises(HTTPException) as excinfo:
+            verify_inbound_webhook("token", "not-a-timestamp", "deadbeef")
+        assert excinfo.value.detail == "Invalid SendGrid signature timestamp"
+
+    def test_the_timestamp_is_part_of_the_signed_payload(self, secret):
+        """A signature bound to one timestamp must not validate against another."""
+        now = int(time.time())
+        sig = self._sign(str(now), "token")
+        with pytest.raises(HTTPException) as excinfo:
+            verify_inbound_webhook("token", str(now - 1), sig)
+        assert excinfo.value.detail == "Invalid SendGrid signature"
+
+    def test_a_stale_but_correctly_signed_delivery_is_refused(self, secret):
+        """The replay gap: the timestamp was signed but never checked for age,
+        so one captured delivery stayed valid forever."""
+        old = str(int(time.time()) - sendgrid_service.INBOUND_SIGNATURE_MAX_AGE_SECONDS - 1)
+        with pytest.raises(HTTPException) as excinfo:
+            verify_inbound_webhook("token", old, self._sign(old, "token"))
+        assert excinfo.value.detail == "SendGrid signature has expired"
+
+    def test_a_delivery_from_the_future_is_refused(self, secret):
+        ahead = str(int(time.time()) + sendgrid_service.INBOUND_SIGNATURE_MAX_AGE_SECONDS + 1)
+        with pytest.raises(HTTPException) as excinfo:
+            verify_inbound_webhook("token", ahead, self._sign(ahead, "token"))
+        assert excinfo.value.detail == "SendGrid signature has expired"
+
+    def test_ordinary_clock_skew_inside_the_window_is_tolerated(self, secret):
+        skewed = str(int(time.time()) - sendgrid_service.INBOUND_SIGNATURE_MAX_AGE_SECONDS + 5)
+        assert verify_inbound_webhook("token", skewed, self._sign(skewed, "token")) is None
 
 
 class TestExtractDomain:

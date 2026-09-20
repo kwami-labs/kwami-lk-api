@@ -9,7 +9,10 @@ unknown destination, mail addressed to nobody.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
+import time
 
 import pytest
 from twilio.request_validator import RequestValidator
@@ -352,14 +355,39 @@ class TestWhatsappStatusWebhook:
 
 
 class TestSendgridInbound:
+    """Every post here is signed.
+
+    There used to be an autouse fixture that unset the secret, because an unset
+    secret skipped the check. That is the defect these tests now exercise the
+    other way round: the endpoint is signed-only, in every environment.
+    """
+
+    SECRET = "shh"
+
     @pytest.fixture(autouse=True)
-    def _no_secret(self, monkeypatch):
-        """No configured secret means the signature check is skipped (dev mode)."""
+    def _secret(self, monkeypatch):
         from src.services import sendgrid_service
 
         monkeypatch.setattr(
-            sendgrid_service.settings, "sendgrid_inbound_webhook_secret", None, raising=False
+            sendgrid_service.settings,
+            "sendgrid_inbound_webhook_secret",
+            self.SECRET,
+            raising=False,
         )
+
+    @classmethod
+    def _signed(cls, data: dict | None = None) -> dict:
+        """`data` plus the token/timestamp/signature triple SendGrid sends."""
+        timestamp, token = str(int(time.time())), "tok"
+        signature = hmac.new(
+            cls.SECRET.encode(), (timestamp + token).encode(), hashlib.sha256
+        ).hexdigest()
+        return {
+            **(data or {}),
+            "token": token,
+            "timestamp": timestamp,
+            "signature": signature,
+        }
 
     @pytest.fixture
     def account(self, fake_supabase, tenant):
@@ -367,28 +395,54 @@ class TestSendgridInbound:
 
         return activate_account(user_id=tenant.user_id, kwami_id=tenant.kwami_id, username="ada")
 
-    async def test_a_bad_signature_is_a_403(self, monkeypatch, client):
+    async def test_a_bad_signature_is_a_401(self, client):
+        """401, matching the Twilio webhook, rather than the old 403."""
+        r = await client.post(
+            EMAIL_INBOUND,
+            data={"token": "t", "timestamp": str(int(time.time())), "signature": "wrong"},
+        )
+        assert r.status_code == 401
+
+    async def test_an_unsigned_post_is_refused(self, client):
+        """The whole point: no signature is not the same as no check."""
+        r = await client.post(EMAIL_INBOUND, data={"to": "ada@kwami.io"})
+        assert r.status_code == 401
+
+    async def test_an_unconfigured_secret_refuses_rather_than_skipping(self, monkeypatch, client):
         from src.services import sendgrid_service
 
         monkeypatch.setattr(
-            sendgrid_service.settings, "sendgrid_inbound_webhook_secret", "shh", raising=False
+            sendgrid_service.settings, "sendgrid_inbound_webhook_secret", None, raising=False
         )
+        r = await client.post(EMAIL_INBOUND, data=self._signed({"to": "ada@kwami.io"}))
+        assert r.status_code == 503
+
+    async def test_a_replayed_delivery_is_refused(self, client):
+        """Correctly signed, but outside the freshness window."""
+        from src.services import sendgrid_service
+
+        old = str(int(time.time()) - sendgrid_service.INBOUND_SIGNATURE_MAX_AGE_SECONDS - 1)
+        signature = hmac.new(
+            self.SECRET.encode(), (old + "tok").encode(), hashlib.sha256
+        ).hexdigest()
         r = await client.post(
             EMAIL_INBOUND,
-            data={"token": "t", "timestamp": "1", "signature": "wrong", "to": "ada@kwami.io"},
+            data={"token": "tok", "timestamp": old, "signature": signature},
         )
-        assert r.status_code == 403
+        assert r.status_code == 401
 
     async def test_an_email_is_stored(self, client, account, fake_supabase):
         r = await client.post(
             EMAIL_INBOUND,
-            data={
-                "from": "billing@vendor.test",
-                "to": "ada@kwami.io",
-                "subject": "Your invoice",
-                "text": "Amount due $10.00",
-                "html": "<p>Amount due $10.00</p>",
-            },
+            data=self._signed(
+                {
+                    "from": "billing@vendor.test",
+                    "to": "ada@kwami.io",
+                    "subject": "Your invoice",
+                    "text": "Amount due $10.00",
+                    "html": "<p>Amount due $10.00</p>",
+                }
+            ),
         )
         assert r.status_code == 200
         assert r.json() == {"ok": True}
@@ -402,13 +456,15 @@ class TestSendgridInbound:
         """SendGrid's envelope carries clean addresses; the header may be decorated."""
         r = await client.post(
             EMAIL_INBOUND,
-            data={
-                "from": "a@b.c",
-                "to": "Somebody Else <else@elsewhere.test>",
-                "envelope": json.dumps({"to": ["ada@kwami.io"]}),
-                "subject": "s",
-                "text": "t",
-            },
+            data=self._signed(
+                {
+                    "from": "a@b.c",
+                    "to": "Somebody Else <else@elsewhere.test>",
+                    "envelope": json.dumps({"to": ["ada@kwami.io"]}),
+                    "subject": "s",
+                    "text": "t",
+                }
+            ),
         )
         assert r.status_code == 200
         assert len(fake_supabase.db.rows("kwami_email_messages")) == 1
@@ -416,12 +472,14 @@ class TestSendgridInbound:
     async def test_an_envelope_with_a_single_string_address(self, client, account, fake_supabase):
         r = await client.post(
             EMAIL_INBOUND,
-            data={
-                "from": "a@b.c",
-                "envelope": json.dumps({"to": "ada@kwami.io"}),
-                "subject": "s",
-                "text": "t",
-            },
+            data=self._signed(
+                {
+                    "from": "a@b.c",
+                    "envelope": json.dumps({"to": "ada@kwami.io"}),
+                    "subject": "s",
+                    "text": "t",
+                }
+            ),
         )
         assert r.status_code == 200
         assert len(fake_supabase.db.rows("kwami_email_messages")) == 1
@@ -431,13 +489,15 @@ class TestSendgridInbound:
     ):
         r = await client.post(
             EMAIL_INBOUND,
-            data={
-                "from": "a@b.c",
-                "to": "ada@kwami.io",
-                "envelope": "not json",
-                "subject": "s",
-                "text": "t",
-            },
+            data=self._signed(
+                {
+                    "from": "a@b.c",
+                    "to": "ada@kwami.io",
+                    "envelope": "not json",
+                    "subject": "s",
+                    "text": "t",
+                }
+            ),
         )
         assert r.status_code == 200
         assert len(fake_supabase.db.rows("kwami_email_messages")) == 1
@@ -447,13 +507,15 @@ class TestSendgridInbound:
     ):
         r = await client.post(
             EMAIL_INBOUND,
-            data={
-                "from": "a@b.c",
-                "to": "ada@kwami.io, other@x.test",
-                "cc": "cc@x.test, not-an-address",
-                "subject": "s",
-                "text": "t",
-            },
+            data=self._signed(
+                {
+                    "from": "a@b.c",
+                    "to": "ada@kwami.io, other@x.test",
+                    "cc": "cc@x.test, not-an-address",
+                    "subject": "s",
+                    "text": "t",
+                }
+            ),
         )
         assert r.status_code == 200
         (msg,) = fake_supabase.db.rows("kwami_email_messages")
@@ -475,7 +537,9 @@ class TestSendgridInbound:
         """
         r = await client.post(
             EMAIL_INBOUND,
-            data={"from": "a@b.c", "to": "Ada <ada@kwami.io>", "subject": "s", "text": "t"},
+            data=self._signed(
+                {"from": "a@b.c", "to": "Ada <ada@kwami.io>", "subject": "s", "text": "t"}
+            ),
         )
         assert r.status_code == 200, "still acknowledged, so SendGrid does not retry"
         assert fake_supabase.db.rows("kwami_email_messages") == [], "but nothing was stored"
@@ -483,13 +547,15 @@ class TestSendgridInbound:
     async def test_headers_are_parsed_into_a_dict(self, client, account, fake_supabase):
         r = await client.post(
             EMAIL_INBOUND,
-            data={
-                "from": "a@b.c",
-                "to": "ada@kwami.io",
-                "subject": "s",
-                "text": "t",
-                "headers": "Message-ID: <abc@vendor>\nX-Spam: no\nnot-a-header-line",
-            },
+            data=self._signed(
+                {
+                    "from": "a@b.c",
+                    "to": "ada@kwami.io",
+                    "subject": "s",
+                    "text": "t",
+                    "headers": "Message-ID: <abc@vendor>\nX-Spam: no\nnot-a-header-line",
+                }
+            ),
         )
         assert r.status_code == 200
         (msg,) = fake_supabase.db.rows("kwami_email_messages")
@@ -502,13 +568,15 @@ class TestSendgridInbound:
     ):
         await client.post(
             EMAIL_INBOUND,
-            data={
-                "from": "a@b.c",
-                "to": "ada@kwami.io",
-                "subject": "s",
-                "text": "t",
-                "headers": "Message-Id: <xyz@vendor>",
-            },
+            data=self._signed(
+                {
+                    "from": "a@b.c",
+                    "to": "ada@kwami.io",
+                    "subject": "s",
+                    "text": "t",
+                    "headers": "Message-Id: <xyz@vendor>",
+                }
+            ),
         )
         assert (
             fake_supabase.db.rows("kwami_email_messages")[0]["sendgrid_message_id"]
@@ -520,12 +588,15 @@ class TestSendgridInbound:
         with caplog.at_level("WARNING", logger="kwami-api.webhooks"):
             r = await client.post(
                 EMAIL_INBOUND,
-                data={"from": "a@b.c", "to": "nobody@kwami.io", "subject": "s", "text": "t"},
+                data=self._signed(
+                    {"from": "a@b.c", "to": "nobody@kwami.io", "subject": "s", "text": "t"}
+                ),
             )
         assert r.status_code == 200
         assert r.json() == {"ok": True}
         assert "no matching account" in caplog.text
 
-    async def test_a_completely_empty_post_is_acknowledged(self, client):
-        r = await client.post(EMAIL_INBOUND, data={})
+    async def test_a_signed_post_with_no_mail_fields_is_acknowledged(self, client):
+        """SendGrid retries a non-2xx, so an empty body must not raise."""
+        r = await client.post(EMAIL_INBOUND, data=self._signed())
         assert r.status_code == 200

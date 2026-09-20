@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
 from src.core.config import settings
@@ -234,12 +234,13 @@ async def sendgrid_inbound_email(request: Request):
     """Receive an email via SendGrid Inbound Parse (multipart/form-data)."""
     form = await request.form()
 
-    # Optional webhook signature verification
-    token = str(form.get("token", ""))
-    timestamp = str(form.get("timestamp", ""))
-    signature = str(form.get("signature", ""))
-    if not verify_inbound_webhook(token, timestamp, signature):
-        raise HTTPException(status_code=403, detail="Invalid webhook signature")
+    # Not optional: verify_inbound_webhook raises on a missing secret, a stale
+    # timestamp or a bad signature, the same way validate_twilio_request does.
+    verify_inbound_webhook(
+        str(form.get("token", "")),
+        str(form.get("timestamp", "")),
+        str(form.get("signature", "")),
+    )
 
     from_address = str(form.get("from", ""))
     to_raw = str(form.get("to", ""))
