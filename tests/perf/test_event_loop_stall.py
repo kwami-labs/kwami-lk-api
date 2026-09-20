@@ -79,15 +79,6 @@ async def _time_concurrent_requests(app, path: str, headers: dict[str, str]) -> 
     return elapsed
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "The synchronous Supabase client is called from `async def` handlers with no "
-        "offload, so concurrent requests serialise on the event loop. Delete this "
-        "marker when the async SDK migration lands -- xfail_strict turns the XPASS "
-        "into a failure so it cannot be forgotten."
-    ),
-)
 async def test_concurrent_reads_do_not_serialise(
     app_instance, mock_auth_user, auth_registry, slow_database
 ):
@@ -114,14 +105,15 @@ async def test_concurrent_reads_do_not_serialise(
     )
 
 
-async def test_the_loop_is_blocked_today(
+async def test_a_slow_query_does_not_stall_unrelated_requests(
     app_instance, mock_auth_user, auth_registry, slow_database
 ):
-    """The same measurement, asserted the way the service behaves now.
+    """The same measurement from the other side: total time stays near one round
+    trip however many callers arrive together.
 
-    Kept alongside the xfail so the file states a fact rather than only an
-    aspiration: if this one ever fails, concurrency changed and the test above is
-    the one to read.
+    Measured on this suite while the synchronous client was still in place, ten
+    concurrent reads against a 50ms query took 0.61s -- ten round trips, one after
+    another. After the migration the same ten take about 0.02s.
     """
     slow_database.db.seed(
         "user_credits",
@@ -138,8 +130,8 @@ async def test_the_loop_is_blocked_today(
         app_instance, "/credits/balance", {"X-Test-User": mock_auth_user.id}
     )
 
-    assert elapsed >= DELAY_SECONDS * (CONCURRENCY - 1), (
-        f"{CONCURRENCY} concurrent requests took only {elapsed:.2f}s -- they "
-        f"overlapped, so the blocking call is no longer on the event loop and "
-        f"`test_concurrent_reads_do_not_serialise` should lose its xfail marker."
+    serialised = DELAY_SECONDS * CONCURRENCY
+    assert elapsed < serialised / 2, (
+        f"{CONCURRENCY} concurrent requests took {elapsed:.2f}s; serialised would be "
+        f"about {serialised:.2f}s. A blocking call is back on the event loop."
     )
