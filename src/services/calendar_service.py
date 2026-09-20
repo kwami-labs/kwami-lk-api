@@ -42,17 +42,17 @@ def _normalize_color(value: str | None) -> str:
     return color
 
 
-def _ensure_kwami_owned(user_id: str, kwami_id: str) -> None:
-    get_owned_kwami(user_id, kwami_id)
+async def _ensure_kwami_owned(user_id: str, kwami_id: str) -> None:
+    await get_owned_kwami(user_id, kwami_id)
 
 
-def list_events(
+async def list_events(
     user_id: str,
     kwami_id: str,
     range_start: str,
     range_end: str,
 ) -> list[dict[str, Any]]:
-    _ensure_kwami_owned(user_id, kwami_id)
+    await _ensure_kwami_owned(user_id, kwami_id)
     start = _parse_iso(range_start, "range_start")
     end = _parse_iso(range_end, "range_end")
     if end < start:
@@ -60,7 +60,7 @@ def list_events(
 
     sb = get_supabase_admin()
     result = (
-        sb.table("kwami_calendar_events")
+        await sb.table("kwami_calendar_events")
         .select("*")
         .eq("user_id", user_id)
         .eq("kwami_id", kwami_id)
@@ -72,7 +72,7 @@ def list_events(
     return list(getattr(result, "data", None) or [])
 
 
-def create_event(
+async def create_event(
     user_id: str,
     kwami_id: str,
     *,
@@ -86,7 +86,7 @@ def create_event(
     location: str = "",
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    _ensure_kwami_owned(user_id, kwami_id)
+    await _ensure_kwami_owned(user_id, kwami_id)
     clean_title = title.strip()
     if not clean_title:
         raise ValueError("Title is required")
@@ -110,14 +110,14 @@ def create_event(
         "metadata": metadata or {},
     }
     sb = get_supabase_admin()
-    created = sb.table("kwami_calendar_events").insert(payload).execute()
+    created = await sb.table("kwami_calendar_events").insert(payload).execute()
     row = _single(created)
     if not row:
         raise RuntimeError("Failed to create calendar event")
     return row
 
 
-def update_event(
+async def update_event(
     user_id: str,
     event_id: str,
     *,
@@ -133,7 +133,7 @@ def update_event(
 ) -> dict[str, Any]:
     sb = get_supabase_admin()
     existing_result = (
-        sb.table("kwami_calendar_events")
+        await sb.table("kwami_calendar_events")
         .select("*")
         .eq("id", event_id)
         .eq("user_id", user_id)
@@ -143,7 +143,7 @@ def update_event(
     existing = _single(existing_result)
     if not existing:
         raise ValueError("Event not found")
-    _ensure_kwami_owned(user_id, str(existing["kwami_id"]))
+    await _ensure_kwami_owned(user_id, str(existing["kwami_id"]))
 
     next_start = (
         _parse_iso(starts_at, "starts_at")
@@ -181,7 +181,7 @@ def update_event(
         updates["metadata"] = metadata
 
     result = (
-        sb.table("kwami_calendar_events")
+        await sb.table("kwami_calendar_events")
         .update(updates)
         .eq("id", event_id)
         .eq("user_id", user_id)
@@ -193,10 +193,10 @@ def update_event(
     return row
 
 
-def delete_event(user_id: str, event_id: str) -> bool:
+async def delete_event(user_id: str, event_id: str) -> bool:
     sb = get_supabase_admin()
     result = (
-        sb.table("kwami_calendar_events")
+        await sb.table("kwami_calendar_events")
         .delete()
         .eq("id", event_id)
         .eq("user_id", user_id)

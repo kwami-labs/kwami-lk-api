@@ -133,16 +133,16 @@ async def handle_webhook_event(payload: bytes, sig_header: str) -> dict:
 
     # Claim before processing. Stripe retries on any non-2xx and can redeliver an
     # event it already sent; without this, each retry credited the user again.
-    if not claim_event("stripe", event_id, event_type, payload=event):
+    if not await claim_event("stripe", event_id, event_type, payload=event):
         return {"status": "duplicate", "event_id": event_id, "event_type": event_type}
 
     try:
         result = await _dispatch_event(event_type, event["data"]["object"])
     except Exception as exc:
-        complete_event("stripe", event_id, status="failed", error=str(exc)[:500])
+        await complete_event("stripe", event_id, status="failed", error=str(exc)[:500])
         raise
 
-    complete_event(
+    await complete_event(
         "stripe",
         event_id,
         status="processed" if result.get("status") != "ignored" else "ignored",
@@ -266,7 +266,7 @@ async def _handle_refund(charge: dict) -> dict:
 
     sb = get_supabase_admin()
     lookup = (
-        sb.table("credit_transactions")
+        await sb.table("credit_transactions")
         .select("id, user_id, amount, metadata")
         .eq("type", "purchase")
         .eq("metadata->>stripe_payment_intent", str(payment_intent))

@@ -27,6 +27,7 @@ from src.api.routes import (
 )
 from src.core.config import settings
 from src.core.errors import install_error_handlers
+from src.services.credits import init_supabase_admin
 
 # Configure logging
 logging.basicConfig(
@@ -49,6 +50,18 @@ async def lifespan(app: FastAPI):
         logger.warning(
             "📊 Kwami API key for usage report: NOT SET (agent usage reports will get 503)"
         )
+
+    # One async Supabase client for the process, built here because
+    # `create_async_client` is a coroutine and because a client per request is a
+    # connection pool per request. Skipped when Supabase is not configured -- a
+    # development run with no database still has to boot, and every route that
+    # needs one raises a clear error instead.
+    if settings.supabase_url and settings.supabase_secret_key:
+        await init_supabase_admin()
+        logger.info("🗄️  Supabase async client: ready")
+    else:
+        logger.warning("🗄️  Supabase not configured; database-backed routes will fail")
+
     yield
     logger.info("👋 Shutting down...")
 

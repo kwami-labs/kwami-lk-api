@@ -57,18 +57,18 @@ async def twilio_voice_webhook(request: Request):
         logger.warning("Inbound voice call with no usable destination number")
         return Response("<Response><Reject/></Response>", media_type="application/xml")
 
-    channel = find_channel_by_address(called)
+    channel = await find_channel_by_address(called)
     if not channel:
         logger.warning("Inbound voice call to unknown number: %s", called)
         return Response("<Response><Reject/></Response>", media_type="application/xml")
 
-    contact = ensure_contact(
+    contact = await ensure_contact(
         user_id=channel["user_id"],
         kwami_id=channel["kwami_id"],
         phone_number=caller or "unknown",
         display_name=payload.get("CallerName"),
     )
-    conversation = ensure_conversation(
+    conversation = await ensure_conversation(
         user_id=channel["user_id"],
         kwami_id=channel["kwami_id"],
         channel_id=channel["id"],
@@ -77,7 +77,7 @@ async def twilio_voice_webhook(request: Request):
         external_thread_id=payload.get("CallSid"),
         metadata={"source": "twilio_voice"},
     )
-    create_call_event(
+    await create_call_event(
         conversation_id=conversation["id"],
         channel_id=channel["id"],
         user_id=channel["user_id"],
@@ -115,7 +115,7 @@ async def twilio_voice_status_webhook(request: Request):
     payload = await _form_payload(request)
     await validate_twilio_request(request, payload)
     if payload.get("CallSid"):
-        update_call_event_status(
+        await update_call_event_status(
             payload["CallSid"],
             status=payload.get("CallStatus") or "completed",
             duration_seconds=int(payload["CallDuration"]) if payload.get("CallDuration") else None,
@@ -137,14 +137,14 @@ async def twilio_whatsapp_webhook(request: Request):
     is_whatsapp = to_address.startswith("whatsapp:") or from_address.startswith("whatsapp:")
     channel_kind = "whatsapp" if is_whatsapp else "sms"
     if is_whatsapp:
-        channel = find_channel_by_kind_and_address("whatsapp", to_address)
+        channel = await find_channel_by_kind_and_address("whatsapp", to_address)
     else:
         to_e164 = (
             try_normalize_phone_number(to_address, settings.twilio_phone_country) or to_address
         )
-        channel = find_channel_by_kind_and_address("sms", to_e164) or find_channel_by_address(
-            to_e164
-        )
+        channel = await find_channel_by_kind_and_address(
+            "sms", to_e164
+        ) or await find_channel_by_address(to_e164)
     if not channel:
         logger.warning("Inbound %s message for unknown sender: %s", channel_kind, to_address)
         return Response(
@@ -154,14 +154,14 @@ async def twilio_whatsapp_webhook(request: Request):
 
     raw_contact_address = from_address.replace("whatsapp:", "")
     contact_number = try_normalize_phone_number(raw_contact_address, settings.twilio_phone_country)
-    contact = ensure_contact(
+    contact = await ensure_contact(
         user_id=channel["user_id"],
         kwami_id=channel["kwami_id"],
         phone_number=contact_number or raw_contact_address or from_address,
         display_name=payload.get("ProfileName"),
         whatsapp_address=from_address if is_whatsapp else None,
     )
-    conversation = ensure_conversation(
+    conversation = await ensure_conversation(
         user_id=channel["user_id"],
         kwami_id=channel["kwami_id"],
         channel_id=channel["id"],
@@ -173,7 +173,7 @@ async def twilio_whatsapp_webhook(request: Request):
             "channelKind": channel_kind,
         },
     )
-    create_message_event(
+    await create_message_event(
         conversation_id=conversation["id"],
         channel_id=channel["id"],
         contact_id=contact["id"],
@@ -189,7 +189,7 @@ async def twilio_whatsapp_webhook(request: Request):
         provider_payload=payload,
     )
 
-    kwami = get_owned_kwami(channel["user_id"], channel["kwami_id"])
+    kwami = await get_owned_kwami(channel["user_id"], channel["kwami_id"])
     if is_whatsapp:
         ack_text = (
             f"{kwami.get('name') or 'Kwami'} received your message. "
@@ -207,7 +207,7 @@ async def twilio_whatsapp_status_webhook(request: Request):
     payload = await _form_payload(request)
     await validate_twilio_request(request, payload)
     if payload.get("MessageSid"):
-        update_message_event_status(
+        await update_message_event_status(
             payload["MessageSid"],
             provider_status=payload.get("MessageStatus") or payload.get("SmsStatus") or "sent",
             error_code=payload.get("ErrorCode"),
@@ -269,7 +269,7 @@ async def sendgrid_inbound_email(request: Request):
 
     sendgrid_message_id = headers_dict.get("Message-ID") or headers_dict.get("Message-Id")
 
-    stored = process_inbound_email(
+    stored = await process_inbound_email(
         from_address=from_address,
         to_addresses=to_addresses,
         cc_addresses=_parse_address_list(cc_raw) or None,

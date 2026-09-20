@@ -10,6 +10,7 @@ import phonenumbers
 
 from src.core.errors import InvalidPhoneNumberError
 from src.services.credits import get_supabase_admin
+from src.services.idempotency import insert_or_existing
 
 logger = logging.getLogger("kwami-api.channels")
 
@@ -70,10 +71,10 @@ def _single(result: Any) -> dict[str, Any] | None:
     return data
 
 
-def get_owned_kwami(user_id: str, kwami_id: str) -> dict[str, Any]:
+async def get_owned_kwami(user_id: str, kwami_id: str) -> dict[str, Any]:
     sb = get_supabase_admin()
     result = (
-        sb.table("user_kwamis")
+        await sb.table("user_kwamis")
         .select("id, user_id, name, config, created_at, updated_at")
         .eq("id", kwami_id)
         .eq("user_id", user_id)
@@ -86,10 +87,10 @@ def get_owned_kwami(user_id: str, kwami_id: str) -> dict[str, Any]:
     return row
 
 
-def list_channels_for_kwami(user_id: str, kwami_id: str) -> list[dict[str, Any]]:
+async def list_channels_for_kwami(user_id: str, kwami_id: str) -> list[dict[str, Any]]:
     sb = get_supabase_admin()
     result = (
-        sb.table("kwami_channels")
+        await sb.table("kwami_channels")
         .select("*")
         .eq("user_id", user_id)
         .eq("kwami_id", kwami_id)
@@ -99,7 +100,7 @@ def list_channels_for_kwami(user_id: str, kwami_id: str) -> list[dict[str, Any]]
     return list(getattr(result, "data", None) or [])
 
 
-def list_channels_sharing_twilio_incoming(
+async def list_channels_sharing_twilio_incoming(
     user_id: str,
     kwami_id: str,
     twilio_incoming_sid: str,
@@ -107,7 +108,7 @@ def list_channels_sharing_twilio_incoming(
     """Voice + WhatsApp rows for the same Twilio IncomingPhoneNumber SID."""
     sb = get_supabase_admin()
     result = (
-        sb.table("kwami_channels")
+        await sb.table("kwami_channels")
         .select("*")
         .eq("user_id", user_id)
         .eq("kwami_id", kwami_id)
@@ -117,17 +118,19 @@ def list_channels_sharing_twilio_incoming(
     return list(getattr(result, "data", None) or [])
 
 
-def delete_kwami_channels(user_id: str, channel_ids: list[str]) -> None:
+async def delete_kwami_channels(user_id: str, channel_ids: list[str]) -> None:
     if not channel_ids:
         return
     sb = get_supabase_admin()
-    sb.table("kwami_channels").delete().eq("user_id", user_id).in_("id", channel_ids).execute()
+    await (
+        sb.table("kwami_channels").delete().eq("user_id", user_id).in_("id", channel_ids).execute()
+    )
 
 
-def get_channel(user_id: str, channel_id: str) -> dict[str, Any]:
+async def get_channel(user_id: str, channel_id: str) -> dict[str, Any]:
     sb = get_supabase_admin()
     result = (
-        sb.table("kwami_channels")
+        await sb.table("kwami_channels")
         .select("*")
         .eq("user_id", user_id)
         .eq("id", channel_id)
@@ -140,10 +143,10 @@ def get_channel(user_id: str, channel_id: str) -> dict[str, Any]:
     return row
 
 
-def get_channel_by_kind(user_id: str, kwami_id: str, kind: str) -> dict[str, Any] | None:
+async def get_channel_by_kind(user_id: str, kwami_id: str, kind: str) -> dict[str, Any] | None:
     sb = get_supabase_admin()
     result = (
-        sb.table("kwami_channels")
+        await sb.table("kwami_channels")
         .select("*")
         .eq("user_id", user_id)
         .eq("kwami_id", kwami_id)
@@ -155,7 +158,7 @@ def get_channel_by_kind(user_id: str, kwami_id: str, kind: str) -> dict[str, Any
     return _single(result)
 
 
-def upsert_channel(
+async def upsert_channel(
     *,
     user_id: str,
     kwami_id: str,
@@ -174,7 +177,7 @@ def upsert_channel(
 ) -> dict[str, Any]:
     sb = get_supabase_admin()
     existing = (
-        sb.table("kwami_channels")
+        await sb.table("kwami_channels")
         .select("*")
         .eq("user_id", user_id)
         .eq("kwami_id", kwami_id)
@@ -201,7 +204,7 @@ def upsert_channel(
     }
     if row:
         result = (
-            sb.table("kwami_channels")
+            await sb.table("kwami_channels")
             .update(payload)
             .eq("id", row["id"])
             .eq("user_id", user_id)
@@ -210,14 +213,14 @@ def upsert_channel(
         updated = _single(result)
         return updated or {**row, **payload}
 
-    result = sb.table("kwami_channels").insert(payload).execute()
+    result = await sb.table("kwami_channels").insert(payload).execute()
     created = _single(result)
     if not created:
         raise RuntimeError("Failed to create channel")
     return created
 
 
-def update_channel(
+async def update_channel(
     channel_id: str,
     *,
     user_id: str,
@@ -225,7 +228,7 @@ def update_channel(
 ) -> dict[str, Any]:
     sb = get_supabase_admin()
     result = (
-        sb.table("kwami_channels")
+        await sb.table("kwami_channels")
         .update(updates)
         .eq("id", channel_id)
         .eq("user_id", user_id)
@@ -237,21 +240,21 @@ def update_channel(
     return row
 
 
-def find_channel_by_address(address: str) -> dict[str, Any] | None:
+async def find_channel_by_address(address: str) -> dict[str, Any] | None:
     sb = get_supabase_admin()
     for field in ("phone_number", "provider_sender"):
-        result = sb.table("kwami_channels").select("*").eq(field, address).limit(1).execute()
+        result = await sb.table("kwami_channels").select("*").eq(field, address).limit(1).execute()
         row = _single(result)
         if row:
             return row
     return None
 
 
-def find_channel_by_kind_and_address(kind: str, address: str) -> dict[str, Any] | None:
+async def find_channel_by_kind_and_address(kind: str, address: str) -> dict[str, Any] | None:
     sb = get_supabase_admin()
     for field in ("provider_sender", "phone_number"):
         result = (
-            sb.table("kwami_channels")
+            await sb.table("kwami_channels")
             .select("*")
             .eq("kind", kind)
             .eq(field, address)
@@ -264,7 +267,7 @@ def find_channel_by_kind_and_address(kind: str, address: str) -> dict[str, Any] 
     return None
 
 
-def ensure_contact(
+async def ensure_contact(
     *,
     user_id: str,
     kwami_id: str,
@@ -275,7 +278,7 @@ def ensure_contact(
 ) -> dict[str, Any]:
     sb = get_supabase_admin()
     result = (
-        sb.table("kwami_contacts")
+        await sb.table("kwami_contacts")
         .select("*")
         .eq("user_id", user_id)
         .eq("kwami_id", kwami_id)
@@ -299,10 +302,10 @@ def ensure_contact(
             "whatsapp_address": whatsapp_address or row.get("whatsapp_address"),
             "metadata": merged_metadata,
         }
-        updated = sb.table("kwami_contacts").update(update).eq("id", row["id"]).execute()
+        updated = await sb.table("kwami_contacts").update(update).eq("id", row["id"]).execute()
         return _single(updated) or {**row, **update}
 
-    created = sb.table("kwami_contacts").insert(payload).execute()
+    created = await sb.table("kwami_contacts").insert(payload).execute()
     row = _single(created)
     if not row:
         raise RuntimeError("Failed to create contact")
@@ -329,10 +332,10 @@ def list_contacts_for_kwami(
     return list(getattr(result, "data", None) or [])
 
 
-def get_contact(user_id: str, contact_id: str) -> dict[str, Any]:
+async def get_contact(user_id: str, contact_id: str) -> dict[str, Any]:
     sb = get_supabase_admin()
     result = (
-        sb.table("kwami_contacts")
+        await sb.table("kwami_contacts")
         .select("*")
         .eq("id", contact_id)
         .eq("user_id", user_id)
@@ -345,7 +348,7 @@ def get_contact(user_id: str, contact_id: str) -> dict[str, Any]:
     return row
 
 
-def create_contact(
+async def create_contact(
     *,
     user_id: str,
     kwami_id: str,
@@ -369,14 +372,14 @@ def create_contact(
         "tiktok": tiktok,
         "metadata": metadata or {},
     }
-    created = sb.table("kwami_contacts").insert(payload).execute()
+    created = await sb.table("kwami_contacts").insert(payload).execute()
     row = _single(created)
     if not row:
         raise RuntimeError("Failed to create contact")
     return row
 
 
-def update_contact(
+async def update_contact(
     *,
     user_id: str,
     contact_id: str,
@@ -384,7 +387,7 @@ def update_contact(
 ) -> dict[str, Any]:
     sb = get_supabase_admin()
     result = (
-        sb.table("kwami_contacts")
+        await sb.table("kwami_contacts")
         .update(updates)
         .eq("id", contact_id)
         .eq("user_id", user_id)
@@ -396,12 +399,12 @@ def update_contact(
     return row
 
 
-def delete_contact(user_id: str, contact_id: str) -> None:
+async def delete_contact(user_id: str, contact_id: str) -> None:
     sb = get_supabase_admin()
-    sb.table("kwami_contacts").delete().eq("id", contact_id).eq("user_id", user_id).execute()
+    await sb.table("kwami_contacts").delete().eq("id", contact_id).eq("user_id", user_id).execute()
 
 
-def ensure_conversation(
+async def ensure_conversation(
     *,
     user_id: str,
     kwami_id: str,
@@ -442,27 +445,32 @@ def ensure_conversation(
             "external_thread_id": external_thread_id or row.get("external_thread_id"),
             "metadata": merged_metadata,
         }
-        updated = sb.table("kwami_conversations").update(update).eq("id", row["id"]).execute()
+        updated = await sb.table("kwami_conversations").update(update).eq("id", row["id"]).execute()
         return _single(updated) or {**row, **update}
 
-    created = sb.table("kwami_conversations").insert(payload).execute()
+    created = await sb.table("kwami_conversations").insert(payload).execute()
     row = _single(created)
     if not row:
         raise RuntimeError("Failed to create conversation")
     return row
 
 
-def touch_conversation(
+async def touch_conversation(
     conversation_id: str,
     *,
     direction: str,
 ) -> None:
     sb = get_supabase_admin()
     field = "last_inbound_at" if direction == "inbound" else "last_outbound_at"
-    sb.table("kwami_conversations").update({field: now_iso()}).eq("id", conversation_id).execute()
+    await (
+        sb.table("kwami_conversations")
+        .update({field: now_iso()})
+        .eq("id", conversation_id)
+        .execute()
+    )
 
 
-def create_call_event(
+async def create_call_event(
     *,
     conversation_id: str | None,
     channel_id: str,
@@ -480,7 +488,6 @@ def create_call_event(
     error_message: str | None = None,
     provider_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    sb = get_supabase_admin()
     payload = {
         "conversation_id": conversation_id,
         "channel_id": channel_id,
@@ -498,16 +505,18 @@ def create_call_event(
         "error_message": error_message,
         "provider_payload": provider_payload or {},
     }
-    created = sb.table("kwami_call_events").insert(payload).execute()
-    row = _single(created)
+    # Same for a redelivered CallSid.
+    row = await insert_or_existing(
+        "kwami_call_events", payload, conflict_column="provider_call_sid"
+    )
     if not row:
         raise RuntimeError("Failed to create call event")
     if conversation_id:
-        touch_conversation(conversation_id, direction=direction)
+        await touch_conversation(conversation_id, direction=direction)
     return row
 
 
-def update_call_event_status(
+async def update_call_event_status(
     provider_call_sid: str,
     *,
     status: str,
@@ -526,12 +535,15 @@ def update_call_event_status(
         updates["error_message"] = error_message
     if provider_payload is not None:
         updates["provider_payload"] = provider_payload
-    sb.table("kwami_call_events").update(updates).eq(
-        "provider_call_sid", provider_call_sid
-    ).execute()
+    await (
+        sb.table("kwami_call_events")
+        .update(updates)
+        .eq("provider_call_sid", provider_call_sid)
+        .execute()
+    )
 
 
-def create_message_event(
+async def create_message_event(
     *,
     conversation_id: str | None,
     channel_id: str,
@@ -549,7 +561,6 @@ def create_message_event(
     requires_followup: bool = False,
     provider_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    sb = get_supabase_admin()
     payload = {
         "conversation_id": conversation_id,
         "channel_id": channel_id,
@@ -567,16 +578,19 @@ def create_message_event(
         "requires_followup": requires_followup,
         "provider_payload": provider_payload or {},
     }
-    created = sb.table("kwami_message_events").insert(payload).execute()
-    row = _single(created)
+    # A Twilio redelivery carries the same MessageSid, which the partial unique
+    # index refuses. Returning the stored row keeps the retry a 2xx no-op.
+    row = await insert_or_existing(
+        "kwami_message_events", payload, conflict_column="provider_message_sid"
+    )
     if not row:
         raise RuntimeError("Failed to create message event")
     if conversation_id:
-        touch_conversation(conversation_id, direction=direction)
+        await touch_conversation(conversation_id, direction=direction)
     return row
 
 
-def update_message_event_status(
+async def update_message_event_status(
     provider_message_sid: str,
     *,
     provider_status: str,
@@ -592,15 +606,18 @@ def update_message_event_status(
         updates["error_message"] = error_message
     if provider_payload is not None:
         updates["provider_payload"] = provider_payload
-    sb.table("kwami_message_events").update(updates).eq(
-        "provider_message_sid", provider_message_sid
-    ).execute()
+    await (
+        sb.table("kwami_message_events")
+        .update(updates)
+        .eq("provider_message_sid", provider_message_sid)
+        .execute()
+    )
 
 
-def recent_events_for_kwami(user_id: str, kwami_id: str) -> dict[str, list[dict[str, Any]]]:
+async def recent_events_for_kwami(user_id: str, kwami_id: str) -> dict[str, list[dict[str, Any]]]:
     sb = get_supabase_admin()
     calls = (
-        sb.table("kwami_call_events")
+        await sb.table("kwami_call_events")
         .select("*")
         .eq("user_id", user_id)
         .eq("kwami_id", kwami_id)
@@ -609,7 +626,7 @@ def recent_events_for_kwami(user_id: str, kwami_id: str) -> dict[str, list[dict[
         .execute()
     )
     messages = (
-        sb.table("kwami_message_events")
+        await sb.table("kwami_message_events")
         .select("*")
         .eq("user_id", user_id)
         .eq("kwami_id", kwami_id)

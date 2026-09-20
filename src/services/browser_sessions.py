@@ -86,13 +86,13 @@ def _as_user_id(owner_key: str) -> str | None:
         return None
 
 
-def get_browser_context(owner_key: str, vendor: str) -> str | None:
+async def get_browser_context(owner_key: str, vendor: str) -> str | None:
     """The stored vendor handle for this owner, or None."""
     owner, normalized_vendor = _validate(owner_key, vendor)
 
     sb = get_supabase_admin()
     result = (
-        sb.table(TABLE)
+        await sb.table(TABLE)
         .select("context_id")
         .eq("owner_key", owner)
         .eq("vendor", normalized_vendor)
@@ -103,7 +103,7 @@ def get_browser_context(owner_key: str, vendor: str) -> str | None:
     return (row or {}).get("context_id") or None
 
 
-def save_browser_context(owner_key: str, vendor: str, context_id: str) -> dict[str, Any]:
+async def save_browser_context(owner_key: str, vendor: str, context_id: str) -> dict[str, Any]:
     """Record the vendor handle for this owner, replacing any previous one.
 
     Upserted on (owner_key, vendor) rather than inserted: two sessions starting
@@ -134,7 +134,7 @@ def save_browser_context(owner_key: str, vendor: str, context_id: str) -> dict[s
         payload["user_id"] = user_id
 
     sb = get_supabase_admin()
-    result = sb.table(TABLE).upsert(payload, on_conflict="owner_key,vendor").execute()
+    result = await sb.table(TABLE).upsert(payload, on_conflict="owner_key,vendor").execute()
     row = _single(result) or payload
     logger.info("Saved %s browser context for owner %s...", normalized_vendor, owner[:8])
     return row

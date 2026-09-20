@@ -47,7 +47,7 @@ async def get_events(
     range_end: str = Query(...),
 ):
     try:
-        events = calendar_service.list_events(user.id, kwami_id, range_start, range_end)
+        events = await calendar_service.list_events(user.id, kwami_id, range_start, range_end)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"events": events}
@@ -59,7 +59,7 @@ async def create_event(
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
     try:
-        event = calendar_service.create_event(
+        event = await calendar_service.create_event(
             user.id,
             body.kwami_id,
             title=body.title,
@@ -84,7 +84,7 @@ async def patch_event(
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
     try:
-        event = calendar_service.update_event(
+        event = await calendar_service.update_event(
             user.id,
             event_id,
             title=body.title,
@@ -109,7 +109,7 @@ async def remove_event(
     event_id: str,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
-    deleted = calendar_service.delete_event(user.id, event_id)
+    deleted = await calendar_service.delete_event(user.id, event_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Event not found")
     return {"ok": True}

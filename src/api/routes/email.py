@@ -73,7 +73,7 @@ async def check_username(
     err = email_service.validate_username(body.username)
     if err:
         return CheckUsernameResponse(available=False, error=err)
-    available = email_service.check_username_available(body.username)
+    available = await email_service.check_username_available(body.username)
     return CheckUsernameResponse(available=available)
 
 
@@ -83,7 +83,7 @@ async def activate_email(
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
     try:
-        account = email_service.activate_account(
+        account = await email_service.activate_account(
             user_id=user.id,
             kwami_id=body.kwami_id,
             username=body.username,
@@ -103,7 +103,7 @@ async def get_account(
     user: Annotated[AuthUser, Depends(require_auth)],
     kwami_id: str = Query(...),
 ):
-    account = email_service.get_account(user.id, kwami_id)
+    account = await email_service.get_account(user.id, kwami_id)
     if not account:
         return {"account": None}
     return {
@@ -121,7 +121,7 @@ async def deactivate_account(
     user: Annotated[AuthUser, Depends(require_auth)],
     kwami_id: str = Query(...),
 ):
-    removed = email_service.deactivate_account(user.id, kwami_id)
+    removed = await email_service.deactivate_account(user.id, kwami_id)
     if not removed:
         raise HTTPException(status_code=404, detail="No email account found")
     return {"ok": True}
@@ -150,7 +150,7 @@ async def get_unread_counts(
     user: Annotated[AuthUser, Depends(require_auth)],
     kwami_id: str = Query(...),
 ):
-    counts = email_service.get_unread_counts(user.id, kwami_id)
+    counts = await email_service.get_unread_counts(user.id, kwami_id)
     return {"counts": counts}
 
 
@@ -159,7 +159,7 @@ async def get_message(
     message_id: str,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
-    msg = email_service.get_message(user.id, message_id)
+    msg = await email_service.get_message(user.id, message_id)
     if not msg:
         raise HTTPException(status_code=404, detail="Message not found")
     return {"message": msg}
@@ -179,7 +179,7 @@ async def update_message(
     if body.is_archived is not None:
         fields["is_archived"] = body.is_archived
 
-    msg = email_service.update_message(user.id, message_id, **fields)
+    msg = await email_service.update_message(user.id, message_id, **fields)
     if not msg:
         raise HTTPException(status_code=404, detail="Message not found")
     return {"message": msg}
@@ -193,7 +193,7 @@ async def send_email_route(
     if not settings.email_enabled:
         raise HTTPException(status_code=503, detail="Email sending is not configured")
 
-    account = email_service.get_account(user.id, body.kwami_id)
+    account = await email_service.get_account(user.id, body.kwami_id)
     if not account:
         raise HTTPException(status_code=400, detail="Email account not activated")
 
@@ -206,7 +206,7 @@ async def send_email_route(
         cc_addresses=body.cc_addresses or None,
     )
 
-    stored = email_service.store_outbound_email(
+    stored = await email_service.store_outbound_email(
         account=account,
         to_addresses=body.to_addresses,
         cc_addresses=body.cc_addresses,

@@ -616,7 +616,7 @@ async def create_provider_usage_import(
 ) -> str:
     sb = get_supabase_admin()
     result = (
-        sb.table("provider_usage_imports")
+        await sb.table("provider_usage_imports")
         .insert(
             {
                 "provider": _normalize_provider(provider),
@@ -646,14 +646,19 @@ async def finalize_provider_usage_import(
     error: str | None = None,
 ) -> None:
     sb = get_supabase_admin()
-    sb.table("provider_usage_imports").update(
-        {
-            "status": status,
-            "summary": summary or {},
-            "raw_payload": raw_payload or {},
-            "error": error,
-        }
-    ).eq("id", import_id).execute()
+    await (
+        sb.table("provider_usage_imports")
+        .update(
+            {
+                "status": status,
+                "summary": summary or {},
+                "raw_payload": raw_payload or {},
+                "error": error,
+            }
+        )
+        .eq("id", import_id)
+        .execute()
+    )
 
 
 async def insert_provider_usage_lines(import_id: str, lines: list[ProviderUsageLine]) -> None:
@@ -661,7 +666,7 @@ async def insert_provider_usage_lines(import_id: str, lines: list[ProviderUsageL
         return
     sb = get_supabase_admin()
     payload = [_serialize_line(line, import_id) for line in lines]
-    sb.table("provider_usage_lines").insert(payload).execute()
+    await sb.table("provider_usage_lines").insert(payload).execute()
 
 
 async def import_provider_usage_manual(
@@ -771,11 +776,13 @@ async def list_provider_usage_imports(
 
 async def get_provider_usage_import(import_id: str) -> dict[str, Any]:
     sb = get_supabase_admin()
-    import_result = sb.table("provider_usage_imports").select("*").eq("id", import_id).execute()
+    import_result = (
+        await sb.table("provider_usage_imports").select("*").eq("id", import_id).execute()
+    )
     if not import_result.data:
         raise ValueError("Provider import not found")
     line_result = (
-        sb.table("provider_usage_lines")
+        await sb.table("provider_usage_lines")
         .select("*")
         .eq("import_id", import_id)
         .order("created_at", desc=True)
@@ -968,7 +975,7 @@ async def create_reconciliation_run(
 ) -> str:
     sb = get_supabase_admin()
     result = (
-        sb.table("provider_reconciliation_runs")
+        await sb.table("provider_reconciliation_runs")
         .insert(
             {
                 "trigger_mode": trigger_mode,
@@ -995,13 +1002,18 @@ async def finalize_reconciliation_run(
     error: str | None = None,
 ) -> None:
     sb = get_supabase_admin()
-    sb.table("provider_reconciliation_runs").update(
-        {
-            "status": status,
-            "summary": summary or {},
-            "error": error,
-        }
-    ).eq("id", run_id).execute()
+    await (
+        sb.table("provider_reconciliation_runs")
+        .update(
+            {
+                "status": status,
+                "summary": summary or {},
+                "error": error,
+            }
+        )
+        .eq("id", run_id)
+        .execute()
+    )
 
 
 async def replace_reconciliation_findings(
@@ -1009,7 +1021,7 @@ async def replace_reconciliation_findings(
     findings: list[dict[str, Any]],
 ) -> None:
     sb = get_supabase_admin()
-    sb.table("provider_reconciliation_findings").delete().eq("run_id", run_id).execute()
+    await sb.table("provider_reconciliation_findings").delete().eq("run_id", run_id).execute()
     if findings:
         payload = [
             {
@@ -1028,7 +1040,7 @@ async def replace_reconciliation_findings(
             }
             for finding in findings
         ]
-        sb.table("provider_reconciliation_findings").insert(payload).execute()
+        await sb.table("provider_reconciliation_findings").insert(payload).execute()
 
 
 async def list_reconciliation_runs(limit: int = 25) -> list[dict[str, Any]]:
@@ -1038,11 +1050,13 @@ async def list_reconciliation_runs(limit: int = 25) -> list[dict[str, Any]]:
 
 async def get_reconciliation_run(run_id: str) -> dict[str, Any]:
     sb = get_supabase_admin()
-    run_result = sb.table("provider_reconciliation_runs").select("*").eq("id", run_id).execute()
+    run_result = (
+        await sb.table("provider_reconciliation_runs").select("*").eq("id", run_id).execute()
+    )
     if not run_result.data:
         raise ValueError("Reconciliation run not found")
     findings_result = (
-        sb.table("provider_reconciliation_findings")
+        await sb.table("provider_reconciliation_findings")
         .select("*")
         .eq("run_id", run_id)
         .order("created_at", desc=True)

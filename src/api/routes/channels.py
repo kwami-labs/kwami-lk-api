@@ -97,15 +97,15 @@ async def get_kwami_channels(
     kwami_id: str,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
-    kwami = get_owned_kwami(user.id, kwami_id)
+    kwami = await get_owned_kwami(user.id, kwami_id)
     return {
         "kwami": {
             "id": kwami["id"],
             "name": kwami.get("name") or "Kwami",
             "runtimeConfig": build_agent_bootstrap_payload(kwami),
         },
-        "channels": list_channels_for_kwami(user.id, kwami_id),
-        "events": recent_events_for_kwami(user.id, kwami_id),
+        "channels": await list_channels_for_kwami(user.id, kwami_id),
+        "events": await recent_events_for_kwami(user.id, kwami_id),
     }
 
 
@@ -118,7 +118,7 @@ async def search_phone_numbers(
     contains: Annotated[str | None, Query(alias="contains")] = None,
     limit: Annotated[int, Query(ge=1, le=20)] = 10,
 ):
-    get_owned_kwami(user.id, kwami_id)
+    await get_owned_kwami(user.id, kwami_id)
     return NumberSearchResponse(
         results=search_available_numbers(
             country_code=country_code,
@@ -134,7 +134,7 @@ async def purchase_kwami_phone_number(
     request: PhonePurchaseRequest,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
-    kwami = get_owned_kwami(user.id, request.kwami_id)
+    kwami = await get_owned_kwami(user.id, request.kwami_id)
     phone_number = normalize_phone_number(request.phone_number, request.country_code)
 
     purchase = purchase_phone_number(
@@ -167,7 +167,7 @@ async def purchase_kwami_phone_number(
             shared_infra_sync = {"error": str(exc), "strategy": "shared_trunks"}
             logger.warning("Failed to sync purchased number to shared LiveKit trunks: %s", exc)
 
-    voice_channel = upsert_channel(
+    voice_channel = await upsert_channel(
         user_id=user.id,
         kwami_id=request.kwami_id,
         kind="voice_phone",
@@ -183,7 +183,7 @@ async def purchase_kwami_phone_number(
         provider_channel_sid=str(purchase.get("sid") or ""),
         livekit_outbound_trunk_id=settings.livekit_sip_outbound_trunk_id,
     )
-    whatsapp_channel = upsert_channel(
+    whatsapp_channel = await upsert_channel(
         user_id=user.id,
         kwami_id=request.kwami_id,
         kind="whatsapp",
@@ -203,7 +203,7 @@ async def purchase_kwami_phone_number(
         provider_sender=f"whatsapp:{phone_number}",
         livekit_outbound_trunk_id=settings.livekit_sip_outbound_trunk_id,
     )
-    sms_channel = upsert_channel(
+    sms_channel = await upsert_channel(
         user_id=user.id,
         kwami_id=request.kwami_id,
         kind="sms",
@@ -238,11 +238,11 @@ async def release_kwami_phone_number(
 ):
     """Drop voice + WhatsApp channel rows and optionally release the Twilio number and shared trunk state."""
     try:
-        get_owned_kwami(user.id, request.kwami_id)
+        await get_owned_kwami(user.id, request.kwami_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     try:
-        anchor = get_channel(user.id, request.channel_id)
+        anchor = await get_channel(user.id, request.channel_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Channel not found") from exc
 
@@ -251,7 +251,7 @@ async def release_kwami_phone_number(
 
     incoming_sid = (anchor.get("provider_channel_sid") or "").strip()
     rows = (
-        list_channels_sharing_twilio_incoming(user.id, request.kwami_id, incoming_sid)
+        await list_channels_sharing_twilio_incoming(user.id, request.kwami_id, incoming_sid)
         if incoming_sid
         else [anchor]
     )
@@ -295,7 +295,7 @@ async def release_kwami_phone_number(
                     detail=f"Could not release phone number in Twilio: {err_t[1] or exc}",
                 ) from exc
 
-    delete_kwami_channels(user.id, channel_ids)
+    await delete_kwami_channels(user.id, channel_ids)
     return {
         "ok": True,
         "removedChannelIds": channel_ids,
@@ -308,10 +308,10 @@ async def configure_whatsapp_channel(
     request: ChannelUpdateRequest,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
-    channel = get_channel(user.id, request.channel_id)
+    channel = await get_channel(user.id, request.channel_id)
     if channel["kind"] != "whatsapp":
         raise HTTPException(status_code=400, detail="Channel is not a WhatsApp sender")
-    updated = update_channel(
+    updated = await update_channel(
         channel["id"],
         user_id=user.id,
         updates={
@@ -328,25 +328,25 @@ async def start_outbound_call(
     request: OutboundCallRequest,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
-    kwami = get_owned_kwami(user.id, request.kwami_id)
+    kwami = await get_owned_kwami(user.id, request.kwami_id)
     try:
         to_number = normalize_phone_number(request.to_number, settings.twilio_phone_country)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     channel = (
-        get_channel(user.id, request.channel_id)
+        await get_channel(user.id, request.channel_id)
         if request.channel_id
-        else get_channel_by_kind(user.id, request.kwami_id, "voice_phone")
+        else await get_channel_by_kind(user.id, request.kwami_id, "voice_phone")
     )
     if not channel:
         raise HTTPException(status_code=404, detail="No phone channel configured for this kwami")
 
-    contact = ensure_contact(
+    contact = await ensure_contact(
         user_id=user.id,
         kwami_id=request.kwami_id,
         phone_number=to_number,
     )
-    conversation = ensure_conversation(
+    conversation = await ensure_conversation(
         user_id=user.id,
         kwami_id=request.kwami_id,
         channel_id=channel["id"],
@@ -363,7 +363,7 @@ async def start_outbound_call(
             participant_name=kwami.get("name") or "Kwami",
             wait_until_answered=request.wait_until_answered,
         )
-        event = create_call_event(
+        event = await create_call_event(
             conversation_id=conversation["id"],
             channel_id=channel["id"],
             user_id=user.id,
@@ -384,7 +384,7 @@ async def start_outbound_call(
         raise
     except Exception as exc:
         error_code, error_message = extract_twilio_error(exc)
-        create_call_event(
+        await create_call_event(
             conversation_id=conversation["id"],
             channel_id=channel["id"],
             user_id=user.id,
@@ -411,25 +411,25 @@ async def start_twilio_direct_test_call(
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
     """Place an outbound call using Twilio Voice REST only (no LiveKit room or agent)."""
-    get_owned_kwami(user.id, request.kwami_id)
+    await get_owned_kwami(user.id, request.kwami_id)
     try:
         to_number = normalize_phone_number(request.to_number, settings.twilio_phone_country)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     channel = (
-        get_channel(user.id, request.channel_id)
+        await get_channel(user.id, request.channel_id)
         if request.channel_id
-        else get_channel_by_kind(user.id, request.kwami_id, "voice_phone")
+        else await get_channel_by_kind(user.id, request.kwami_id, "voice_phone")
     )
     if not channel:
         raise HTTPException(status_code=404, detail="No phone channel configured for this kwami")
 
-    contact = ensure_contact(
+    contact = await ensure_contact(
         user_id=user.id,
         kwami_id=request.kwami_id,
         phone_number=to_number,
     )
-    conversation = ensure_conversation(
+    conversation = await ensure_conversation(
         user_id=user.id,
         kwami_id=request.kwami_id,
         channel_id=channel["id"],
@@ -443,7 +443,7 @@ async def start_twilio_direct_test_call(
             to_e164=to_number,
             from_e164=channel["phone_number"],
         )
-        event = create_call_event(
+        event = await create_call_event(
             conversation_id=conversation["id"],
             channel_id=channel["id"],
             user_id=user.id,
@@ -464,7 +464,7 @@ async def start_twilio_direct_test_call(
         raise
     except Exception as exc:
         error_code, error_message = extract_twilio_error(exc)
-        create_call_event(
+        await create_call_event(
             conversation_id=conversation["id"],
             channel_id=channel["id"],
             user_id=user.id,
@@ -496,16 +496,16 @@ async def send_outbound_message(
     if not request.body.strip():
         raise HTTPException(status_code=400, detail="Message body is required")
 
-    get_owned_kwami(user.id, request.kwami_id)
+    await get_owned_kwami(user.id, request.kwami_id)
     to_number = normalize_phone_number(request.to_number, settings.twilio_phone_country)
     channel_kind = (request.channel_kind or "whatsapp").strip().lower()
     if channel_kind not in {"whatsapp", "sms"}:
         raise HTTPException(status_code=400, detail="channelKind must be 'whatsapp' or 'sms'")
 
     channel = (
-        get_channel(user.id, request.channel_id)
+        await get_channel(user.id, request.channel_id)
         if request.channel_id
-        else get_channel_by_kind(user.id, request.kwami_id, channel_kind)
+        else await get_channel_by_kind(user.id, request.kwami_id, channel_kind)
     )
     if not channel:
         if channel_kind == "sms":
@@ -534,13 +534,13 @@ async def send_outbound_message(
             detail="WhatsApp sender is not ready. Complete Twilio/Meta setup first.",
         )
 
-    contact = ensure_contact(
+    contact = await ensure_contact(
         user_id=user.id,
         kwami_id=request.kwami_id,
         phone_number=to_number,
         whatsapp_address=f"whatsapp:{to_number}" if channel_kind == "whatsapp" else None,
     )
-    conversation = ensure_conversation(
+    conversation = await ensure_conversation(
         user_id=user.id,
         kwami_id=request.kwami_id,
         channel_id=channel["id"],
@@ -562,7 +562,7 @@ async def send_outbound_message(
                 to_address=to_address,
                 body=request.body.strip(),
             )
-        event = create_message_event(
+        event = await create_message_event(
             conversation_id=conversation["id"],
             channel_id=channel["id"],
             contact_id=contact["id"],
@@ -577,7 +577,7 @@ async def send_outbound_message(
         )
     except Exception as exc:
         error_code, error_message = extract_twilio_error(exc)
-        create_message_event(
+        await create_message_event(
             conversation_id=conversation["id"],
             channel_id=channel["id"],
             contact_id=contact["id"],

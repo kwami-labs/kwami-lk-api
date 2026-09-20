@@ -38,7 +38,7 @@ async def get_kwami_runtime_config(
 
         sb = get_supabase_admin()
         result = (
-            sb.table("user_kwamis")
+            await sb.table("user_kwamis")
             .select("id, user_id, name, config")
             .eq("id", kwami_id)
             .limit(1)
@@ -62,7 +62,7 @@ async def get_channel_by_address(
     address: str,
     _: Annotated[None, Depends(require_internal_api_key)],
 ):
-    channel = find_channel_by_address(address)
+    channel = await find_channel_by_address(address)
     if not channel:
         raise HTTPException(status_code=404, detail="Channel not found")
     return {"channel": channel}
@@ -90,7 +90,7 @@ async def get_browser_context_route(
 ):
     """The stored browser profile handle for this owner, or 404."""
     try:
-        context_id = get_browser_context(owner_key, vendor)
+        context_id = await get_browser_context(owner_key, vendor)
     except UnsupportedVendorError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ValueError as exc:
@@ -113,7 +113,7 @@ async def save_browser_context_route(
 ):
     """Record the browser profile handle so the next session reuses it."""
     try:
-        save_browser_context(owner_key, payload.vendor, payload.context_id)
+        await save_browser_context(owner_key, payload.vendor, payload.context_id)
     except UnsupportedVendorError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ValueError as exc:

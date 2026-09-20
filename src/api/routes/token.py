@@ -102,14 +102,14 @@ async def generate_token(
     # request body, so it must be proven to belong to the caller -- previously it
     # was passed straight through, letting any user run another user's kwami.
     if request.kwami_id:
-        require_kwami_owned(user.id, request.kwami_id)
+        await require_kwami_owned(user.id, request.kwami_id)
 
     # Derive the room when the client does not name one; otherwise bind the
     # requested name to this user. `claim_room` raises 403 if the room was already
     # issued to somebody else, which is what stops a caller joining another
     # tenant's live session by naming their room.
     room_name = request.room_name or build_room_name(request.kwami_id)
-    claim_room(room_name, user_id=user.id, kwami_id=request.kwami_id, source="web")
+    await claim_room(room_name, user_id=user.id, kwami_id=request.kwami_id, source="web")
 
     logger.info(f"📥 Token request: room={room_name}, user={user.id}")
 
