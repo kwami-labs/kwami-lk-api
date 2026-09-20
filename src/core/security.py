@@ -47,6 +47,21 @@ class AdminPrincipal:
     email: str | None = None
 
 
+# The algorithms Supabase actually signs with. Fixed here rather than read from the
+# token, because `alg` is a field the caller controls: taking it from the header means
+# the token nominates the scheme used to check it. PyJWT's key-type guards happen to
+# refuse the classic confusions today (an RSA public key cannot be an HMAC secret, and
+# `none` rejects a non-empty key), so this was not exploitable as written -- but the
+# defence belonged to PyJWT's internals rather than to this function, and the next
+# version of that library is not required to keep it.
+ALLOWED_ALGORITHMS = ["RS256", "ES256"]
+
+# Claims a Supabase access token always carries. Requiring them explicitly closes the
+# case where a token simply omits `exp`: PyJWT validates an expiry it finds, and skips
+# the check entirely when the claim is absent.
+REQUIRED_CLAIMS = ["exp", "sub", "aud"]
+
+
 async def verify_token(token: str) -> dict:
     """Verify a Supabase JWT using JWKS (asymmetric key verification).
 
@@ -65,19 +80,17 @@ async def verify_token(token: str) -> dict:
             "JWKS not configured. Set SUPABASE_URL to enable authentication."
         )
 
-    # Read algorithm from token header
-    try:
-        header = jwt.get_unverified_header(token)
-        alg = header.get("alg", "RS256")
-    except Exception:
-        alg = "RS256"
-
     signing_key = jwks_client.get_signing_key_from_jwt(token)
     return jwt.decode(
         token,
         signing_key.key,
-        algorithms=[alg],
+        algorithms=ALLOWED_ALGORITHMS,
         audience="authenticated",
+        # The key already comes from this project's JWKS, so a token from another
+        # project cannot verify. Checking the issuer as well makes that explicit
+        # rather than incidental to where the key was fetched from.
+        issuer=settings.supabase_issuer,
+        options={"require": REQUIRED_CLAIMS},
     )
 
 

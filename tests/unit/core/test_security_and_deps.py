@@ -8,10 +8,12 @@ The rejecting arms are the point of the module, so they are what these cover.
 from __future__ import annotations
 
 import hmac
+import time
 from typing import Any
 
 import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 
@@ -71,7 +73,9 @@ class TestVerifyToken:
             await verify_token("anything")
 
     @pytest.mark.anyio
-    async def test_it_decodes_with_the_algorithm_from_the_token_header(self, monkeypatch):
+    async def test_the_algorithm_is_fixed_not_read_from_the_token(self, monkeypatch):
+        """`alg` used to be read from the token header and passed to `jwt.decode`,
+        which let the token nominate the scheme used to check it."""
         seen: dict[str, Any] = {}
 
         class FakeKey:
@@ -83,71 +87,124 @@ class TestVerifyToken:
                 return FakeKey()
 
         monkeypatch.setattr(security, "get_jwks_client", lambda: FakeClient())
-        monkeypatch.setattr(security.jwt, "get_unverified_header", lambda t: {"alg": "ES256"})
         monkeypatch.setattr(
             security.jwt,
             "decode",
-            lambda token, key, algorithms, audience: (
-                seen.update(algorithms=algorithms, audience=audience, key=key) or {"sub": "u1"}
-            ),
+            lambda token, key, **kwargs: seen.update(kwargs, key=key) or {"sub": "u1"},
         )
 
         assert await verify_token("tok") == {"sub": "u1"}
-        assert seen["algorithms"] == ["ES256"]
+        assert seen["algorithms"] == security.ALLOWED_ALGORITHMS
+        assert seen["algorithms"] == ["RS256", "ES256"]
         assert seen["audience"] == "authenticated"
+        assert seen["options"] == {"require": security.REQUIRED_CLAIMS}
         assert seen["token"] == "tok"
 
     @pytest.mark.anyio
-    async def test_an_unreadable_header_falls_back_to_rs256(self, monkeypatch):
-        """A malformed header must not crash before the signature is even checked."""
+    async def test_the_issuer_is_checked(self, monkeypatch):
         seen: dict[str, Any] = {}
-
-        class FakeKey:
-            key = "k"
 
         class FakeClient:
             def get_signing_key_from_jwt(self, token):
-                return FakeKey()
-
-        def boom(_):
-            raise ValueError("not a jwt")
+                return type("K", (), {"key": "k"})()
 
         monkeypatch.setattr(security, "get_jwks_client", lambda: FakeClient())
-        monkeypatch.setattr(security.jwt, "get_unverified_header", boom)
         monkeypatch.setattr(
-            security.jwt,
-            "decode",
-            lambda token, key, algorithms, audience: (
-                seen.update(algorithms=algorithms) or {"sub": "u"}
-            ),
+            security.settings, "supabase_url", "https://proj.supabase.co", raising=False
         )
-
-        await verify_token("garbage")
-        assert seen["algorithms"] == ["RS256"]
-
-    @pytest.mark.anyio
-    async def test_a_header_without_an_alg_defaults_to_rs256(self, monkeypatch):
-        seen: dict[str, Any] = {}
-
-        class FakeKey:
-            key = "k"
-
-        class FakeClient:
-            def get_signing_key_from_jwt(self, token):
-                return FakeKey()
-
-        monkeypatch.setattr(security, "get_jwks_client", lambda: FakeClient())
-        monkeypatch.setattr(security.jwt, "get_unverified_header", lambda t: {})
         monkeypatch.setattr(
-            security.jwt,
-            "decode",
-            lambda token, key, algorithms, audience: (
-                seen.update(algorithms=algorithms) or {"sub": "u"}
-            ),
+            security.jwt, "decode", lambda token, key, **kw: seen.update(kw) or {"sub": "u"}
         )
 
         await verify_token("tok")
-        assert seen["algorithms"] == ["RS256"]
+        assert seen["issuer"] == "https://proj.supabase.co/auth/v1"
+
+
+class TestVerifyTokenAgainstRealKeys:
+    """The same checks against real RSA signatures rather than a patched `jwt.decode`.
+
+    Patching `decode` proves which arguments are passed; it cannot prove the token is
+    actually rejected. These sign real tokens and run the real verification.
+    """
+
+    ISSUER = "https://proj.supabase.co/auth/v1"
+
+    @pytest.fixture
+    def rsa_key(self):
+        return rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+    @pytest.fixture
+    def signing(self, monkeypatch, rsa_key):
+        """Point `verify_token` at a JWKS client holding this key's public half."""
+        public_key = rsa_key.public_key()
+
+        class FakeClient:
+            def get_signing_key_from_jwt(self, token):
+                return type("K", (), {"key": public_key})()
+
+        monkeypatch.setattr(security, "get_jwks_client", lambda: FakeClient())
+        monkeypatch.setattr(
+            security.settings, "supabase_url", "https://proj.supabase.co", raising=False
+        )
+
+    @staticmethod
+    def _claims(**overrides) -> dict[str, Any]:
+        now = int(time.time())
+        return {
+            "sub": "user-1",
+            "aud": "authenticated",
+            "iss": TestVerifyTokenAgainstRealKeys.ISSUER,
+            "exp": now + 3600,
+            "iat": now,
+            **overrides,
+        }
+
+    @pytest.mark.anyio
+    async def test_a_well_formed_token_verifies(self, signing, rsa_key):
+        token = jwt.encode(self._claims(), rsa_key, algorithm="RS256")
+        assert (await verify_token(token))["sub"] == "user-1"
+
+    @pytest.mark.anyio
+    async def test_a_token_with_no_expiry_is_refused(self, signing, rsa_key):
+        """PyJWT validates an `exp` it finds and skips the check when absent, so a
+        token that simply omits the claim never expires."""
+        claims = self._claims()
+        del claims["exp"]
+        token = jwt.encode(claims, rsa_key, algorithm="RS256")
+        with pytest.raises(jwt.MissingRequiredClaimError):
+            await verify_token(token)
+
+    @pytest.mark.anyio
+    async def test_an_expired_token_is_refused(self, signing, rsa_key):
+        token = jwt.encode(self._claims(exp=int(time.time()) - 1), rsa_key, algorithm="RS256")
+        with pytest.raises(jwt.ExpiredSignatureError):
+            await verify_token(token)
+
+    @pytest.mark.anyio
+    async def test_a_token_from_another_project_is_refused(self, signing, rsa_key):
+        token = jwt.encode(self._claims(iss="https://evil.supabase.co/auth/v1"), rsa_key, "RS256")
+        with pytest.raises(jwt.InvalidIssuerError):
+            await verify_token(token)
+
+    @pytest.mark.anyio
+    async def test_the_wrong_audience_is_refused(self, signing, rsa_key):
+        token = jwt.encode(self._claims(aud="anon"), rsa_key, algorithm="RS256")
+        with pytest.raises(jwt.InvalidAudienceError):
+            await verify_token(token)
+
+    @pytest.mark.anyio
+    async def test_an_hs256_token_is_refused(self, signing):
+        """Algorithm confusion: sign with HMAC and hope the RSA public key is used as
+        the shared secret. Refused because the allow-list is asymmetric-only."""
+        token = jwt.encode(self._claims(), "a" * 32, algorithm="HS256")
+        with pytest.raises(jwt.InvalidAlgorithmError):
+            await verify_token(token)
+
+    @pytest.mark.anyio
+    async def test_an_unsigned_token_is_refused(self, signing):
+        token = jwt.encode(self._claims(), key="", algorithm="none")
+        with pytest.raises(jwt.InvalidAlgorithmError):
+            await verify_token(token)
 
 
 class TestAuthUser:
