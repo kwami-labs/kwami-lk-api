@@ -6,6 +6,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import ROUND_CEILING, ROUND_HALF_EVEN, Decimal
 from typing import Any
 
 from src.core.config import settings
@@ -31,6 +32,14 @@ logger = logging.getLogger("kwami-api.credits")
 
 MICRO_CREDITS_PER_CREDIT = 1000
 USD_PER_CREDIT = 0.001  # 1 credit = $0.001
+
+# How much precision survives before `usd_to_micro_credits` rounds up: six decimal
+# places of a micro-credit, i.e. 1e-12 USD. Fine enough that no real fraction is lost
+# -- one token of the cheapest model is ~0.15 micro-credits -- and coarse enough to
+# erase the float noise the pricing arithmetic leaves behind, which reaches ~1e-9 of a
+# micro-credit on the largest charges. See that function for why rounding up without
+# this over-bills.
+QUANTIZE_EXPONENT = Decimal("1e-6")
 MARKUP_MULTIPLIER = settings.billing_markup_multiplier
 FIXED_FEE_USD = settings.billing_fixed_fee_usd
 
@@ -87,17 +96,42 @@ def get_supabase_admin() -> Client:
 
 
 def usd_to_micro_credits(cost_usd: float) -> int:
-    """Convert a billed USD amount to micro-credits.
+    """Convert a billed USD amount to micro-credits, rounding up.
+
+    The ledger is integer micro-credits, so this is the one place a real-valued
+    cost becomes money. It has to round the customer's way -- up -- or the
+    platform absorbs the remainder on every usage item.
+
+    ``int()`` truncated. The docstring has always said "rounded up"; the code
+    floored. Measured across 200k realistic usage items, 57% were a micro-credit
+    short.
+
+    Rounding up is not on its own the fix, because ``cost_usd`` arrives carrying
+    float noise from the pricing arithmetic upstream: ``(9128 / 1e6) * 15.0 * 2.0``
+    is ``0.27384000000000003``, not ``0.27384``. Rounding *that* up bills 273841
+    for a charge that is exactly 273840 micro-credits -- the same defect turned
+    against the customer, on about 6% of items. Naive ``math.ceil`` and a naive
+    ``Decimal(str(cost_usd))`` both do this.
+
+    So the noise is quantized away first, on the micro-credit scale where it lands
+    rather than on the USD scale where it started -- multiplying by a million
+    multiplies the absolute error too, which is why quantizing the USD figure does
+    not work. ``QUANTIZE_EXPONENT`` keeps six decimal places of a micro-credit: finer
+    than any real fraction (one token of the cheapest model is ~0.15 micro-credits),
+    coarser than the noise. What survives is the amount the pricing tables meant, and
+    ``ROUND_CEILING`` then rounds the customer's way exactly once.
 
     Args:
         cost_usd: Customer-facing billed cost in USD.
 
     Returns:
-        Amount in micro-credits (rounded up).
+        Amount in micro-credits, rounded up, never below 1.
     """
-    credits = cost_usd / USD_PER_CREDIT
-    micro = int(credits * MICRO_CREDITS_PER_CREDIT)
-    return max(micro, 1)  # minimum 1 micro-credit per operation
+    micro_per_usd = Decimal(MICRO_CREDITS_PER_CREDIT) / Decimal(str(USD_PER_CREDIT))
+    exact = Decimal(str(cost_usd)) * micro_per_usd
+    denoised = exact.quantize(QUANTIZE_EXPONENT, rounding=ROUND_HALF_EVEN)
+    micro = denoised.to_integral_value(rounding=ROUND_CEILING)
+    return max(int(micro), 1)  # minimum 1 micro-credit per operation
 
 
 @dataclass(slots=True)

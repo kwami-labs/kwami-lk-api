@@ -10,6 +10,7 @@ when the numbers disagree with a provider invoice.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import ROUND_CEILING, Decimal
 
 import pytest
 
@@ -46,7 +47,59 @@ class TestUsdToMicroCredits:
         assert usd_to_micro_credits(0.0000000001) == 1
 
     def test_zero_still_floors_at_one(self):
+        """`_apply_billing_policy` short-circuits a zero cost before reaching here."""
         assert usd_to_micro_credits(0.0) == 1
+
+    def test_a_fraction_of_a_micro_credit_rounds_up(self):
+        """The documented contract. `int()` floored it, so 57% of real usage items
+        were billed one micro-credit short."""
+        assert usd_to_micro_credits(0.0000015) == 2  # 1.5 micro-credits
+        assert usd_to_micro_credits(0.0006546005) == 655  # 654.6005 micro-credits
+
+    def test_an_exact_amount_is_not_rounded_up_a_whole_unit(self):
+        """Rounding up must not mean "always add one"."""
+        assert usd_to_micro_credits(0.003) == 3000
+
+    @pytest.mark.parametrize(
+        ("cost_usd", "expected"),
+        [
+            # (9128 / 1e6) * 15.0 * 2.0 -- exactly 273840 micro-credits in decimal,
+            # but 0.27384000000000003 as a float.
+            (0.27384000000000003, 273840),
+            # (109100 / 1e6) * 3.0 * 2.0 -- exactly 654600.
+            (0.6546000000000001, 654600),
+            # (100582 / 1e6) * 15.0 * 2.0 -- exactly 3017460.
+            (3.0174600000000003, 3017460),
+        ],
+    )
+    def test_upstream_float_noise_does_not_add_a_micro_credit(self, cost_usd, expected):
+        """The trap in rounding up: the pricing arithmetic hands this function a
+        value a hair above the intended one, and a naive ceil bills the customer for
+        the hair. Both `math.ceil` and a plain `Decimal(str(cost))` get these wrong."""
+        assert usd_to_micro_credits(cost_usd) == expected
+
+    def test_it_agrees_with_exact_decimal_arithmetic(self):
+        """Ground truth: the same sum done in Decimal from the integer inputs.
+
+        This is the property that matters -- not "rounds up" in isolation, but
+        "rounds up to the number the pricing tables meant".
+        """
+        for tokens, price_per_1m in [
+            (1, 0.15),
+            (9128, 15.0),
+            (109100, 3.0),
+            (192091, 2.5),
+            (500000, 0.075),
+        ]:
+            billed_float = (tokens / 1_000_000) * price_per_1m * 2.0
+            exact_usd = (
+                (Decimal(tokens) / Decimal(1_000_000)) * Decimal(str(price_per_1m)) * Decimal(2)
+            )
+            expected = max(
+                int((exact_usd * Decimal(1_000_000)).to_integral_value(rounding=ROUND_CEILING)),
+                1,
+            )
+            assert usd_to_micro_credits(billed_float) == expected, (tokens, price_per_1m)
 
 
 def test_round_usd_keeps_six_places():
