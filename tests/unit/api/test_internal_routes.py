@@ -236,7 +236,7 @@ class TestBrowserContextRoutes:
     async def test_read_failures_map_to_status_codes(
         self, monkeypatch, keyed_client, route_fn, exc, status
     ):
-        def boom(*a, **k):
+        async def boom(*a, **k):
             raise exc
 
         monkeypatch.setattr(internal_route, route_fn, boom)
@@ -254,7 +254,7 @@ class TestBrowserContextRoutes:
         ],
     )
     async def test_save_failures_map_to_status_codes(self, monkeypatch, keyed_client, exc, status):
-        def boom(*a, **k):
+        async def boom(*a, **k):
             raise exc
 
         monkeypatch.setattr(internal_route, "save_browser_context", boom)
@@ -275,7 +275,7 @@ class TestBrowserContextRoutes:
     async def test_delete_failures_map_to_status_codes(
         self, monkeypatch, keyed_client, exc, status
     ):
-        def boom(*a, **k):
+        async def boom(*a, **k):
             raise exc
 
         monkeypatch.setattr(internal_route, "delete_browser_context", boom)

@@ -28,41 +28,46 @@ class TestSingle:
 
 
 class TestDeleteScopedToAVendor:
-    def test_naming_a_vendor_only_drops_that_vendors_row(self, fake_supabase):
-        save_browser_context("owner-1", "browserbase", "ctx-bb")
-        save_browser_context("owner-1", "browser_use", "ctx-bu")
+    @pytest.mark.anyio
+    async def test_naming_a_vendor_only_drops_that_vendors_row(self, fake_supabase):
+        await save_browser_context("owner-1", "browserbase", "ctx-bb")
+        await save_browser_context("owner-1", "browser_use", "ctx-bu")
 
-        removed = delete_browser_context("owner-1", "browserbase")
+        removed = await delete_browser_context("owner-1", "browserbase")
 
         assert removed == 1
         remaining = [r["vendor"] for r in fake_supabase.db.rows("browser_contexts")]
         assert remaining == ["browser_use"]
 
-    def test_omitting_the_vendor_drops_every_row_for_the_owner(self, fake_supabase):
-        save_browser_context("owner-1", "browserbase", "ctx-bb")
-        save_browser_context("owner-1", "browser_use", "ctx-bu")
+    @pytest.mark.anyio
+    async def test_omitting_the_vendor_drops_every_row_for_the_owner(self, fake_supabase):
+        await save_browser_context("owner-1", "browserbase", "ctx-bb")
+        await save_browser_context("owner-1", "browser_use", "ctx-bu")
 
-        assert delete_browser_context("owner-1", None) == 2
+        assert await delete_browser_context("owner-1", None) == 2
         assert fake_supabase.db.rows("browser_contexts") == []
 
-    def test_an_unsupported_vendor_is_refused_before_deleting(self, fake_supabase):
-        save_browser_context("owner-1", "browserbase", "ctx-bb")
+    @pytest.mark.anyio
+    async def test_an_unsupported_vendor_is_refused_before_deleting(self, fake_supabase):
+        await save_browser_context("owner-1", "browserbase", "ctx-bb")
         with pytest.raises(browser_sessions.UnsupportedVendorError):
-            delete_browser_context("owner-1", "not-a-vendor")
+            await delete_browser_context("owner-1", "not-a-vendor")
         assert len(fake_supabase.db.rows("browser_contexts")) == 1
 
-    def test_another_owners_rows_are_untouched(self, fake_supabase):
-        save_browser_context("owner-1", "browserbase", "ctx-1")
-        save_browser_context("owner-2", "browserbase", "ctx-2")
+    @pytest.mark.anyio
+    async def test_another_owners_rows_are_untouched(self, fake_supabase):
+        await save_browser_context("owner-1", "browserbase", "ctx-1")
+        await save_browser_context("owner-2", "browserbase", "ctx-2")
 
-        delete_browser_context("owner-1", "browserbase")
+        await delete_browser_context("owner-1", "browserbase")
 
         assert [r["owner_key"] for r in fake_supabase.db.rows("browser_contexts")] == ["owner-2"]
 
+    @pytest.mark.anyio
     @pytest.mark.parametrize("owner_key", ["", "   ", None])
-    def test_a_blank_owner_key_is_refused(self, fake_supabase, owner_key):
+    async def test_a_blank_owner_key_is_refused(self, fake_supabase, owner_key):
         """Deleting with no owner would otherwise match every row in the table."""
-        save_browser_context("owner-1", "browserbase", "ctx-1")
+        await save_browser_context("owner-1", "browserbase", "ctx-1")
         with pytest.raises(ValueError, match="owner_key is required"):
-            delete_browser_context(owner_key, "browserbase")
+            await delete_browser_context(owner_key, "browserbase")
         assert len(fake_supabase.db.rows("browser_contexts")) == 1

@@ -44,7 +44,7 @@ async def list_contacts(
 ):
     await get_owned_kwami(user.id, kwami_id)
     return {
-        "contacts": list_contacts_for_kwami(user.id, kwami_id, query=q, limit=limit),
+        "contacts": await list_contacts_for_kwami(user.id, kwami_id, query=q, limit=limit),
     }
 
 

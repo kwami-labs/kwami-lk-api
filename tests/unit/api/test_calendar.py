@@ -110,41 +110,41 @@ class TestNormalizeColor:
 
 
 class TestListEvents:
-    def test_it_returns_events_inside_the_range(self, fake_supabase, tenant):
-        create_event(tenant.user_id, tenant.kwami_id, title="A", starts_at=START, ends_at=END)
-        events = list_events(
+    async def test_it_returns_events_inside_the_range(self, fake_supabase, tenant):
+        await create_event(tenant.user_id, tenant.kwami_id, title="A", starts_at=START, ends_at=END)
+        events = await list_events(
             tenant.user_id, tenant.kwami_id, "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z"
         )
         assert [e["title"] for e in events] == ["A"]
 
-    def test_events_outside_the_range_are_excluded(self, fake_supabase, tenant):
-        create_event(tenant.user_id, tenant.kwami_id, title="A", starts_at=START, ends_at=END)
+    async def test_events_outside_the_range_are_excluded(self, fake_supabase, tenant):
+        await create_event(tenant.user_id, tenant.kwami_id, title="A", starts_at=START, ends_at=END)
         assert (
-            list_events(
+            await list_events(
                 tenant.user_id, tenant.kwami_id, "2026-04-01T00:00:00Z", "2026-04-02T00:00:00Z"
             )
             == []
         )
 
-    def test_an_inverted_range_is_rejected(self, fake_supabase, tenant):
+    async def test_an_inverted_range_is_rejected(self, fake_supabase, tenant):
         with pytest.raises(ValueError, match="range_end must be after range_start"):
-            list_events(tenant.user_id, tenant.kwami_id, END, START)
+            await list_events(tenant.user_id, tenant.kwami_id, END, START)
 
-    def test_an_equal_range_is_allowed(self, fake_supabase, tenant):
-        assert list_events(tenant.user_id, tenant.kwami_id, START, START) == []
+    async def test_an_equal_range_is_allowed(self, fake_supabase, tenant):
+        assert await list_events(tenant.user_id, tenant.kwami_id, START, START) == []
 
-    def test_a_malformed_range_is_rejected(self, fake_supabase, tenant):
+    async def test_a_malformed_range_is_rejected(self, fake_supabase, tenant):
         with pytest.raises(ValueError, match="Invalid range_start"):
-            list_events(tenant.user_id, tenant.kwami_id, "nope", END)
+            await list_events(tenant.user_id, tenant.kwami_id, "nope", END)
 
-    def test_another_tenants_kwami_is_refused(self, fake_supabase, tenant, other_tenant):
+    async def test_another_tenants_kwami_is_refused(self, fake_supabase, tenant, other_tenant):
         with pytest.raises(ValueError, match="Kwami not found"):
-            list_events(other_tenant.user_id, tenant.kwami_id, START, END)
+            await list_events(other_tenant.user_id, tenant.kwami_id, START, END)
 
 
 class TestCreateEvent:
-    def test_it_normalises_and_stores(self, fake_supabase, tenant):
-        row = create_event(
+    async def test_it_normalises_and_stores(self, fake_supabase, tenant):
+        row = await create_event(
             tenant.user_id,
             tenant.kwami_id,
             title="  Standup  ",
@@ -165,8 +165,10 @@ class TestCreateEvent:
         assert row["all_day"] is True
         assert row["metadata"] == {"k": "v"}
 
-    def test_the_defaults(self, fake_supabase, tenant):
-        row = create_event(tenant.user_id, tenant.kwami_id, title="T", starts_at=START, ends_at=END)
+    async def test_the_defaults(self, fake_supabase, tenant):
+        row = await create_event(
+            tenant.user_id, tenant.kwami_id, title="T", starts_at=START, ends_at=END
+        )
         assert row["event_type"] == "other"
         assert row["color"] == "#6366f1"
         assert row["all_day"] is False
@@ -175,22 +177,26 @@ class TestCreateEvent:
         assert row["location"] == ""
 
     @pytest.mark.parametrize("title", ["", "   "])
-    def test_a_blank_title_is_rejected(self, fake_supabase, tenant, title):
+    async def test_a_blank_title_is_rejected(self, fake_supabase, tenant, title):
         with pytest.raises(ValueError, match="Title is required"):
-            create_event(tenant.user_id, tenant.kwami_id, title=title, starts_at=START, ends_at=END)
+            await create_event(
+                tenant.user_id, tenant.kwami_id, title=title, starts_at=START, ends_at=END
+            )
 
-    def test_an_inverted_interval_is_rejected(self, fake_supabase, tenant):
+    async def test_an_inverted_interval_is_rejected(self, fake_supabase, tenant):
         with pytest.raises(ValueError, match="ends_at must be after starts_at"):
-            create_event(tenant.user_id, tenant.kwami_id, title="T", starts_at=END, ends_at=START)
+            await create_event(
+                tenant.user_id, tenant.kwami_id, title="T", starts_at=END, ends_at=START
+            )
 
-    def test_a_zero_length_event_is_allowed(self, fake_supabase, tenant):
-        assert create_event(
+    async def test_a_zero_length_event_is_allowed(self, fake_supabase, tenant):
+        assert await create_event(
             tenant.user_id, tenant.kwami_id, title="T", starts_at=START, ends_at=START
         )
 
-    def test_an_unknown_event_type_is_rejected(self, fake_supabase, tenant):
+    async def test_an_unknown_event_type_is_rejected(self, fake_supabase, tenant):
         with pytest.raises(ValueError, match="Invalid event_type"):
-            create_event(
+            await create_event(
                 tenant.user_id,
                 tenant.kwami_id,
                 title="T",
@@ -199,23 +205,25 @@ class TestCreateEvent:
                 event_type="nonsense",
             )
 
-    def test_another_tenants_kwami_is_refused(self, fake_supabase, tenant, other_tenant):
+    async def test_another_tenants_kwami_is_refused(self, fake_supabase, tenant, other_tenant):
         with pytest.raises(ValueError, match="Kwami not found"):
-            create_event(
+            await create_event(
                 other_tenant.user_id, tenant.kwami_id, title="T", starts_at=START, ends_at=END
             )
 
-    def test_an_insert_that_returns_nothing_is_a_runtime_error(
+    async def test_an_insert_that_returns_nothing_is_a_runtime_error(
         self, monkeypatch, fake_supabase, tenant
     ):
         monkeypatch.setattr(calendar_service, "_single", lambda r: None)
         with pytest.raises(RuntimeError, match="Failed to create calendar event"):
-            create_event(tenant.user_id, tenant.kwami_id, title="T", starts_at=START, ends_at=END)
+            await create_event(
+                tenant.user_id, tenant.kwami_id, title="T", starts_at=START, ends_at=END
+            )
 
 
 class TestUpdateEvent:
-    def _event(self, tenant):
-        return create_event(
+    async def _event(self, tenant):
+        return await create_event(
             tenant.user_id,
             tenant.kwami_id,
             title="Original",
@@ -225,9 +233,9 @@ class TestUpdateEvent:
             location="l",
         )
 
-    def test_every_field_can_be_changed(self, fake_supabase, tenant):
-        event = self._event(tenant)
-        row = update_event(
+    async def test_every_field_can_be_changed(self, fake_supabase, tenant):
+        event = await self._event(tenant)
+        row = await update_event(
             tenant.user_id,
             str(event["id"]),
             title="  New  ",
@@ -248,56 +256,62 @@ class TestUpdateEvent:
         assert row["color"] == "#000"
         assert row["metadata"] == {"a": 1}
 
-    def test_omitted_fields_are_left_alone(self, fake_supabase, tenant):
-        event = self._event(tenant)
-        row = update_event(tenant.user_id, str(event["id"]), title="Only the title")
+    async def test_omitted_fields_are_left_alone(self, fake_supabase, tenant):
+        event = await self._event(tenant)
+        row = await update_event(tenant.user_id, str(event["id"]), title="Only the title")
         assert row["title"] == "Only the title"
         assert row["description"] == "d"
         assert row["location"] == "l"
 
-    def test_the_times_are_carried_forward_when_omitted(self, fake_supabase, tenant):
-        event = self._event(tenant)
-        row = update_event(tenant.user_id, str(event["id"]), title="T")
+    async def test_the_times_are_carried_forward_when_omitted(self, fake_supabase, tenant):
+        event = await self._event(tenant)
+        row = await update_event(tenant.user_id, str(event["id"]), title="T")
         assert row["starts_at"] == event["starts_at"]
         assert row["ends_at"] == event["ends_at"]
 
-    def test_moving_only_the_start_is_validated_against_the_stored_end(self, fake_supabase, tenant):
-        event = self._event(tenant)
+    async def test_moving_only_the_start_is_validated_against_the_stored_end(
+        self, fake_supabase, tenant
+    ):
+        event = await self._event(tenant)
         with pytest.raises(ValueError, match="ends_at must be after starts_at"):
-            update_event(tenant.user_id, str(event["id"]), starts_at="2026-03-01T23:00:00Z")
+            await update_event(tenant.user_id, str(event["id"]), starts_at="2026-03-01T23:00:00Z")
 
-    def test_moving_only_the_end_is_validated_against_the_stored_start(self, fake_supabase, tenant):
-        event = self._event(tenant)
+    async def test_moving_only_the_end_is_validated_against_the_stored_start(
+        self, fake_supabase, tenant
+    ):
+        event = await self._event(tenant)
         with pytest.raises(ValueError, match="ends_at must be after starts_at"):
-            update_event(tenant.user_id, str(event["id"]), ends_at="2026-03-01T09:00:00Z")
+            await update_event(tenant.user_id, str(event["id"]), ends_at="2026-03-01T09:00:00Z")
 
     @pytest.mark.parametrize("title", ["", "   "])
-    def test_a_blank_title_is_rejected(self, fake_supabase, tenant, title):
-        event = self._event(tenant)
+    async def test_a_blank_title_is_rejected(self, fake_supabase, tenant, title):
+        event = await self._event(tenant)
         with pytest.raises(ValueError, match="Title is required"):
-            update_event(tenant.user_id, str(event["id"]), title=title)
+            await update_event(tenant.user_id, str(event["id"]), title=title)
 
-    def test_an_unknown_event_type_is_rejected(self, fake_supabase, tenant):
-        event = self._event(tenant)
+    async def test_an_unknown_event_type_is_rejected(self, fake_supabase, tenant):
+        event = await self._event(tenant)
         with pytest.raises(ValueError, match="Invalid event_type"):
-            update_event(tenant.user_id, str(event["id"]), event_type="nonsense")
+            await update_event(tenant.user_id, str(event["id"]), event_type="nonsense")
 
-    def test_an_overlong_color_is_rejected(self, fake_supabase, tenant):
-        event = self._event(tenant)
+    async def test_an_overlong_color_is_rejected(self, fake_supabase, tenant):
+        event = await self._event(tenant)
         with pytest.raises(ValueError, match="too long"):
-            update_event(tenant.user_id, str(event["id"]), color="#" * 33)
+            await update_event(tenant.user_id, str(event["id"]), color="#" * 33)
 
-    def test_an_unknown_event_is_not_found(self, fake_supabase, tenant):
+    async def test_an_unknown_event_is_not_found(self, fake_supabase, tenant):
         with pytest.raises(ValueError, match="Event not found"):
-            update_event(tenant.user_id, "00000000-0000-0000-0000-000000000000", title="T")
+            await update_event(tenant.user_id, "00000000-0000-0000-0000-000000000000", title="T")
 
-    def test_another_tenants_event_is_not_found(self, fake_supabase, tenant, other_tenant):
-        event = self._event(tenant)
+    async def test_another_tenants_event_is_not_found(self, fake_supabase, tenant, other_tenant):
+        event = await self._event(tenant)
         with pytest.raises(ValueError, match="Event not found"):
-            update_event(other_tenant.user_id, str(event["id"]), title="T")
+            await update_event(other_tenant.user_id, str(event["id"]), title="T")
 
-    def test_an_update_that_writes_nothing_is_not_found(self, monkeypatch, fake_supabase, tenant):
-        event = self._event(tenant)
+    async def test_an_update_that_writes_nothing_is_not_found(
+        self, monkeypatch, fake_supabase, tenant
+    ):
+        event = await self._event(tenant)
         calls = {"n": 0}
         real = calendar_service._single
 
@@ -307,25 +321,25 @@ class TestUpdateEvent:
 
         monkeypatch.setattr(calendar_service, "_single", once)
         with pytest.raises(ValueError, match="Event not found"):
-            update_event(tenant.user_id, str(event["id"]), title="T")
+            await update_event(tenant.user_id, str(event["id"]), title="T")
 
 
 class TestDeleteEvent:
-    def test_it_deletes(self, fake_supabase, tenant):
-        event = create_event(
+    async def test_it_deletes(self, fake_supabase, tenant):
+        event = await create_event(
             tenant.user_id, tenant.kwami_id, title="T", starts_at=START, ends_at=END
         )
-        assert delete_event(tenant.user_id, str(event["id"])) is True
+        assert await delete_event(tenant.user_id, str(event["id"])) is True
         assert fake_supabase.db.rows("kwami_calendar_events") == []
 
-    def test_deleting_nothing_is_false(self, fake_supabase, tenant):
-        assert delete_event(tenant.user_id, "00000000-0000-0000-0000-000000000000") is False
+    async def test_deleting_nothing_is_false(self, fake_supabase, tenant):
+        assert await delete_event(tenant.user_id, "00000000-0000-0000-0000-000000000000") is False
 
-    def test_another_tenants_event_is_not_deleted(self, fake_supabase, tenant, other_tenant):
-        event = create_event(
+    async def test_another_tenants_event_is_not_deleted(self, fake_supabase, tenant, other_tenant):
+        event = await create_event(
             tenant.user_id, tenant.kwami_id, title="T", starts_at=START, ends_at=END
         )
-        assert delete_event(other_tenant.user_id, str(event["id"])) is False
+        assert await delete_event(other_tenant.user_id, str(event["id"])) is False
         assert len(fake_supabase.db.rows("kwami_calendar_events")) == 1
 
 
@@ -334,7 +348,7 @@ class TestDeleteEvent:
 
 class TestGetEventsRoute:
     async def test_it_returns_events(self, tenant_client, tenant, fake_supabase):
-        create_event(tenant.user_id, tenant.kwami_id, title="A", starts_at=START, ends_at=END)
+        await create_event(tenant.user_id, tenant.kwami_id, title="A", starts_at=START, ends_at=END)
         r = await tenant_client.get(
             "/calendar/events",
             params={
@@ -396,7 +410,7 @@ class TestCreateEventRoute:
 
 class TestPatchEventRoute:
     async def test_it_updates(self, tenant_client, tenant, fake_supabase):
-        event = create_event(
+        event = await create_event(
             tenant.user_id, tenant.kwami_id, title="T", starts_at=START, ends_at=END
         )
         r = await tenant_client.patch(f"/calendar/events/{event['id']}", json={"title": "Renamed"})
@@ -412,7 +426,7 @@ class TestPatchEventRoute:
 
     async def test_a_validation_failure_is_a_400(self, tenant_client, tenant, fake_supabase):
         """The route distinguishes the not-found message from every other ValueError."""
-        event = create_event(
+        event = await create_event(
             tenant.user_id, tenant.kwami_id, title="T", starts_at=START, ends_at=END
         )
         r = await tenant_client.patch(
@@ -427,7 +441,7 @@ class TestPatchEventRoute:
 
 class TestDeleteEventRoute:
     async def test_it_deletes(self, tenant_client, tenant, fake_supabase):
-        event = create_event(
+        event = await create_event(
             tenant.user_id, tenant.kwami_id, title="T", starts_at=START, ends_at=END
         )
         r = await tenant_client.delete(f"/calendar/events/{event['id']}")
@@ -441,7 +455,7 @@ class TestDeleteEventRoute:
     async def test_another_tenants_event_is_a_404(
         self, tenant_client, other_tenant_client, tenant, fake_supabase
     ):
-        event = create_event(
+        event = await create_event(
             tenant.user_id, tenant.kwami_id, title="T", starts_at=START, ends_at=END
         )
         assert (

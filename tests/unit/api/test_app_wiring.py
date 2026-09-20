@@ -135,20 +135,26 @@ class TestAuthzDependencies:
         with pytest.raises(KwamiNotFoundError):
             await kwami_from_query(other_tenant.auth_user, tenant.kwami_id)
 
-    def test_the_body_shape_resolves_an_owned_kwami(self, fake_supabase, tenant):
-        assert require_kwami_owned(tenant.user_id, tenant.kwami_id)["id"] == tenant.kwami_id
+    @pytest.mark.anyio
+    async def test_the_body_shape_resolves_an_owned_kwami(self, fake_supabase, tenant):
+        assert (await require_kwami_owned(tenant.user_id, tenant.kwami_id))["id"] == tenant.kwami_id
 
-    def test_the_body_shape_refuses_someone_elses(self, fake_supabase, tenant, other_tenant):
+    @pytest.mark.anyio
+    async def test_the_body_shape_refuses_someone_elses(self, fake_supabase, tenant, other_tenant):
         with pytest.raises(KwamiNotFoundError):
-            require_kwami_owned(other_tenant.user_id, tenant.kwami_id)
+            await require_kwami_owned(other_tenant.user_id, tenant.kwami_id)
 
-    def test_all_three_shapes_share_one_resolver(self, monkeypatch):
+    @pytest.mark.anyio
+    async def test_all_three_shapes_share_one_resolver(self, monkeypatch):
         """Three shapes over one rule -- the point of the module."""
         calls: list[tuple] = []
-        monkeypatch.setattr(
-            authz, "resolve_owned_kwami", lambda u, k: calls.append((u, k)) or {"id": k}
-        )
-        require_kwami_owned("u1", "k1")
+
+        async def _resolve(user_id, kwami_id):
+            calls.append((user_id, kwami_id))
+            return {"id": kwami_id}
+
+        monkeypatch.setattr(authz, "resolve_owned_kwami", _resolve)
+        await require_kwami_owned("u1", "k1")
         assert calls == [("u1", "k1")]
 
     def test_the_annotated_aliases_are_exported(self):

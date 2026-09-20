@@ -36,6 +36,7 @@ from src.services.credits import (
     resolve_ledger_user_id,
     usd_to_micro_credits,
 )
+from tests.helpers import async_return, async_sequence
 
 
 class TestUsdToMicroCredits:
@@ -258,35 +259,55 @@ class TestCalculateUsageCharge:
         assert breakdown.normalized_units_used == 7.0
 
 
-class TestGetSupabaseAdmin:
-    def test_an_unconfigured_project_is_a_runtime_error(self, monkeypatch):
+class TestSupabaseAdminClient:
+    """Construction moved to the lifespan when the client became asynchronous.
+
+    `create_async_client` is a coroutine, so it cannot run inside a synchronous
+    getter. `init_supabase_admin()` builds it once at startup -- which is also
+    what gives the process a shared connection pool instead of one per request --
+    and `get_supabase_admin()` only hands back the cached instance.
+    """
+
+    def test_reading_the_client_before_startup_is_a_runtime_error(self, monkeypatch):
+        monkeypatch.setattr(credits_mod, "_supabase_client", None, raising=False)
+        with pytest.raises(RuntimeError, match="not initialised"):
+            get_supabase_admin()
+
+    @pytest.mark.anyio
+    async def test_an_unconfigured_project_is_a_runtime_error(self, monkeypatch):
         monkeypatch.setattr(credits_mod, "_supabase_client", None, raising=False)
         monkeypatch.setattr(credits_mod.settings, "supabase_url", None, raising=False)
         with pytest.raises(RuntimeError, match="SUPABASE_URL and SUPABASE_SECRET_KEY"):
-            get_supabase_admin()
+            await credits_mod.init_supabase_admin()
 
-    def test_a_missing_key_is_also_a_runtime_error(self, monkeypatch):
+    @pytest.mark.anyio
+    async def test_a_missing_key_is_also_a_runtime_error(self, monkeypatch):
         monkeypatch.setattr(credits_mod, "_supabase_client", None, raising=False)
         monkeypatch.setattr(
             credits_mod.settings, "supabase_url", "https://p.supabase.co", raising=False
         )
         monkeypatch.setattr(credits_mod.settings, "supabase_secret_key", None, raising=False)
         with pytest.raises(RuntimeError):
-            get_supabase_admin()
+            await credits_mod.init_supabase_admin()
 
-    def test_the_client_is_built_once_and_cached(self, monkeypatch):
+    @pytest.mark.anyio
+    async def test_the_client_is_built_once_and_cached(self, monkeypatch):
         built: list[tuple] = []
         monkeypatch.setattr(credits_mod, "_supabase_client", None, raising=False)
         monkeypatch.setattr(
             credits_mod.settings, "supabase_url", "https://p.supabase.co", raising=False
         )
         monkeypatch.setattr(credits_mod.settings, "supabase_secret_key", "sb_secret", raising=False)
-        monkeypatch.setattr(
-            credits_mod, "create_client", lambda url, key: built.append((url, key)) or "CLIENT"
-        )
+
+        async def _create(url, key):
+            built.append((url, key))
+            return "CLIENT"
+
+        monkeypatch.setattr(credits_mod, "create_async_client", _create)
+        assert await credits_mod.init_supabase_admin() == "CLIENT"
+        assert await credits_mod.init_supabase_admin() == "CLIENT"
+        assert built == [("https://p.supabase.co", "sb_secret")], "built once, then cached"
         assert get_supabase_admin() == "CLIENT"
-        assert get_supabase_admin() == "CLIENT"
-        assert built == [("https://p.supabase.co", "sb_secret")]
 
 
 class TestGetBalance:
@@ -314,26 +335,32 @@ class TestGetBalance:
 
 
 class TestResolveLedgerUserId:
-    def test_a_blank_id_is_rejected(self, fake_supabase):
+    @pytest.mark.anyio
+    async def test_a_blank_id_is_rejected(self, fake_supabase):
         with pytest.raises(ValueError, match="user_id is required"):
-            resolve_ledger_user_id("   ")
+            await resolve_ledger_user_id("   ")
 
-    def test_a_non_uuid_is_returned_unchanged(self, fake_supabase):
-        assert resolve_ledger_user_id("agent-alias") == "agent-alias"
+    @pytest.mark.anyio
+    async def test_a_non_uuid_is_returned_unchanged(self, fake_supabase):
+        assert await resolve_ledger_user_id("agent-alias") == "agent-alias"
 
-    def test_a_kwami_id_maps_to_its_owner(self, fake_supabase, tenant):
+    @pytest.mark.anyio
+    async def test_a_kwami_id_maps_to_its_owner(self, fake_supabase, tenant):
         """The agent often sends kwami_id from telephony metadata."""
-        assert resolve_ledger_user_id(tenant.kwami_id) == tenant.user_id
+        assert await resolve_ledger_user_id(tenant.kwami_id) == tenant.user_id
 
-    def test_a_user_id_maps_to_itself(self, fake_supabase, tenant):
-        assert resolve_ledger_user_id(tenant.user_id) == tenant.user_id
+    @pytest.mark.anyio
+    async def test_a_user_id_maps_to_itself(self, fake_supabase, tenant):
+        assert await resolve_ledger_user_id(tenant.user_id) == tenant.user_id
 
-    def test_an_unknown_uuid_is_returned_unchanged(self, fake_supabase):
+    @pytest.mark.anyio
+    async def test_an_unknown_uuid_is_returned_unchanged(self, fake_supabase):
         unknown = "00000000-0000-0000-0000-000000000000"
-        assert resolve_ledger_user_id(unknown) == unknown
+        assert await resolve_ledger_user_id(unknown) == unknown
 
-    def test_it_strips_whitespace(self, fake_supabase, tenant):
-        assert resolve_ledger_user_id(f"  {tenant.kwami_id}  ") == tenant.user_id
+    @pytest.mark.anyio
+    async def test_it_strips_whitespace(self, fake_supabase, tenant):
+        assert await resolve_ledger_user_id(f"  {tenant.kwami_id}  ") == tenant.user_id
 
 
 class TestLogUsage:
@@ -365,7 +392,7 @@ class TestLogUsage:
             def insert(self, payload):
                 return self
 
-            def execute(self):
+            async def execute(self):
                 return type("R", (), {"data": []})()
 
         monkeypatch.setattr(
@@ -503,7 +530,8 @@ class TestBuildReportKey:
 
 
 class TestFindUsageReport:
-    def test_it_finds_a_claimed_report(self, fake_supabase):
+    @pytest.mark.anyio
+    async def test_it_finds_a_claimed_report(self, fake_supabase):
         fake_supabase.db.seed(
             "usage_reports",
             {
@@ -515,10 +543,11 @@ class TestFindUsageReport:
                 "result": {"ok": True},
             },
         )
-        assert _find_usage_report("k1")["status"] == "settled"
+        assert (await _find_usage_report("k1"))["status"] == "settled"
 
-    def test_an_unknown_key_is_none(self, fake_supabase):
-        assert _find_usage_report("nope") is None
+    @pytest.mark.anyio
+    async def test_an_unknown_key_is_none(self, fake_supabase):
+        assert await _find_usage_report("nope") is None
 
 
 def _anomaly(report: dict, name: str) -> int:
@@ -771,7 +800,7 @@ class TestProcessUsageReportEdges:
         monkeypatch.setattr(
             credits_mod,
             "_find_usage_report",
-            _sequence(None, {"result": winner_result}),
+            async_sequence(None, {"result": winner_result}),
         )
         monkeypatch.setattr(
             credits_mod,
@@ -800,7 +829,7 @@ class TestProcessUsageReportEdges:
                 def limit(self, *a, **k):
                     return self
 
-                def execute(self):
+                async def execute(self):
                     return type("R", (), {"data": []})()
 
                 def insert(self, payload):
@@ -808,7 +837,7 @@ class TestProcessUsageReportEdges:
 
             return _T()
 
-        monkeypatch.setattr(credits_mod, "_find_usage_report", lambda key: None)
+        monkeypatch.setattr(credits_mod, "_find_usage_report", async_return(None))
         monkeypatch.setattr(
             credits_mod,
             "get_supabase_admin",
@@ -848,7 +877,8 @@ class TestProcessUsageReportEdges:
 
 
 class TestFinalizeUsageReport:
-    def test_it_records_the_settlement(self, fake_supabase):
+    @pytest.mark.anyio
+    async def test_it_records_the_settlement(self, fake_supabase):
         fake_supabase.db.seed(
             "usage_reports",
             {
@@ -859,7 +889,7 @@ class TestFinalizeUsageReport:
                 "items_count": 1,
             },
         )
-        credits_mod._finalize_usage_report(
+        await credits_mod._finalize_usage_report(
             "k1",
             status="settled",
             requested_micro=10,
@@ -873,7 +903,10 @@ class TestFinalizeUsageReport:
         assert row["result"] == {"ok": True}
         assert row["settled_at"] is not None
 
-    def test_a_write_failure_is_swallowed_and_logged(self, monkeypatch, fake_supabase, caplog):
+    @pytest.mark.anyio
+    async def test_a_write_failure_is_swallowed_and_logged(
+        self, monkeypatch, fake_supabase, caplog
+    ):
         """Best effort: a completed settlement must not be undone by a bookkeeping error."""
 
         class _T:
@@ -883,7 +916,7 @@ class TestFinalizeUsageReport:
             def eq(self, *a):
                 return self
 
-            def execute(self):
+            async def execute(self):
                 raise RuntimeError("update failed")
 
         monkeypatch.setattr(
@@ -892,7 +925,7 @@ class TestFinalizeUsageReport:
             lambda: type("C", (), {"table": staticmethod(lambda n: _T())})(),
         )
         with caplog.at_level("ERROR", logger="kwami-api.credits"):
-            credits_mod._finalize_usage_report(
+            await credits_mod._finalize_usage_report(
                 "k1",
                 status="settled",
                 requested_micro=1,

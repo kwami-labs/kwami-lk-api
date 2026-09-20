@@ -231,7 +231,7 @@ async def process_inbound_email(
 # ---------------------------------------------------------------------------
 
 
-def fetch_inbox(
+async def fetch_inbox(
     user_id: str,
     kwami_id: str,
     *,
@@ -257,7 +257,7 @@ def fetch_inbox(
     offset = (page - 1) * page_size
     q = q.range(offset, offset + page_size - 1)
 
-    result = q.execute()
+    result = await q.execute()
     return list(getattr(result, "data", None) or [])
 
 

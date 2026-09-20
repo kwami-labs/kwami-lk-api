@@ -31,13 +31,14 @@ from src.services.email_service import (
     update_message,
     validate_username,
 )
+from tests.helpers import async_return
 
 pytestmark = pytest.mark.anyio
 
 
 @pytest.fixture
-def account(fake_supabase, tenant):
-    return activate_account(user_id=tenant.user_id, kwami_id=tenant.kwami_id, username="ada")
+async def account(fake_supabase, tenant):
+    return await activate_account(user_id=tenant.user_id, kwami_id=tenant.kwami_id, username="ada")
 
 
 # -- helpers -----------------------------------------------------------------
@@ -100,95 +101,99 @@ class TestValidateUsername:
 
 
 class TestCheckUsernameAvailable:
-    def test_an_unused_name_is_available(self, fake_supabase):
-        assert check_username_available("nobody") is True
+    async def test_an_unused_name_is_available(self, fake_supabase):
+        assert await check_username_available("nobody") is True
 
-    def test_a_taken_name_is_not(self, fake_supabase, account):
-        assert check_username_available("ada") is False
+    async def test_a_taken_name_is_not(self, fake_supabase, account):
+        assert await check_username_available("ada") is False
 
-    def test_the_check_is_case_insensitive(self, fake_supabase, account):
-        assert check_username_available("ADA") is False
+    async def test_the_check_is_case_insensitive(self, fake_supabase, account):
+        assert await check_username_available("ADA") is False
 
 
 class TestActivateAccount:
-    def test_it_provisions_an_account(self, fake_supabase, tenant):
-        acct = activate_account(user_id=tenant.user_id, kwami_id=tenant.kwami_id, username="Ada")
+    async def test_it_provisions_an_account(self, fake_supabase, tenant):
+        acct = await activate_account(
+            user_id=tenant.user_id, kwami_id=tenant.kwami_id, username="Ada"
+        )
         assert acct["username"] == "ada", "usernames are lower-cased"
         assert acct["is_active"] is True
 
-    def test_it_is_idempotent_for_the_same_kwami(self, fake_supabase, tenant, account):
-        again = activate_account(
+    async def test_it_is_idempotent_for_the_same_kwami(self, fake_supabase, tenant, account):
+        again = await activate_account(
             user_id=tenant.user_id, kwami_id=tenant.kwami_id, username="different"
         )
         assert again["id"] == account["id"], "the existing account wins"
 
-    def test_an_invalid_username_is_refused(self, fake_supabase, tenant):
+    async def test_an_invalid_username_is_refused(self, fake_supabase, tenant):
         with pytest.raises(ValueError, match="usernameTooShort"):
-            activate_account(user_id=tenant.user_id, kwami_id=tenant.kwami_id, username="ab")
+            await activate_account(user_id=tenant.user_id, kwami_id=tenant.kwami_id, username="ab")
 
-    def test_a_taken_username_is_refused(self, fake_supabase, tenant, other_tenant, account):
+    async def test_a_taken_username_is_refused(self, fake_supabase, tenant, other_tenant, account):
         with pytest.raises(ValueError, match="usernameTaken"):
-            activate_account(
+            await activate_account(
                 user_id=other_tenant.user_id, kwami_id=other_tenant.kwami_id, username="ada"
             )
 
-    def test_an_insert_returning_nothing_is_a_runtime_error(
+    async def test_an_insert_returning_nothing_is_a_runtime_error(
         self, monkeypatch, fake_supabase, tenant
     ):
         monkeypatch.setattr(email_service, "_single", lambda r: None)
-        monkeypatch.setattr(email_service, "get_account", lambda u, k: None)
-        monkeypatch.setattr(email_service, "check_username_available", lambda n: True)
+        monkeypatch.setattr(email_service, "get_account", async_return(None))
+        monkeypatch.setattr(email_service, "check_username_available", async_return(True))
         with pytest.raises(RuntimeError, match="Failed to create email account"):
-            activate_account(user_id=tenant.user_id, kwami_id=tenant.kwami_id, username="ada")
+            await activate_account(user_id=tenant.user_id, kwami_id=tenant.kwami_id, username="ada")
 
 
 class TestGetAndDeactivateAccount:
-    def test_no_account_is_none(self, fake_supabase, tenant):
-        assert get_account(tenant.user_id, tenant.kwami_id) is None
+    async def test_no_account_is_none(self, fake_supabase, tenant):
+        assert await get_account(tenant.user_id, tenant.kwami_id) is None
 
-    def test_another_tenant_cannot_see_it(self, fake_supabase, tenant, other_tenant, account):
-        assert get_account(other_tenant.user_id, tenant.kwami_id) is None
+    async def test_another_tenant_cannot_see_it(self, fake_supabase, tenant, other_tenant, account):
+        assert await get_account(other_tenant.user_id, tenant.kwami_id) is None
 
-    def test_deactivating_removes_the_account_and_its_messages(
+    async def test_deactivating_removes_the_account_and_its_messages(
         self, fake_supabase, tenant, account
     ):
-        store_outbound_email(account=account, to_addresses=["x@y.z"], subject="s", body_text="b")
-        assert deactivate_account(tenant.user_id, tenant.kwami_id) is True
+        await store_outbound_email(
+            account=account, to_addresses=["x@y.z"], subject="s", body_text="b"
+        )
+        assert await deactivate_account(tenant.user_id, tenant.kwami_id) is True
         assert fake_supabase.db.rows("kwami_email_accounts") == []
         assert fake_supabase.db.rows("kwami_email_messages") == []
 
-    def test_deactivating_nothing_is_false(self, fake_supabase, tenant):
-        assert deactivate_account(tenant.user_id, tenant.kwami_id) is False
+    async def test_deactivating_nothing_is_false(self, fake_supabase, tenant):
+        assert await deactivate_account(tenant.user_id, tenant.kwami_id) is False
 
-    def test_another_tenant_cannot_deactivate_it(
+    async def test_another_tenant_cannot_deactivate_it(
         self, fake_supabase, tenant, other_tenant, account
     ):
-        assert deactivate_account(other_tenant.user_id, tenant.kwami_id) is False
+        assert await deactivate_account(other_tenant.user_id, tenant.kwami_id) is False
         assert len(fake_supabase.db.rows("kwami_email_accounts")) == 1
 
 
 class TestFindAccountByAddress:
-    def test_it_finds_by_full_address(self, fake_supabase, account):
-        assert find_account_by_address("ada@kwami.io")["id"] == account["id"]
+    async def test_it_finds_by_full_address(self, fake_supabase, account):
+        assert (await find_account_by_address("ada@kwami.io"))["id"] == account["id"]
 
-    def test_it_finds_by_bare_username(self, fake_supabase, account):
-        assert find_account_by_address("ada")["id"] == account["id"]
+    async def test_it_finds_by_bare_username(self, fake_supabase, account):
+        assert (await find_account_by_address("ada"))["id"] == account["id"]
 
-    def test_it_is_case_insensitive(self, fake_supabase, account):
-        assert find_account_by_address("ADA@KWAMI.IO")["id"] == account["id"]
+    async def test_it_is_case_insensitive(self, fake_supabase, account):
+        assert (await find_account_by_address("ADA@KWAMI.IO"))["id"] == account["id"]
 
-    def test_an_unknown_address_is_none(self, fake_supabase):
-        assert find_account_by_address("nobody@kwami.io") is None
+    async def test_an_unknown_address_is_none(self, fake_supabase):
+        assert await find_account_by_address("nobody@kwami.io") is None
 
-    def test_an_inactive_account_is_not_found(self, fake_supabase, account):
+    async def test_an_inactive_account_is_not_found(self, fake_supabase, account):
         for row in fake_supabase.db.rows("kwami_email_accounts"):
             row["is_active"] = False
-        assert find_account_by_address("ada@kwami.io") is None
+        assert await find_account_by_address("ada@kwami.io") is None
 
 
 class TestProcessInboundEmail:
-    def test_it_classifies_and_stores(self, fake_supabase, account):
-        row = process_inbound_email(
+    async def test_it_classifies_and_stores(self, fake_supabase, account):
+        row = await process_inbound_email(
             from_address="billing@unknown.test",
             to_addresses=["ada@kwami.io"],
             subject="Your invoice is ready",
@@ -200,8 +205,8 @@ class TestProcessInboundEmail:
         assert row["category"] == "bills"
         assert row["action_card_data"]["amount"] == "10.00"
 
-    def test_it_tries_every_recipient(self, fake_supabase, account):
-        row = process_inbound_email(
+    async def test_it_tries_every_recipient(self, fake_supabase, account):
+        row = await process_inbound_email(
             from_address="a@b.c",
             to_addresses=["nobody@kwami.io", "ada@kwami.io"],
             subject="Hi",
@@ -210,11 +215,11 @@ class TestProcessInboundEmail:
         )
         assert row is not None
 
-    def test_mail_for_nobody_is_dropped_not_raised(self, fake_supabase, caplog):
+    async def test_mail_for_nobody_is_dropped_not_raised(self, fake_supabase, caplog):
         """Reached from an unauthenticated webhook -- a 500 here means retries."""
         with caplog.at_level("WARNING", logger="kwami-api.email"):
             assert (
-                process_inbound_email(
+                await process_inbound_email(
                     from_address="a@b.c",
                     to_addresses=["nobody@kwami.io"],
                     subject="Hi",
@@ -225,9 +230,9 @@ class TestProcessInboundEmail:
             )
         assert "unknown address" in caplog.text
 
-    def test_no_recipients_at_all_is_dropped(self, fake_supabase):
+    async def test_no_recipients_at_all_is_dropped(self, fake_supabase):
         assert (
-            process_inbound_email(
+            await process_inbound_email(
                 from_address="a@b.c",
                 to_addresses=[],
                 subject="s",
@@ -237,8 +242,8 @@ class TestProcessInboundEmail:
             is None
         )
 
-    def test_headers_and_cc_default_to_empty(self, fake_supabase, account):
-        row = process_inbound_email(
+    async def test_headers_and_cc_default_to_empty(self, fake_supabase, account):
+        row = await process_inbound_email(
             from_address="a@b.c",
             to_addresses=["ada@kwami.io"],
             subject="s",
@@ -248,10 +253,12 @@ class TestProcessInboundEmail:
         assert row["headers"] == {}
         assert row["cc_addresses"] == []
 
-    def test_an_insert_that_returns_nothing_is_none(self, monkeypatch, fake_supabase, account):
-        monkeypatch.setattr(email_service, "_single", _first_then(account, None))
+    async def test_an_insert_that_returns_nothing_is_none(
+        self, monkeypatch, fake_supabase, account
+    ):
+        monkeypatch.setattr(email_service, "insert_or_existing", async_return(None))
         assert (
-            process_inbound_email(
+            await process_inbound_email(
                 from_address="a@b.c",
                 to_addresses=["ada@kwami.io"],
                 subject="s",
@@ -284,64 +291,72 @@ class TestInboxQueries:
             },
         )[0]
 
-    def test_it_lists_messages(self, fake_supabase, account):
+    async def test_it_lists_messages(self, fake_supabase, account):
         self._msg(fake_supabase, account)
-        assert len(fetch_inbox(account["user_id"], account["kwami_id"])) == 1
+        assert len(await fetch_inbox(account["user_id"], account["kwami_id"])) == 1
 
-    def test_archived_messages_are_hidden_by_default(self, fake_supabase, account):
+    async def test_archived_messages_are_hidden_by_default(self, fake_supabase, account):
         self._msg(fake_supabase, account, is_archived=True)
-        assert fetch_inbox(account["user_id"], account["kwami_id"]) == []
+        assert await fetch_inbox(account["user_id"], account["kwami_id"]) == []
 
-    def test_archived_messages_can_be_included(self, fake_supabase, account):
+    async def test_archived_messages_can_be_included(self, fake_supabase, account):
         self._msg(fake_supabase, account, is_archived=True)
-        assert len(fetch_inbox(account["user_id"], account["kwami_id"], include_archived=True)) == 1
+        assert (
+            len(await fetch_inbox(account["user_id"], account["kwami_id"], include_archived=True))
+            == 1
+        )
 
-    def test_it_filters_by_category(self, fake_supabase, account):
+    async def test_it_filters_by_category(self, fake_supabase, account):
         self._msg(fake_supabase, account, category="bills")
         self._msg(fake_supabase, account, category="travel")
-        assert len(fetch_inbox(account["user_id"], account["kwami_id"], category="bills")) == 1
+        assert (
+            len(await fetch_inbox(account["user_id"], account["kwami_id"], category="bills")) == 1
+        )
 
-    def test_the_all_category_is_not_a_filter(self, fake_supabase, account):
+    async def test_the_all_category_is_not_a_filter(self, fake_supabase, account):
         self._msg(fake_supabase, account, category="bills")
         self._msg(fake_supabase, account, category="travel")
-        assert len(fetch_inbox(account["user_id"], account["kwami_id"], category="all")) == 2
+        assert len(await fetch_inbox(account["user_id"], account["kwami_id"], category="all")) == 2
 
-    def test_it_paginates(self, fake_supabase, account):
+    async def test_it_paginates(self, fake_supabase, account):
         for _ in range(5):
             self._msg(fake_supabase, account)
-        assert len(fetch_inbox(account["user_id"], account["kwami_id"], page_size=2)) == 2
-        assert len(fetch_inbox(account["user_id"], account["kwami_id"], page=3, page_size=2)) == 1
+        assert len(await fetch_inbox(account["user_id"], account["kwami_id"], page_size=2)) == 2
+        assert (
+            len(await fetch_inbox(account["user_id"], account["kwami_id"], page=3, page_size=2))
+            == 1
+        )
 
-    def test_it_is_scoped_to_the_user(self, fake_supabase, account, other_tenant):
+    async def test_it_is_scoped_to_the_user(self, fake_supabase, account, other_tenant):
         self._msg(fake_supabase, account)
-        assert fetch_inbox(other_tenant.user_id, account["kwami_id"]) == []
+        assert await fetch_inbox(other_tenant.user_id, account["kwami_id"]) == []
 
-    def test_get_message(self, fake_supabase, account):
+    async def test_get_message(self, fake_supabase, account):
         msg = self._msg(fake_supabase, account)
-        assert get_message(account["user_id"], str(msg["id"]))["id"] == msg["id"]
+        assert (await get_message(account["user_id"], str(msg["id"])))["id"] == msg["id"]
 
-    def test_get_message_is_scoped_to_the_user(self, fake_supabase, account, other_tenant):
+    async def test_get_message_is_scoped_to_the_user(self, fake_supabase, account, other_tenant):
         msg = self._msg(fake_supabase, account)
-        assert get_message(other_tenant.user_id, str(msg["id"])) is None
+        assert await get_message(other_tenant.user_id, str(msg["id"])) is None
 
-    def test_get_an_unknown_message(self, fake_supabase, account):
-        assert get_message(account["user_id"], "00000000-0000-0000-0000-000000000000") is None
+    async def test_get_an_unknown_message(self, fake_supabase, account):
+        assert await get_message(account["user_id"], "00000000-0000-0000-0000-000000000000") is None
 
-    def test_unread_counts_group_by_category(self, fake_supabase, account):
+    async def test_unread_counts_group_by_category(self, fake_supabase, account):
         self._msg(fake_supabase, account, category="bills")
         self._msg(fake_supabase, account, category="bills")
         self._msg(fake_supabase, account, category="travel")
-        assert get_unread_counts(account["user_id"], account["kwami_id"]) == {
+        assert await get_unread_counts(account["user_id"], account["kwami_id"]) == {
             "bills": 2,
             "travel": 1,
         }
 
-    def test_read_and_archived_messages_are_not_counted(self, fake_supabase, account):
+    async def test_read_and_archived_messages_are_not_counted(self, fake_supabase, account):
         self._msg(fake_supabase, account, category="bills", is_read=True)
         self._msg(fake_supabase, account, category="bills", is_archived=True)
-        assert get_unread_counts(account["user_id"], account["kwami_id"]) == {}
+        assert await get_unread_counts(account["user_id"], account["kwami_id"]) == {}
 
-    def test_a_message_without_a_category_counts_as_uncategorized(
+    async def test_a_message_without_a_category_counts_as_uncategorized(
         self, monkeypatch, fake_supabase, account
     ):
         monkeypatch.setattr(
@@ -349,7 +364,7 @@ class TestInboxQueries:
             "get_supabase_admin",
             lambda: _rows_client([{}]),
         )
-        assert get_unread_counts("u", "k") == {"uncategorized": 1}
+        assert await get_unread_counts("u", "k") == {"uncategorized": 1}
 
 
 class TestUpdateMessage:
@@ -371,32 +386,32 @@ class TestUpdateMessage:
             },
         )[0]
 
-    def test_it_updates_the_allowed_flags(self, fake_supabase, account):
+    async def test_it_updates_the_allowed_flags(self, fake_supabase, account):
         msg = self._msg(fake_supabase, account)
-        updated = update_message(
+        updated = await update_message(
             account["user_id"], str(msg["id"]), is_read=True, is_starred=True, is_archived=True
         )
         assert updated["is_read"] is True
         assert updated["is_starred"] is True
         assert updated["is_archived"] is True
 
-    def test_unknown_fields_are_ignored(self, fake_supabase, account):
+    async def test_unknown_fields_are_ignored(self, fake_supabase, account):
         msg = self._msg(fake_supabase, account)
-        updated = update_message(account["user_id"], str(msg["id"]), category="bills")
+        updated = await update_message(account["user_id"], str(msg["id"]), category="bills")
         assert updated["category"] == "personal", "only the three flags are writable"
 
-    def test_no_writable_fields_is_a_plain_read(self, fake_supabase, account):
+    async def test_no_writable_fields_is_a_plain_read(self, fake_supabase, account):
         msg = self._msg(fake_supabase, account)
-        assert update_message(account["user_id"], str(msg["id"]))["id"] == msg["id"]
+        assert (await update_message(account["user_id"], str(msg["id"])))["id"] == msg["id"]
 
-    def test_another_tenant_cannot_update_it(self, fake_supabase, account, other_tenant):
+    async def test_another_tenant_cannot_update_it(self, fake_supabase, account, other_tenant):
         msg = self._msg(fake_supabase, account)
-        assert update_message(other_tenant.user_id, str(msg["id"]), is_read=True) is None
+        assert await update_message(other_tenant.user_id, str(msg["id"]), is_read=True) is None
 
 
 class TestStoreOutboundEmail:
-    def test_it_stores_a_sent_message(self, fake_supabase, account):
-        row = store_outbound_email(
+    async def test_it_stores_a_sent_message(self, fake_supabase, account):
+        row = await store_outbound_email(
             account=account,
             to_addresses=["x@y.z"],
             cc_addresses=["cc@y.z"],
@@ -411,8 +426,8 @@ class TestStoreOutboundEmail:
         assert row["category"] == "personal"
         assert row["sendgrid_message_id"] == "msg-1"
 
-    def test_absent_cc_becomes_an_empty_list(self, fake_supabase, account):
-        row = store_outbound_email(
+    async def test_absent_cc_becomes_an_empty_list(self, fake_supabase, account):
+        row = await store_outbound_email(
             account=account, to_addresses=["x@y.z"], subject="s", body_text="b"
         )
         assert row["cc_addresses"] == []
@@ -728,7 +743,7 @@ def _rows_client(rows):
         def eq(self, *a, **k):
             return self
 
-        def execute(self):
+        async def execute(self):
             return type("R", (), {"data": rows})()
 
     return type("C", (), {"table": staticmethod(lambda n: _T())})()

@@ -503,7 +503,7 @@ async def get_usage_logs(
     if session_id:
         query = query.eq("session_id", session_id)
 
-    result = query.range(offset, offset + limit - 1).execute()
+    result = await query.range(offset, offset + limit - 1).execute()
     return result.data or []
 
 
@@ -531,7 +531,7 @@ async def get_usage_logs_for_reconciliation(
     if created_before:
         query = query.lte("created_at", created_before.isoformat())
 
-    result = query.limit(limit).execute()
+    result = await query.limit(limit).execute()
     return result.data or []
 
 

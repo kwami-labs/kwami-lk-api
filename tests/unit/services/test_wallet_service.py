@@ -61,29 +61,36 @@ def allowlisted(fake_supabase):
 
 
 class TestResolveOwnedKwami:
-    def test_it_finds_an_owned_kwami(self, fake_supabase, tenant):
-        assert _resolve_owned_kwami(tenant.user_id, tenant.kwami_id)["id"] == tenant.kwami_id
+    @pytest.mark.anyio
+    async def test_it_finds_an_owned_kwami(self, fake_supabase, tenant):
+        assert (await _resolve_owned_kwami(tenant.user_id, tenant.kwami_id))[
+            "id"
+        ] == tenant.kwami_id
 
-    def test_another_tenants_kwami_is_not_found(self, fake_supabase, tenant, other_tenant):
+    @pytest.mark.anyio
+    async def test_another_tenants_kwami_is_not_found(self, fake_supabase, tenant, other_tenant):
         with pytest.raises(ValueError, match="Kwami not found"):
-            _resolve_owned_kwami(other_tenant.user_id, tenant.kwami_id)
+            await _resolve_owned_kwami(other_tenant.user_id, tenant.kwami_id)
 
 
 class TestFetchWallet:
-    def test_no_wallet_is_none(self, fake_supabase, tenant):
-        assert _fetch_wallet(tenant.user_id, tenant.kwami_id) is None
+    @pytest.mark.anyio
+    async def test_no_wallet_is_none(self, fake_supabase, tenant):
+        assert await _fetch_wallet(tenant.user_id, tenant.kwami_id) is None
 
     @pytest.mark.anyio
     async def test_a_created_wallet_is_found(self, fake_supabase, tenant):
         await create_kwami_wallet(tenant.user_id, tenant.kwami_id)
-        assert _fetch_wallet(tenant.user_id, tenant.kwami_id) is not None
+        assert await _fetch_wallet(tenant.user_id, tenant.kwami_id) is not None
 
 
 class TestFetchAllowlist:
-    def test_defaults_are_visible_to_everyone(self, fake_supabase, tenant, allowlisted):
-        assert [r["symbol"] for r in _fetch_allowlist(tenant.user_id)] == ["SOL"]
+    @pytest.mark.anyio
+    async def test_defaults_are_visible_to_everyone(self, fake_supabase, tenant, allowlisted):
+        assert [r["symbol"] for r in await _fetch_allowlist(tenant.user_id)] == ["SOL"]
 
-    def test_a_users_own_custom_token_is_visible(self, fake_supabase, tenant):
+    @pytest.mark.anyio
+    async def test_a_users_own_custom_token_is_visible(self, fake_supabase, tenant):
         fake_supabase.db.seed(
             "wallet_token_allowlist",
             {
@@ -96,9 +103,10 @@ class TestFetchAllowlist:
                 "created_by_user_id": tenant.user_id,
             },
         )
-        assert [r["symbol"] for r in _fetch_allowlist(tenant.user_id)] == ["MINE"]
+        assert [r["symbol"] for r in await _fetch_allowlist(tenant.user_id)] == ["MINE"]
 
-    def test_another_users_custom_token_is_hidden(self, fake_supabase, tenant, other_tenant):
+    @pytest.mark.anyio
+    async def test_another_users_custom_token_is_hidden(self, fake_supabase, tenant, other_tenant):
         fake_supabase.db.seed(
             "wallet_token_allowlist",
             {
@@ -111,18 +119,21 @@ class TestFetchAllowlist:
                 "created_by_user_id": other_tenant.user_id,
             },
         )
-        assert _fetch_allowlist(tenant.user_id) == []
+        assert await _fetch_allowlist(tenant.user_id) == []
 
 
 class TestIsAllowedMint:
-    def test_an_allowlisted_mint_passes(self, fake_supabase, tenant, allowlisted):
-        assert _is_allowed_mint(tenant.user_id, SOL_MINT) is True
+    @pytest.mark.anyio
+    async def test_an_allowlisted_mint_passes(self, fake_supabase, tenant, allowlisted):
+        assert await _is_allowed_mint(tenant.user_id, SOL_MINT) is True
 
-    def test_surrounding_whitespace_is_ignored(self, fake_supabase, tenant, allowlisted):
-        assert _is_allowed_mint(tenant.user_id, f"  {SOL_MINT}  ") is True
+    @pytest.mark.anyio
+    async def test_surrounding_whitespace_is_ignored(self, fake_supabase, tenant, allowlisted):
+        assert await _is_allowed_mint(tenant.user_id, f"  {SOL_MINT}  ") is True
 
-    def test_an_unknown_mint_is_refused(self, fake_supabase, tenant, allowlisted):
-        assert _is_allowed_mint(tenant.user_id, "X" * 44) is False
+    @pytest.mark.anyio
+    async def test_an_unknown_mint_is_refused(self, fake_supabase, tenant, allowlisted):
+        assert await _is_allowed_mint(tenant.user_id, "X" * 44) is False
 
 
 class TestComputeCreditAmount:
@@ -287,7 +298,7 @@ class TestAddCustomAllowlistToken:
             def insert(self, payload):
                 return self
 
-            def execute(self):
+            async def execute(self):
                 return type("R", (), {"data": []})()
 
         monkeypatch.setattr(

@@ -140,7 +140,7 @@ async def save_browser_context(owner_key: str, vendor: str, context_id: str) -> 
     return row
 
 
-def delete_browser_context(owner_key: str, vendor: str | None = None) -> int:
+async def delete_browser_context(owner_key: str, vendor: str | None = None) -> int:
     """Forget an owner's stored profile handle(s). Returns rows removed.
 
     Used when a user asks to clear their browsing session. It only drops our
@@ -157,7 +157,7 @@ def delete_browser_context(owner_key: str, vendor: str | None = None) -> int:
         _, normalized_vendor = _validate(owner, vendor)
         query = query.eq("vendor", normalized_vendor)
 
-    result = query.execute()
+    result = await query.execute()
     removed = len(getattr(result, "data", None) or [])
     logger.info("Deleted %d browser context row(s) for owner %s...", removed, owner[:8])
     return removed

@@ -135,7 +135,7 @@ async def get_inbox(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=30, ge=1, le=100),
 ):
-    messages = email_service.fetch_inbox(
+    messages = await email_service.fetch_inbox(
         user.id,
         kwami_id,
         category=category,

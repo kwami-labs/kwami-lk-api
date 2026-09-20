@@ -128,7 +128,7 @@ async def test_a_token_minting_failure_is_a_flat_500(monkeypatch, tenant_client,
 
 @pytest.mark.anyio
 async def test_a_forbidden_room_claim_propagates_as_a_domain_error(monkeypatch, tenant_client):
-    def deny(*a, **k):
+    async def deny(*a, **k):
         raise ForbiddenError("This room belongs to another user")
 
     monkeypatch.setattr(token_route, "claim_room", deny)

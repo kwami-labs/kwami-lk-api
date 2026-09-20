@@ -390,10 +390,12 @@ class TestSendgridInbound:
         }
 
     @pytest.fixture
-    def account(self, fake_supabase, tenant):
+    async def account(self, fake_supabase, tenant):
         from src.services.email_service import activate_account
 
-        return activate_account(user_id=tenant.user_id, kwami_id=tenant.kwami_id, username="ada")
+        return await activate_account(
+            user_id=tenant.user_id, kwami_id=tenant.kwami_id, username="ada"
+        )
 
     async def test_a_bad_signature_is_a_401(self, client):
         """401, matching the Twilio webhook, rather than the old 403."""

@@ -864,14 +864,15 @@ def _empty_insert_client():
         def range(self, *a, **k):
             return self
 
-        def execute(self):
+        async def execute(self):
             return type("R", (), {"data": []})()
 
     return type("C", (), {"table": staticmethod(lambda n: _T())})()
 
 
 class TestFetchRows:
-    def test_it_pages_until_a_short_batch(self, monkeypatch, fake_supabase):
+    @pytest.mark.anyio
+    async def test_it_pages_until_a_short_batch(self, monkeypatch, fake_supabase):
         pages = [[{"id": i} for i in range(3)], [{"id": 99}]]
         seen: list[tuple[int, int]] = []
 
@@ -898,7 +899,7 @@ class TestFetchRows:
                 seen.append((start, end))
                 return self
 
-            def execute(self):
+            async def execute(self):
                 return type("R", (), {"data": pages.pop(0) if pages else []})()
 
         monkeypatch.setattr(
@@ -906,11 +907,12 @@ class TestFetchRows:
             "get_supabase_admin",
             lambda: type("C", (), {"table": staticmethod(lambda n: _T())})(),
         )
-        rows = _fetch_rows("t", batch_size=3)
+        rows = await _fetch_rows("t", batch_size=3)
         assert len(rows) == 4
         assert seen == [(0, 2), (3, 5)]
 
-    def test_every_filter_operator_is_applied(self, monkeypatch, fake_supabase):
+    @pytest.mark.anyio
+    async def test_every_filter_operator_is_applied(self, monkeypatch, fake_supabase):
         applied: list[tuple[str, str, object]] = []
 
         class _T:
@@ -939,7 +941,7 @@ class TestFetchRows:
             def range(self, *a):
                 return self
 
-            def execute(self):
+            async def execute(self):
                 return type("R", (), {"data": []})()
 
         monkeypatch.setattr(
@@ -947,7 +949,7 @@ class TestFetchRows:
             "get_supabase_admin",
             lambda: type("C", (), {"table": staticmethod(lambda n: _T())})(),
         )
-        _fetch_rows(
+        await _fetch_rows(
             "t",
             filters=[
                 ("eq", "a", 1),
@@ -1415,7 +1417,7 @@ class TestRunAdminReconciliation:
 
     @pytest.mark.anyio
     async def test_a_failure_marks_the_run_failed_and_re_raises(self, monkeypatch, fake_supabase):
-        def boom(*a, **k):
+        async def boom(*a, **k):
             raise RuntimeError("fetch exploded")
 
         monkeypatch.setattr(ar, "_fetch_rows", boom)

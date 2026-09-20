@@ -138,7 +138,7 @@ async def delete_browser_context_route(
     at the vendor.
     """
     try:
-        removed = delete_browser_context(owner_key, vendor)
+        removed = await delete_browser_context(owner_key, vendor)
     except UnsupportedVendorError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ValueError as exc:

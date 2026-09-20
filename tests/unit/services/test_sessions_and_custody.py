@@ -22,6 +22,7 @@ from src.services.custody_service import (
     CustodyWalletMaterial,
 )
 from src.services.sessions import ROOM_NAME_PREFIX, build_room_name, claim_room, get_session
+from tests.helpers import async_return, async_sequence
 
 
 class TestBuildRoomName:
@@ -43,7 +44,8 @@ class TestBuildRoomName:
 
 
 class TestGetSession:
-    def test_it_returns_the_row(self, fake_supabase):
+    @pytest.mark.anyio
+    async def test_it_returns_the_row(self, fake_supabase):
         fake_supabase.db.seed(
             "livekit_sessions",
             {
@@ -54,38 +56,46 @@ class TestGetSession:
                 "status": "issued",
             },
         )
-        row = get_session("r1")
+        row = await get_session("r1")
         assert row is not None and row["user_id"] == "u1"
 
-    def test_it_returns_none_for_an_unknown_room(self, fake_supabase):
-        assert get_session("nope") is None
+    @pytest.mark.anyio
+    async def test_it_returns_none_for_an_unknown_room(self, fake_supabase):
+        assert await get_session("nope") is None
 
 
 class TestClaimRoom:
-    def test_a_free_room_is_recorded_for_the_caller(self, fake_supabase):
-        row = claim_room("r1", user_id="u1", kwami_id="k1")
+    @pytest.mark.anyio
+    async def test_a_free_room_is_recorded_for_the_caller(self, fake_supabase):
+        row = await claim_room("r1", user_id="u1", kwami_id="k1")
         assert row["room_name"] == "r1"
         assert row["user_id"] == "u1"
         assert row["status"] == "issued"
         assert row["source"] == "web"
 
-    def test_the_source_is_configurable(self, fake_supabase):
-        assert claim_room("r1", user_id="u1", kwami_id=None, source="sip")["source"] == "sip"
+    @pytest.mark.anyio
+    async def test_the_source_is_configurable(self, fake_supabase):
+        assert (await claim_room("r1", user_id="u1", kwami_id=None, source="sip"))[
+            "source"
+        ] == "sip"
 
-    def test_reclaiming_your_own_room_returns_the_existing_row(self, fake_supabase):
-        first = claim_room("r1", user_id="u1", kwami_id="k1")
-        second = claim_room("r1", user_id="u1", kwami_id="k1")
+    @pytest.mark.anyio
+    async def test_reclaiming_your_own_room_returns_the_existing_row(self, fake_supabase):
+        first = await claim_room("r1", user_id="u1", kwami_id="k1")
+        second = await claim_room("r1", user_id="u1", kwami_id="k1")
         assert second["id"] == first["id"]
         assert len(fake_supabase.db.rows("livekit_sessions")) == 1
 
-    def test_another_users_room_is_refused(self, fake_supabase, caplog):
-        claim_room("r1", user_id="u1", kwami_id="k1")
+    @pytest.mark.anyio
+    async def test_another_users_room_is_refused(self, fake_supabase, caplog):
+        await claim_room("r1", user_id="u1", kwami_id="k1")
         with caplog.at_level("WARNING", logger="kwami-api.sessions"):
             with pytest.raises(ForbiddenError, match="belongs to another user"):
-                claim_room("r1", user_id="attacker", kwami_id="k1")
+                await claim_room("r1", user_id="attacker", kwami_id="k1")
         assert "Rejected token request" in caplog.text
 
-    def test_the_owner_is_compared_as_a_string(self, fake_supabase):
+    @pytest.mark.anyio
+    async def test_the_owner_is_compared_as_a_string(self, fake_supabase):
         """Supabase can hand back a uuid object; `!=` on mixed types would reject the owner."""
         fake_supabase.db.seed(
             "livekit_sessions",
@@ -97,9 +107,10 @@ class TestClaimRoom:
                 "status": "issued",
             },
         )
-        assert claim_room("r1", user_id="12345", kwami_id=None)["room_name"] == "r1"
+        assert (await claim_room("r1", user_id="12345", kwami_id=None))["room_name"] == "r1"
 
-    def test_losing_the_insert_race_re_reads_and_accepts_the_owner(
+    @pytest.mark.anyio
+    async def test_losing_the_insert_race_re_reads_and_accepts_the_owner(
         self, monkeypatch, fake_supabase
     ):
         """UNIQUE(room_name) is the arbiter, not a read-then-write in Python."""
@@ -115,9 +126,12 @@ class TestClaimRoom:
         monkeypatch.setattr(
             sessions, "get_supabase_admin", lambda: _raising_client(_unique_violation())
         )
-        assert claim_room("r1", user_id="u1", kwami_id=None) == existing
+        assert await claim_room("r1", user_id="u1", kwami_id=None) == existing
 
-    def test_losing_the_insert_race_to_someone_else_is_forbidden(self, monkeypatch, fake_supabase):
+    @pytest.mark.anyio
+    async def test_losing_the_insert_race_to_someone_else_is_forbidden(
+        self, monkeypatch, fake_supabase
+    ):
         other = {
             "id": "s1",
             "room_name": "r1",
@@ -131,19 +145,21 @@ class TestClaimRoom:
             sessions, "get_supabase_admin", lambda: _raising_client(_unique_violation())
         )
         with pytest.raises(ForbiddenError):
-            claim_room("r1", user_id="attacker", kwami_id=None)
+            await claim_room("r1", user_id="attacker", kwami_id=None)
 
-    def test_a_race_whose_re_read_finds_nothing_is_still_forbidden(
+    @pytest.mark.anyio
+    async def test_a_race_whose_re_read_finds_nothing_is_still_forbidden(
         self, monkeypatch, fake_supabase
     ):
-        monkeypatch.setattr(sessions, "get_session", lambda room: None)
+        monkeypatch.setattr(sessions, "get_session", async_return(None))
         monkeypatch.setattr(
             sessions, "get_supabase_admin", lambda: _raising_client(_unique_violation())
         )
         with pytest.raises(ForbiddenError):
-            claim_room("r1", user_id="u1", kwami_id=None)
+            await claim_room("r1", user_id="u1", kwami_id=None)
 
-    def test_a_duplicate_key_message_without_the_sqlstate_is_also_a_race(
+    @pytest.mark.anyio
+    async def test_a_duplicate_key_message_without_the_sqlstate_is_also_a_race(
         self, monkeypatch, fake_supabase
     ):
         existing = {
@@ -160,25 +176,27 @@ class TestClaimRoom:
             "get_supabase_admin",
             lambda: _raising_client(RuntimeError("Duplicate key value violates constraint")),
         )
-        assert claim_room("r1", user_id="u1", kwami_id=None) == existing
+        assert await claim_room("r1", user_id="u1", kwami_id=None) == existing
 
-    def test_any_other_insert_failure_propagates(self, monkeypatch, fake_supabase):
+    @pytest.mark.anyio
+    async def test_any_other_insert_failure_propagates(self, monkeypatch, fake_supabase):
         """A connection error must not be mistaken for "someone else owns this"."""
-        monkeypatch.setattr(sessions, "get_session", lambda room: None)
+        monkeypatch.setattr(sessions, "get_session", async_return(None))
         monkeypatch.setattr(
             sessions,
             "get_supabase_admin",
             lambda: _raising_client(RuntimeError("connection refused")),
         )
         with pytest.raises(RuntimeError, match="connection refused"):
-            claim_room("r1", user_id="u1", kwami_id=None)
+            await claim_room("r1", user_id="u1", kwami_id=None)
 
-    def test_an_insert_returning_no_rows_falls_back_to_the_payload(
+    @pytest.mark.anyio
+    async def test_an_insert_returning_no_rows_falls_back_to_the_payload(
         self, monkeypatch, fake_supabase
     ):
-        monkeypatch.setattr(sessions, "get_session", lambda room: None)
+        monkeypatch.setattr(sessions, "get_session", async_return(None))
         monkeypatch.setattr(sessions, "get_supabase_admin", lambda: _client_returning([]))
-        row = claim_room("r1", user_id="u1", kwami_id="k1", source="web")
+        row = await claim_room("r1", user_id="u1", kwami_id="k1", source="web")
         assert row == {
             "room_name": "r1",
             "user_id": "u1",
@@ -198,13 +216,8 @@ def _unique_violation() -> APIError:
 
 
 def _first_none_then(row):
-    calls = {"n": 0}
-
-    def _get(room_name):
-        calls["n"] += 1
-        return None if calls["n"] == 1 else row
-
-    return _get
+    """`get_session` is awaited now, so the stub has to be a coroutine function."""
+    return async_sequence(None, row)
 
 
 class _Result:
@@ -217,7 +230,7 @@ def _raising_client(exc: Exception):
         def insert(self, payload):
             return self
 
-        def execute(self):
+        async def execute(self):
             raise exc
 
     class _Client:
@@ -232,7 +245,7 @@ def _client_returning(data):
         def insert(self, payload):
             return self
 
-        def execute(self):
+        async def execute(self):
             return _Result(data)
 
     class _Client:

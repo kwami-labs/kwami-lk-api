@@ -312,7 +312,7 @@ async def ensure_contact(
     return row
 
 
-def list_contacts_for_kwami(
+async def list_contacts_for_kwami(
     user_id: str,
     kwami_id: str,
     *,
@@ -328,7 +328,7 @@ def list_contacts_for_kwami(
         select_query = select_query.or_(
             f"display_name.ilike.{like},phone_number.ilike.{like},email.ilike.{like},instagram.ilike.{like},tiktok.ilike.{like}"
         )
-    result = select_query.order("updated_at", desc=True).limit(limit).execute()
+    result = await select_query.order("updated_at", desc=True).limit(limit).execute()
     return list(getattr(result, "data", None) or [])
 
 
@@ -426,7 +426,7 @@ async def ensure_conversation(
     )
     if contact_id:
         query = query.eq("contact_id", contact_id)
-    result = query.order("updated_at", desc=True).limit(1).execute()
+    result = await query.order("updated_at", desc=True).limit(1).execute()
     row = _single(result)
     payload = {
         "user_id": user_id,

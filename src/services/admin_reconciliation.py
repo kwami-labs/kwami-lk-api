@@ -560,7 +560,7 @@ def _serialize_line(line: ProviderUsageLine, import_id: str) -> dict[str, Any]:
     }
 
 
-def _fetch_rows(
+async def _fetch_rows(
     table_name: str,
     *,
     order_column: str = "created_at",
@@ -584,7 +584,7 @@ def _fetch_rows(
                 query = query.lte(column, value)
             elif op == "in":
                 query = query.in_(column, value)
-        result = query.range(offset, offset + batch_size - 1).execute()
+        result = await query.range(offset, offset + batch_size - 1).execute()
         batch = result.data or []
         rows.extend(batch)
         if len(batch) < batch_size:
@@ -766,7 +766,7 @@ async def list_provider_usage_imports(
     provider: str | None = None,
 ) -> list[dict[str, Any]]:
     filters = [("eq", "provider", _normalize_provider(provider))] if provider else []
-    rows = _fetch_rows(
+    rows = await _fetch_rows(
         "provider_usage_imports",
         filters=filters,
         batch_size=min(limit, 500),
@@ -1044,7 +1044,7 @@ async def replace_reconciliation_findings(
 
 
 async def list_reconciliation_runs(limit: int = 25) -> list[dict[str, Any]]:
-    rows = _fetch_rows("provider_reconciliation_runs", batch_size=min(limit, 500))
+    rows = await _fetch_rows("provider_reconciliation_runs", batch_size=min(limit, 500))
     return rows[:limit]
 
 
@@ -1091,7 +1091,7 @@ async def run_admin_reconciliation(
             import_filters.append(("in", "provider", normalized_filters))
         if import_ids:
             import_filters.append(("in", "import_id", import_ids))
-        imported_lines = _fetch_rows(
+        imported_lines = await _fetch_rows(
             "provider_usage_lines",
             filters=import_filters,
         )
@@ -1107,7 +1107,7 @@ async def run_admin_reconciliation(
             ledger_filters.append(("gte", "created_at", _datetime_to_iso(period_start)))
         if period_end:
             ledger_filters.append(("lte", "created_at", _datetime_to_iso(period_end)))
-        internal_rows = _fetch_rows("credit_usage_logs", filters=ledger_filters)
+        internal_rows = await _fetch_rows("credit_usage_logs", filters=ledger_filters)
         if normalized_filters:
             internal_rows = [
                 row
