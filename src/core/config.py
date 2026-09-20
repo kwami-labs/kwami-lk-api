@@ -1,10 +1,12 @@
 """Application settings using pydantic-settings."""
 
+from __future__ import annotations
+
 import os
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, computed_field
+from pydantic import Field, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -55,16 +57,12 @@ class Settings(BaseSettings):
     @computed_field
     @property
     def cors_origins(self) -> list[str]:
-        """Parse CORS origins from comma-separated string."""
-        origins = [origin.strip() for origin in self.cors_origins_str.split(",") if origin.strip()]
-        if self.app_env == "production" and "*" in origins:
-            import logging
+        """Parse CORS origins from comma-separated string.
 
-            logging.getLogger("kwami-api.config").warning(
-                "CORS_ORIGINS is set to '*' in production. "
-                "Set CORS_ORIGINS to specific origins for security."
-            )
-        return origins
+        A wildcard in production is refused by ``_production_fails_closed`` rather
+        than warned about here, so this stays a pure parse.
+        """
+        return [origin.strip() for origin in self.cors_origins_str.split(",") if origin.strip()]
 
     # LiveKit
     livekit_url: str = Field(alias="LIVEKIT_URL")
@@ -273,6 +271,89 @@ class Settings(BaseSettings):
     # Enable OpenAPI docs (/docs, /redoc) in production when set to true
     enable_docs: bool = Field(default=False, alias="ENABLE_DOCS")
 
+    @model_validator(mode="after")
+    def _production_fails_closed(self) -> Settings:
+        """Refuse to boot a production process that is missing a secret it needs.
+
+        ``docs/security.md`` has always claimed "the process refuses to start when a
+        required variable is missing". It did not: only the three ``LIVEKIT_*`` fields
+        have no default, so production booted happily with no Supabase key, no Stripe
+        webhook secret and no inbound-webhook secrets -- and then either 500ed on every
+        request or, worse, accepted unsigned webhooks.
+
+        Every rule below is conditional on the feature actually being switched on, so
+        turning a feature off stays a supported deployment rather than a boot failure.
+        A misconfiguration that fails at boot is a rollback; the same one discovered at
+        request time is an incident.
+        """
+        if self.app_env != "production":
+            return self
+
+        problems: list[str] = []
+
+        # Starlette echoes the caller's Origin when allow_origins is "*" and
+        # allow_credentials is True -- which src.main sets. That is not the
+        # "browser-incompatible combination" it was once documented as; it is an
+        # open credentialed CORS policy that any origin passes.
+        if "*" in self.cors_origins:
+            problems.append(
+                "CORS_ORIGINS is '*'. With allow_credentials=True this echoes any "
+                "caller's Origin. Set explicit origins."
+            )
+
+        if not self.supabase_url:
+            problems.append("SUPABASE_URL is required (JWT verification and every DB read).")
+        if not self.supabase_secret_key:
+            problems.append("SUPABASE_SECRET_KEY is required (credits ledger and all writes).")
+        if not self.kwami_api_key:
+            problems.append("KWAMI_API_KEY is required (agent usage reporting answers 503).")
+
+        # Either mechanism is a complete admin identity; requiring both would refuse a
+        # deployment that has deliberately picked one.
+        if not self.admin_api_key and not self.admin_emails:
+            problems.append("ADMIN_API_KEY or ADMIN_EMAILS is required to reach /admin/*.")
+
+        if self.stripe_secret_key and not self.stripe_webhook_secret:
+            problems.append(
+                "STRIPE_WEBHOOK_SECRET is required when STRIPE_SECRET_KEY is set; "
+                "without it a forged webhook can grant credits."
+            )
+        if self.sendgrid_api_key and not self.sendgrid_inbound_webhook_secret:
+            problems.append(
+                "SENDGRID_INBOUND_WEBHOOK_SECRET is required when SENDGRID_API_KEY is set; "
+                "without it /webhooks/email/inbound accepts forged mail."
+            )
+        if self.twilio_account_sid and not self.twilio_auth_token:
+            problems.append(
+                "TWILIO_AUTH_TOKEN is required when TWILIO_ACCOUNT_SID is set; "
+                "it is what signs and verifies the inbound webhooks."
+            )
+        # Twilio signs the URL configured on the number, which is derived from this.
+        # See the reasoning in src.services.twilio_service.signed_url_candidates:
+        # without it, validation falls back to request-derived URLs.
+        if self.twilio_account_sid and not self.app_public_url:
+            problems.append(
+                "APP_PUBLIC_URL is required when Twilio is configured; it is the URL "
+                "Twilio signs, and the only candidate that request headers cannot influence."
+            )
+
+        # The mock provider returns `mock_<sha256>` strings. They are not Solana
+        # addresses: anything sent to one is unrecoverable.
+        if self.wallet_enabled and self.wallet_custody_provider == "mock":
+            problems.append(
+                "WALLET_CUSTODY_PROVIDER is 'mock' while WALLET_ENABLED is true. "
+                "The mock provider mints addresses that cannot receive funds."
+            )
+        if self.wallet_enabled and self.wallet_custody_provider != "mock":
+            if not self.wallet_custody_signing_secret:
+                problems.append(
+                    "WALLET_CUSTODY_SIGNING_SECRET is required for a non-mock custody provider."
+                )
+
+        if problems:
+            raise ValueError("Refusing to start in production:\n  - " + "\n  - ".join(problems))
+        return self
+
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"
@@ -313,6 +394,19 @@ class Settings(BaseSettings):
         """Get JWKS URL for Supabase project."""
         if self.supabase_url:
             return f"{self.supabase_url}/auth/v1/.well-known/jwks.json"
+        return None
+
+    @computed_field
+    @property
+    def supabase_issuer(self) -> str | None:
+        """The ``iss`` claim Supabase puts in its access tokens.
+
+        Passed to ``jwt.decode`` in ``src.core.security``. ``None`` when Supabase is
+        not configured, which PyJWT treats as "do not check" -- and which cannot be
+        reached anyway, because the JWKS client is ``None`` on the same condition.
+        """
+        if self.supabase_url:
+            return f"{self.supabase_url}/auth/v1"
         return None
 
 
