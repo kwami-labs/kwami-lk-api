@@ -221,6 +221,16 @@ class TestDerivedProperties:
     def test_there_is_no_jwks_url_without_a_supabase_url(self):
         assert _settings().supabase_jwks_url is None
 
+    def test_the_issuer_is_derived_from_the_supabase_url(self):
+        """What `jwt.decode(issuer=...)` checks the token's `iss` against."""
+        s = _settings(SUPABASE_URL="https://proj.supabase.co")
+        assert s.supabase_issuer == "https://proj.supabase.co/auth/v1"
+
+    def test_there_is_no_issuer_without_a_supabase_url(self):
+        """None means "do not check" to PyJWT -- unreachable in practice, because the
+        JWKS client is None on the same condition and `verify_token` refuses first."""
+        assert _settings().supabase_issuer is None
+
 
 class TestProductionFailsClosed:
     """`docs/security.md` claimed this behaviour long before the code had it.
