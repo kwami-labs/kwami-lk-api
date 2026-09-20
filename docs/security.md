@@ -158,8 +158,34 @@ production. Do not turn it on there.
 Never commit `.env`. `.gitignore` blocks `.env` and `.env.*` except
 [`.env.sample`](../.env.sample), which holds names and placeholders.
 
-Runtime configuration is validated at boot. The process refuses to start
-when a required variable is missing.
+Runtime configuration is validated at boot: `Settings._production_fails_closed`
+in [`src/core/config.py`](../src/core/config.py) refuses to start a
+`APP_ENV=production` process that is missing a secret it needs, and reports
+every problem at once rather than one redeploy at a time.
+
+This page claimed that behaviour long before the code had it. Until then only
+the three `LIVEKIT_*` variables had no default, so production booted happily
+with no Supabase key, no Stripe webhook secret and no inbound-webhook secrets,
+and then either 500ed on every request or accepted unsigned webhooks.
+
+Each rule is conditional on the feature being switched on, so turning a feature
+off stays a supported deployment:
+
+| Required in production | When |
+|------------------------|------|
+| `SUPABASE_URL`, `SUPABASE_SECRET_KEY` | always |
+| `KWAMI_API_KEY` | always |
+| `ADMIN_API_KEY` **or** `ADMIN_EMAILS` | always — either is a complete admin identity |
+| `STRIPE_WEBHOOK_SECRET` | when `STRIPE_SECRET_KEY` is set |
+| `SENDGRID_INBOUND_WEBHOOK_SECRET` | when `SENDGRID_API_KEY` is set |
+| `TWILIO_AUTH_TOKEN`, `APP_PUBLIC_URL` | when `TWILIO_ACCOUNT_SID` is set |
+| `WALLET_CUSTODY_PROVIDER` ≠ `mock` | when `WALLET_ENABLED` is true |
+| `WALLET_CUSTODY_SIGNING_SECRET` | with a non-mock custody provider |
+| `CORS_ORIGINS` without `*` | always — see below |
+
+`WALLET_CUSTODY_PROVIDER=mock` is refused with wallets on because the mock
+provider mints `mock_<sha256>` strings as Solana addresses. Anything sent to one
+is unrecoverable.
 
 | Secret | Rotate in |
 |--------|-----------|
@@ -182,10 +208,23 @@ If you believe a secret has been exposed, rotate it first, then report it.
 
 ## CORS and docs
 
-`CORS_ORIGINS=*` is the development default. In production the settings
-object logs a warning if `*` is still present — set explicit origins.
-`allow_credentials=True` with `*` is a browser-incompatible combination;
-do not ship it.
+`CORS_ORIGINS=*` is the development default, and production **refuses to
+start** with it. That used to be a log warning, on the stated grounds that
+`allow_credentials=True` with `*` is "a browser-incompatible combination".
+It is not: Starlette echoes the caller's `Origin` back and sets
+`Access-Control-Allow-Credentials: true`, on both preflight and simple
+requests. Verified against the pinned Starlette with `APP_ENV=production`:
+
+```
+Origin: https://evil.example
+→ access-control-allow-origin: https://evil.example
+  access-control-allow-credentials: true
+```
+
+So the wildcard was not an inert misconfiguration that browsers would reject
+— it was an open credentialed CORS policy that every origin passed. Bearer
+tokens rather than cookies limited what an attacker could do with it; moving
+to cookie auth would have removed that limit silently. Set explicit origins.
 
 OpenAPI is off in production unless `ENABLE_DOCS=true` — all three of
 `/docs`, `/redoc` and `/openapi.json`. The schema describes admin and webhook
