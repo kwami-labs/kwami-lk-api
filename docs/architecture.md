@@ -240,3 +240,54 @@ Python prices a usage item (`src/services/pricing.py`) and applies markup
 Fly terminates TLS and forwards over the internal network. Uvicorn runs with
 `proxy_headers=True` so `request.url.scheme` stays `https` — Twilio signs the
 public HTTPS URL, and a scheme mismatch fails every inbound call.
+
+
+## Concurrency model
+
+Every outbound call is asynchronous. Supabase goes through
+`create_async_client`; Stripe uses its `*_async` resource methods; Twilio runs
+on `AsyncTwilioHttpClient`; the provider-reconciliation pulls use `httpx`; Zep
+was already `AsyncZep`. One client of each is built per process — in the
+lifespan for Supabase, lazily for the rest — so a request borrows a pooled
+connection instead of opening one.
+
+This was not always so. Every SDK was the synchronous one, called straight from
+`async def` handlers, so each request held the event loop for the duration of
+its network round trip. A static walk of the call graph put 94 of 167 `async
+def` functions on a path to a blocking call, and the two shared ownership
+dependencies in `src/api/authz.py` were among them, so nearly every
+authenticated request blocked before its handler began.
+
+`tests/perf/test_event_loop_stall.py` measures it: ten concurrent reads against
+a 50ms query took **0.61s** before and take **0.02s** now.
+
+Two things stay synchronous on purpose, and are pushed to a worker thread with
+`anyio.to_thread.run_sync` rather than left on the loop:
+
+* the JWKS fetch in `src/core/security.py`, because `PyJWKClient` is urllib-based
+  and a cache miss is an HTTPS round trip on the auth path of every request;
+* Louvain community detection in the memory routes, which is CPU-bound and
+  superlinear in the graph — it stalls the loop exactly as a socket read would.
+
+## Middleware
+
+In order, outermost first:
+
+| Middleware | What it does |
+|---|---|
+| `RequestContextMiddleware` | Assigns or honours `X-Request-ID`, binds it to every log record, writes the access line |
+| `SecurityHeadersMiddleware` | `nosniff`, `DENY`, `no-referrer`, a CSP, and HSTS over TLS |
+| `BodySizeLimitMiddleware` | 413 above `MAX_REQUEST_BODY_BYTES`, counted as the body streams |
+| `CORSMiddleware` | Explicit origins; a wildcard is refused at boot in production |
+
+All three are raw ASGI rather than `BaseHTTPMiddleware`. That base class runs
+the rest of the application in a separate anyio task with two memory streams
+between them: a task and two queue hops on every request, and — found the hard
+way — it also hides everything downstream from coverage's tracer, which made
+whole route modules measure 26% while their tests passed.
+
+Rate limiting (`src/api/ratelimit.py`) keys on the authenticated user, falling
+back to the agent or admin key and then the peer address, so one office behind a
+NAT does not share a budget and one account cannot buy headroom by changing
+address. Storage is per worker by default; `RATE_LIMIT_STORAGE_URI` takes a
+Redis URL to make the limits exact across machines.

@@ -58,7 +58,8 @@ API listens on `API_HOST:API_PORT` (default `0.0.0.0:8080`). OpenAPI docs at `/d
 
 | Prefix | Description |
 |--------|-------------|
-| `/` `/health` | Liveness |
+| `/` `/health` | Liveness (static; never touches a dependency) |
+| `/health/ready` | Readiness — checks Supabase and Zep, 503 when one is down |
 | `/token` | LiveKit token generation and room claim |
 | `/memory` | Zep memory (sessions, graph, search) |
 | `/models` `/voices` `/languages` | Catalogs |
@@ -90,6 +91,11 @@ The **token** endpoint expects a POST body with optional `roomName`, `participan
 | `API_HOST` / `API_PORT` | No | Bind address and port (default `0.0.0.0:8080`) |
 | `APP_ENV` | No | `development` \| `staging` \| `production` |
 | `ENABLE_DOCS` | No | Set to `true` to expose `/docs`, `/redoc` and `/openapi.json` in production |
+| `RATE_LIMIT_ENABLED` | No | Per-caller rate limits (default on) |
+| `RATE_LIMIT_STORAGE_URI` | No | `memory://` (per worker) or a `redis://` URL for exact limits across machines |
+| `MAX_REQUEST_BODY_BYTES` | No | Largest accepted body (default 10 MiB) |
+| `WEB_CONCURRENCY` | No | uvicorn worker processes (default 2) |
+| `LOG_JSON` | No | JSON log records (default true); set false for readable local output |
 
 See `.env.sample` for a full list and comments.
 
@@ -99,7 +105,7 @@ See `.env.sample` for a full list and comments.
 
 | Command | Description |
 |---------|-------------|
-| `make check` | The full gate: lint, format, both test lanes, coverage floors, migrations |
+| `make check` | The full gate: lint, typecheck, format, both test lanes, coverage floors, migrations |
 | `make install` | Sync the venv, dev extra included |
 | `make dev` | Run the API on :8080 |
 | `make test` | Unit and API tests — no database, no network |
@@ -107,6 +113,7 @@ See `.env.sample` for a full list and comments.
 | `make test-integration` | Migrations and money invariants against that Postgres |
 | `make coverage` | Run both lanes and merge their profiles |
 | `make coverage-gate` | Enforce the per-module floors in `coverage.floors` |
+| `make typecheck` | mypy over `src/` — strict on the money and auth modules |
 | `make lint` / `make format` | Ruff check / format and fix |
 | `make vuln` | pip-audit over the locked dependency set (network) |
 | `make hooks` | Install the pre-push hook that refuses a direct push to `main` |
