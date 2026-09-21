@@ -174,17 +174,36 @@ merge a PR into main
       cd.yml
         ├─ release   semantic-release → CHANGELOG.md + tag vX.Y.Z + GitHub Release
         ├─ publish   one image build, tagged with the version that was just cut
-        └─ deploy    flyctl deploy --remote-only
+        ├─ deploy    flyctl deploy --remote-only          (the live origin)
+        └─ deploy    wrangler deploy (Worker + Container) (dark until a domain is attached)
 ```
 
-The service is pre-1.0, so [`.releaserc.json`](.releaserc.json) maps **breaking → minor** and
-everything else → patch: a `feat!:` bumps `0.3.x → 0.4.0`, not `1.0.0`. Every conventional type is
-releasable — a `test:` or `refactor:` still ships a patch — but only `feat`, `fix`, `perf` and
-`revert` get a heading in the changelog (the `angular` preset); the rest bump the version silently.
+The service is **1.x**, so [`.releaserc.json`](.releaserc.json) maps plain semver:
 
-`v0.1.0` is a baseline tag at the commit that introduced this automation. Without it
-semantic-release would treat the repository as a fresh 1.0.0 and pull the entire pre-automation
-history into the first changelog; the first `cd` run creates it if it is missing.
+| Commit | Bump | Example |
+|---|---|---|
+| `feat!:` or a `BREAKING CHANGE:` footer | **major** | `1.4.2 → 2.0.0` |
+| `feat:` | **minor** | `1.4.2 → 1.5.0` |
+| every other conventional type | **patch** | `1.4.2 → 1.4.3` |
+
+Every conventional type is releasable — a `test:` or `refactor:` still ships a patch — but only
+`feat`, `fix`, `perf` and `revert` get a heading in the changelog; the rest bump the version
+silently. Breaking changes get their own section.
+
+The preset is **`conventionalcommits`**, not `angular`, and the difference is not cosmetic: the
+`angular` preset does not understand the `!` marker at all. Under it a `feat!:` title parsed as no
+recognised type, matched no release rule, and cut **no release whatsoever** — while `publish` and
+`deploy` still ran, shipping the change under the previous version number. `conventionalcommits`
+reads `!` as breaking, so the title alone is enough and the footer is belt-and-braces.
+
+The preset is also not bundled with semantic-release, which ships only `angular`. `cd.yml`
+installs `conventional-changelog-conventionalcommits` explicitly in its `npx -p` list; drop that
+line and the release fails at plugin load.
+
+`v0.1.0` is a baseline tag at the commit that introduced this automation, and `v0.1.1` is the last
+release of the pre-1.0 line. Without a baseline semantic-release would treat the repository as a
+fresh 1.0.0 and pull the entire pre-automation history into the first changelog; the first `cd` run
+creates it if it is missing.
 
 The version number itself is stated in four places, and
 [`scripts/set-version.sh`](scripts/set-version.sh) writes all of them in one go —

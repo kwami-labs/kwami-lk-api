@@ -125,7 +125,7 @@ async def create_manual_provider_import(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
-        logger.error("Manual provider import failed: %s", exc)
+        logger.exception("Manual provider import failed")
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
@@ -147,7 +147,7 @@ async def pull_provider_import(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
-        logger.error("Provider pull failed: %s", exc)
+        logger.exception("Provider pull failed")
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
@@ -194,7 +194,7 @@ async def create_reconciliation_run_endpoint(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
-        logger.error("Reconciliation run failed: %s", exc)
+        logger.exception("Reconciliation run failed")
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 

@@ -1,6 +1,8 @@
 import logging
+from functools import partial
 from typing import Annotated
 
+import anyio.to_thread
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from zep_cloud.client import AsyncZep
@@ -219,12 +221,40 @@ def _build_ontology_models(
     return entities, edges
 
 
-async def get_zep_client():
+# One client for the process. `AsyncZep` owns an httpx.AsyncClient, and this used
+# to build a fresh one on every request across all 29 memory routes -- a new
+# connection pool per request, none of them ever closed, so sockets accumulated
+# for as long as the worker lived. Built lazily rather than in the lifespan so a
+# deployment without ZEP_API_KEY still boots and answers 503 per route.
+_zep_client: AsyncZep | None = None
+
+
+async def get_zep_client() -> AsyncZep:
+    global _zep_client
     if not settings.zep_api_key:
         raise HTTPException(
             status_code=503, detail="Memory service not configured (ZEP_API_KEY missing)"
         )
-    return AsyncZep(api_key=settings.zep_api_key)
+    if _zep_client is None:
+        _zep_client = AsyncZep(api_key=settings.zep_api_key)
+    return _zep_client
+
+
+async def close_zep_client() -> None:
+    """Release the shared client's connection pool at shutdown."""
+    global _zep_client
+    client = _zep_client
+    _zep_client = None
+    if client is None:
+        return
+    # zep-cloud has changed where it keeps the transport between versions, so
+    # close whatever is there rather than reaching for one fixed attribute.
+    for holder in (client, getattr(client, "_client_wrapper", None)):
+        httpx_client = getattr(holder, "httpx_client", None) or getattr(holder, "_client", None)
+        aclose = getattr(httpx_client, "aclose", None)
+        if aclose is not None:
+            await aclose()
+            return
 
 
 def verify_user_access(user: AuthUser, user_id: str):
@@ -403,8 +433,8 @@ async def get_user_facts(
                 "limit": limit,
                 "has_more": False,
             }
-        logger.error(f"Failed to fetch facts: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to fetch facts")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.delete("/{user_id}")
@@ -424,7 +454,7 @@ async def delete_user_memory(
     Requires authentication when auth is enabled.
     """
     verify_user_access(user, user_id)
-    logger.info(f"🗑️ Deleting all memory for user: {user_id}")
+    logger.info("🗑️ Deleting all memory for user: %s", user_id)
     deleted = {"threads": 0, "user": False, "errors": []}
 
     try:
@@ -442,7 +472,7 @@ async def delete_user_memory(
                 try:
                     await client.thread.delete(thread_id=thread_id)
                     deleted["threads"] += 1
-                    logger.info(f"🗑️ Deleted thread: {thread_id}")
+                    logger.info("🗑️ Deleted thread: %s", thread_id)
                 except Exception as e:
                     deleted["errors"].append(f"Failed to delete thread {thread_id}: {str(e)}")
         except Exception as e:
@@ -452,7 +482,7 @@ async def delete_user_memory(
         try:
             await client.user.delete(user_id=user_id)
             deleted["user"] = True
-            logger.info(f"🗑️ Deleted user: {user_id}")
+            logger.info("🗑️ Deleted user: %s", user_id)
         except Exception as e:
             error_msg = str(e)
             if "404" in error_msg:
@@ -460,7 +490,7 @@ async def delete_user_memory(
             else:
                 deleted["errors"].append(f"Failed to delete user: {error_msg}")
 
-        logger.info(f"🗑️ Deletion complete: {deleted['threads']} threads, user={deleted['user']}")
+        logger.info("🗑️ Deletion complete: %s threads, user=%s", deleted["threads"], deleted["user"])
         return {
             "success": deleted["user"] or deleted["threads"] > 0,
             "user_id": user_id,
@@ -470,8 +500,8 @@ async def delete_user_memory(
         }
 
     except Exception as e:
-        logger.error(f"Failed to delete user memory: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to delete user memory")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/{user_id}/messages")
@@ -487,7 +517,7 @@ async def get_user_messages(
     which is where chat messages are stored via memory.add().
     """
     verify_user_access(user, user_id)
-    logger.info(f"💬 Fetching messages for user: {user_id}")
+    logger.info("💬 Fetching messages for user: %s", user_id)
     try:
         messages = []
         sessions = []
@@ -545,15 +575,15 @@ async def get_user_messages(
                                 )
                     except Exception as msg_err:
                         logger.warning(
-                            f"💬 Failed to get messages from thread {thread_id}: {msg_err}"
+                            "💬 Failed to get messages from thread %s: %s", thread_id, msg_err
                         )
         except Exception as e:
-            logger.warning(f"💬 thread.list_all failed: {e}")
+            logger.warning("💬 thread.list_all failed: %s", e)
 
         # Sort messages by created_at (newest first)
         messages.sort(key=lambda x: x.get("created_at") or "", reverse=True)
 
-        logger.info(f"💬 Found {len(messages)} messages across {len(sessions)} sessions")
+        logger.info("💬 Found %s messages across %s sessions", len(messages), len(sessions))
         return {
             "messages": messages[:limit],  # Limit total messages
             "message_count": len(messages),
@@ -562,8 +592,8 @@ async def get_user_messages(
         }
 
     except Exception as e:
-        logger.error(f"Failed to fetch messages: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to fetch messages")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.delete("/{user_id}/edge/{edge_uuid}")
@@ -578,18 +608,18 @@ async def delete_edge(
     This permanently removes the fact/relationship from memory.
     """
     verify_user_access(user, user_id)
-    logger.info(f"🗑️ Deleting edge {edge_uuid} for user: {user_id}")
+    logger.info("🗑️ Deleting edge %s for user: %s", edge_uuid, user_id)
 
     try:
         await client.graph.edge.delete(uuid_=edge_uuid)
-        logger.info(f"🗑️ Successfully deleted edge: {edge_uuid}")
+        logger.info("🗑️ Successfully deleted edge: %s", edge_uuid)
         return {"success": True, "deleted_edge": edge_uuid}
     except Exception as e:
         error_msg = str(e)
         if "404" in error_msg:
-            raise HTTPException(status_code=404, detail=f"Edge {edge_uuid} not found")
-        logger.error(f"Failed to delete edge: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=404, detail=f"Edge {edge_uuid} not found") from e
+        logger.exception("Failed to delete edge")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.delete("/{user_id}/node/{node_uuid}")
@@ -604,18 +634,18 @@ async def delete_node(
     Note: This will also delete all edges connected to this node.
     """
     verify_user_access(user, user_id)
-    logger.info(f"🗑️ Deleting node {node_uuid} for user: {user_id}")
+    logger.info("🗑️ Deleting node %s for user: %s", node_uuid, user_id)
 
     try:
         await client.graph.node.delete(uuid_=node_uuid)
-        logger.info(f"🗑️ Successfully deleted node: {node_uuid}")
+        logger.info("🗑️ Successfully deleted node: %s", node_uuid)
         return {"success": True, "deleted_node": node_uuid}
     except Exception as e:
         error_msg = str(e)
         if "404" in error_msg:
-            raise HTTPException(status_code=404, detail=f"Node {node_uuid} not found")
-        logger.error(f"Failed to delete node: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=404, detail=f"Node {node_uuid} not found") from e
+        logger.exception("Failed to delete node")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.patch("/{user_id}/edge/{edge_uuid}")
@@ -632,7 +662,7 @@ async def update_edge(
     with the updated fields. Only provided fields are changed.
     """
     verify_user_access(user, user_id)
-    logger.info(f"✏️ Updating edge {edge_uuid} for user: {user_id}")
+    logger.info("✏️ Updating edge %s for user: %s", edge_uuid, user_id)
 
     try:
         # 1. Fetch the existing edge
@@ -640,7 +670,7 @@ async def update_edge(
             old_edge = await client.graph.edge.get(uuid_=edge_uuid)
         except Exception as e:
             if "404" in str(e):
-                raise HTTPException(status_code=404, detail=f"Edge {edge_uuid} not found")
+                raise HTTPException(status_code=404, detail=f"Edge {edge_uuid} not found") from e
             raise
 
         # 2. Build the updated fields (merge old + new)
@@ -682,7 +712,7 @@ async def update_edge(
 
         # 3. Delete the old edge
         await client.graph.edge.delete(uuid_=edge_uuid)
-        logger.info(f"✏️ Deleted old edge: {edge_uuid}")
+        logger.info("✏️ Deleted old edge: %s", edge_uuid)
 
         # 4. Recreate via add_fact_triple
         triple_kwargs = {
@@ -705,7 +735,7 @@ async def update_edge(
         elif result and hasattr(result, "uuid_"):
             new_edge_uuid = result.uuid_
 
-        logger.info(f"✏️ Recreated edge as: {new_edge_uuid}")
+        logger.info("✏️ Recreated edge as: %s", new_edge_uuid)
         return {
             "success": True,
             "old_edge_uuid": edge_uuid,
@@ -719,8 +749,8 @@ async def update_edge(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to update edge: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to update edge")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.patch("/{user_id}/node/{node_uuid}")
@@ -738,7 +768,7 @@ async def update_node(
     with the updated node fields.
     """
     verify_user_access(user, user_id)
-    logger.info(f"✏️ Updating node {node_uuid} for user: {user_id}")
+    logger.info("✏️ Updating node %s for user: %s", node_uuid, user_id)
 
     try:
         # 1. Fetch the existing node
@@ -746,7 +776,7 @@ async def update_node(
             old_node = await client.graph.node.get(uuid_=node_uuid)
         except Exception as e:
             if "404" in str(e):
-                raise HTTPException(status_code=404, detail=f"Node {node_uuid} not found")
+                raise HTTPException(status_code=404, detail=f"Node {node_uuid} not found") from e
             raise
 
         # 2. Fetch all edges connected to this node
@@ -763,7 +793,7 @@ async def update_node(
 
         # 4. Delete the old node (this cascades to edges)
         await client.graph.node.delete(uuid_=node_uuid)
-        logger.info(f"✏️ Deleted old node: {node_uuid} (had {len(connected_edges or [])} edges)")
+        logger.info("✏️ Deleted old node: %s (had %s edges)", node_uuid, len(connected_edges or []))
 
         # 5. Recreate the node + edges via add_fact_triple
         new_node_uuid = None
@@ -812,7 +842,7 @@ async def update_node(
                         elif edge_target == node_uuid and hasattr(result, "target_node_uuid"):
                             new_node_uuid = result.target_node_uuid
                 except Exception as triple_err:
-                    logger.warning(f"✏️ Failed to recreate edge: {triple_err}")
+                    logger.warning("✏️ Failed to recreate edge: %s", triple_err)
         else:
             # Node has no edges, create a standalone fact to recreate it
             try:
@@ -827,9 +857,9 @@ async def update_node(
                 if result and hasattr(result, "source_node_uuid"):
                     new_node_uuid = result.source_node_uuid
             except Exception as triple_err:
-                logger.warning(f"✏️ Failed to recreate standalone node: {triple_err}")
+                logger.warning("✏️ Failed to recreate standalone node: %s", triple_err)
 
-        logger.info(f"✏️ Recreated node as: {new_node_uuid} with {recreated_edges} edges")
+        logger.info("✏️ Recreated node as: %s with %s edges", new_node_uuid, recreated_edges)
         return {
             "success": True,
             "old_node_uuid": node_uuid,
@@ -842,8 +872,8 @@ async def update_node(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to update node: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to update node")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/{user_id}/edges")
@@ -866,7 +896,7 @@ async def get_user_edges(
     Supports offset/limit pagination. Returns total count and has_more flag.
     """
     verify_user_access(user, user_id)
-    logger.info(f"🔗 Fetching edges for user: {user_id} (offset={offset}, limit={limit})")
+    logger.info("🔗 Fetching edges for user: %s (offset=%s, limit=%s)", user_id, offset, limit)
     try:
         all_edges = []
 
@@ -905,7 +935,7 @@ async def get_user_edges(
                         }
                     )
         except Exception as e:
-            logger.warning(f"🔗 graph.edge.get_by_user_id failed: {e}")
+            logger.warning("🔗 graph.edge.get_by_user_id failed: %s", e)
             # Fallback to graph.search
             try:
                 facts_response = await client.graph.search(
@@ -944,14 +974,16 @@ async def get_user_edges(
                             }
                         )
             except Exception as search_err:
-                logger.warning(f"🔗 Fallback graph.search also failed: {search_err}")
+                logger.warning("🔗 Fallback graph.search also failed: %s", search_err)
 
         # Apply pagination
         total = len(all_edges)
         paginated = all_edges[offset : offset + limit]
         has_more = (offset + limit) < total
 
-        logger.info(f"🔗 Found {total} total edges, returning {len(paginated)} (offset={offset})")
+        logger.info(
+            "🔗 Found %s total edges, returning %s (offset=%s)", total, len(paginated), offset
+        )
         return {
             "edges": paginated,
             "count": len(paginated),
@@ -962,8 +994,8 @@ async def get_user_edges(
         }
 
     except Exception as e:
-        logger.error(f"Failed to fetch edges: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to fetch edges")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/{user_id}/nodes")
@@ -984,7 +1016,7 @@ async def get_user_nodes(
     Supports offset/limit pagination. Returns total count and has_more flag.
     """
     verify_user_access(user, user_id)
-    logger.info(f"🔵 Fetching nodes for user: {user_id} (offset={offset}, limit={limit})")
+    logger.info("🔵 Fetching nodes for user: %s (offset=%s, limit=%s)", user_id, offset, limit)
     try:
         all_nodes = []
 
@@ -1010,14 +1042,16 @@ async def get_user_nodes(
                         }
                     )
         except Exception as e:
-            logger.warning(f"🔵 graph.node.get_by_user_id failed: {e}")
+            logger.warning("🔵 graph.node.get_by_user_id failed: %s", e)
 
         # Apply pagination
         total = len(all_nodes)
         paginated = all_nodes[offset : offset + limit]
         has_more = (offset + limit) < total
 
-        logger.info(f"🔵 Found {total} total nodes, returning {len(paginated)} (offset={offset})")
+        logger.info(
+            "🔵 Found %s total nodes, returning %s (offset=%s)", total, len(paginated), offset
+        )
         return {
             "nodes": paginated,
             "count": len(paginated),
@@ -1028,8 +1062,8 @@ async def get_user_nodes(
         }
 
     except Exception as e:
-        logger.error(f"Failed to fetch nodes: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to fetch nodes")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/{user_id}/ontology")
@@ -1044,7 +1078,7 @@ async def get_user_ontology(
     for extracting information from conversations.
     """
     verify_user_access(user, user_id)
-    logger.info(f"📋 Fetching ontology for user: {user_id}")
+    logger.info("📋 Fetching ontology for user: %s", user_id)
 
     try:
         ontology = await client.graph.get_ontology(user_id=user_id)
@@ -1061,14 +1095,13 @@ async def get_user_ontology(
                     for e in (ontology.edge_types or [])
                 ],
             }
-        else:
-            # Return defaults if no ontology configured
-            return {
-                "user_id": user_id,
-                "entity_types": DEFAULT_ENTITY_TYPES,
-                "edge_types": DEFAULT_EDGE_TYPES,
-                "is_default": True,
-            }
+        # Return defaults if no ontology configured
+        return {
+            "user_id": user_id,
+            "entity_types": DEFAULT_ENTITY_TYPES,
+            "edge_types": DEFAULT_EDGE_TYPES,
+            "is_default": True,
+        }
 
     except Exception as e:
         error_msg = str(e)
@@ -1080,8 +1113,8 @@ async def get_user_ontology(
                 "edge_types": DEFAULT_EDGE_TYPES,
                 "is_default": True,
             }
-        logger.error(f"Failed to fetch ontology: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to fetch ontology")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.put("/{user_id}/ontology")
@@ -1097,7 +1130,7 @@ async def set_user_ontology(
     extract from conversations. Changes apply to future extractions.
     """
     verify_user_access(user, user_id)
-    logger.info(f"📋 Setting ontology for user: {user_id}")
+    logger.info("📋 Setting ontology for user: %s", user_id)
 
     try:
         entities, edges = _build_ontology_models(
@@ -1112,8 +1145,9 @@ async def set_user_ontology(
         )
 
         logger.info(
-            f"📋 Ontology set: {len(ontology.entity_types)} entity types, "
-            f"{len(ontology.edge_types)} edge types"
+            "📋 Ontology set: %s entity types, %s edge types",
+            len(ontology.entity_types),
+            len(ontology.edge_types),
         )
 
         return {
@@ -1124,8 +1158,8 @@ async def set_user_ontology(
         }
 
     except Exception as e:
-        logger.error(f"Failed to set ontology: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to set ontology")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/{user_id}/ontology/reset")
@@ -1136,7 +1170,7 @@ async def reset_user_ontology(
 ):
     """Reset the ontology to default Kwami entity/edge types."""
     verify_user_access(user, user_id)
-    logger.info(f"📋 Resetting ontology to defaults for user: {user_id}")
+    logger.info("📋 Resetting ontology to defaults for user: %s", user_id)
 
     try:
         entities, edges = _build_ontology_models(
@@ -1159,8 +1193,8 @@ async def reset_user_ontology(
         }
 
     except Exception as e:
-        logger.error(f"Failed to reset ontology: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to reset ontology")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/{user_id}/search")
@@ -1180,7 +1214,11 @@ async def search_graph(
     """
     verify_user_access(user, user_id)
     logger.info(
-        f"🔍 Searching graph for user {user_id}: query='{q}', scope={scope}, types={entity_types}"
+        "🔍 Searching graph for user %s: query='%s', scope=%s, types=%s",
+        user_id,
+        q,
+        scope,
+        entity_types,
     )
 
     try:
@@ -1222,7 +1260,7 @@ async def search_graph(
                             }
                         )
             except Exception as e:
-                logger.warning(f"🔍 Node search failed: {e}")
+                logger.warning("🔍 Node search failed: %s", e)
 
         # Search edges
         if scope in ("edges", "both"):
@@ -1245,7 +1283,7 @@ async def search_graph(
                             }
                         )
             except Exception as e:
-                logger.warning(f"🔍 Edge search failed: {e}")
+                logger.warning("🔍 Edge search failed: %s", e)
 
         results["node_count"] = len(results["nodes"])
         results["edge_count"] = len(results["edges"])
@@ -1253,8 +1291,8 @@ async def search_graph(
         return results
 
     except Exception as e:
-        logger.error(f"Failed to search graph: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to search graph")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/{user_id}/entities/{entity_type}")
@@ -1274,7 +1312,7 @@ async def get_entities_by_type(
     - GET /memory/{user_id}/entities/Location - Get all locations
     """
     verify_user_access(user, user_id)
-    logger.info(f"🏷️ Fetching {entity_type} entities for user: {user_id}")
+    logger.info("🏷️ Fetching %s entities for user: %s", entity_type, user_id)
 
     try:
         all_entities = []
@@ -1319,8 +1357,8 @@ async def get_entities_by_type(
         }
 
     except Exception as e:
-        logger.error(f"Failed to fetch entities by type: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to fetch entities by type")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 def _infer_node_type(name: str, summary: str | None, labels: list[str]) -> str:
@@ -1647,7 +1685,7 @@ async def get_memory_graph(
     Fetches up to `limit` edges and nodes (default 1000) to build the full graph.
     """
     verify_user_access(user, user_id)
-    logger.info(f"📊 Fetching memory graph for user: {user_id} (limit={limit})")
+    logger.info("📊 Fetching memory graph for user: %s (limit=%s)", user_id, limit)
     try:
         nodes = []
         edges = []
@@ -1657,7 +1695,7 @@ async def get_memory_graph(
         try:
             edges_response = await client.graph.edge.get_by_user_id(user_id=user_id, limit=limit)
             if edges_response:
-                logger.info(f"📊 Got {len(edges_response)} edges from graph.edge")
+                logger.info("📊 Got %s edges from graph.edge", len(edges_response))
                 for edge in edges_response:
                     edge_data = {
                         "fact": getattr(edge, "fact", None),
@@ -1667,7 +1705,7 @@ async def get_memory_graph(
                     }
                     graph_edges_raw.append(edge_data)
         except Exception as e:
-            logger.warning(f"📊 graph.edge failed, trying search: {e}")
+            logger.warning("📊 graph.edge failed, trying search: %s", e)
             # Fallback to graph.search
             try:
                 facts_response = await client.graph.search(
@@ -1686,7 +1724,7 @@ async def get_memory_graph(
                         }
                         graph_edges_raw.append(edge_data)
             except Exception as search_e:
-                logger.warning(f"📊 graph.search edges also failed: {search_e}")
+                logger.warning("📊 graph.search edges also failed: %s", search_e)
 
         # 2. Get nodes (entities) from graph.node API
         entity_nodes = []
@@ -1694,7 +1732,7 @@ async def get_memory_graph(
         try:
             nodes_response = await client.graph.node.get_by_user_id(user_id=user_id, limit=limit)
             if nodes_response:
-                logger.info(f"📊 Got {len(nodes_response)} nodes from graph.node")
+                logger.info("📊 Got %s nodes from graph.node", len(nodes_response))
                 for node in nodes_response:
                     node_name = getattr(node, "name", "Unknown")
                     node_labels = (
@@ -1722,7 +1760,7 @@ async def get_memory_graph(
                         }
                     )
         except Exception as e:
-            logger.warning(f"📊 graph.node failed: {e}")
+            logger.warning("📊 graph.node failed: %s", e)
 
         # 3. Build the visualization graph
         # Map UUIDs to node IDs for edge building
@@ -1785,12 +1823,12 @@ async def get_memory_graph(
                         {"source": user_node_id, "target": node["id"], "relation": "related_to"}
                     )
 
-        logger.info(f"📊 Final graph: {len(nodes)} nodes, {len(edges)} edges")
+        logger.info("📊 Final graph: %s nodes, %s edges", len(nodes), len(edges))
         return {"nodes": nodes, "edges": edges}
 
     except Exception as e:
-        logger.error(f"Failed to fetch memory graph: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to fetch memory graph")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 # =============================================================================
@@ -1810,7 +1848,7 @@ async def get_fact_rating(
     so you can filter out low-value memories for your use case.
     """
     verify_user_access(user, user_id)
-    logger.info(f"⭐ Fetching fact rating for user: {user_id}")
+    logger.info("⭐ Fetching fact rating for user: %s", user_id)
 
     try:
         # User graphs are identified by user_id as graph_id in Zep
@@ -1846,13 +1884,13 @@ async def get_fact_rating(
                     }
                 return result
         except Exception as e:
-            logger.warning(f"⭐ Could not read graph info: {e}")
+            logger.warning("⭐ Could not read graph info: %s", e)
 
         return {"configured": False, "instruction": None, "examples": None}
 
     except Exception as e:
-        logger.error(f"Failed to get fact rating: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to get fact rating")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.put("/{user_id}/fact-rating")
@@ -1868,7 +1906,7 @@ async def set_fact_rating(
     You provide an instruction string and three examples (high/medium/low).
     """
     verify_user_access(user, user_id)
-    logger.info(f"⭐ Setting fact rating for user: {user_id}")
+    logger.info("⭐ Setting fact rating for user: %s", user_id)
 
     try:
         from zep_cloud import FactRatingExamples, FactRatingInstruction
@@ -1889,7 +1927,7 @@ async def set_fact_rating(
             fact_rating_instruction=fri,
         )
 
-        logger.info(f"⭐ Fact rating set for user: {user_id}")
+        logger.info("⭐ Fact rating set for user: %s", user_id)
         return {
             "success": True,
             "user_id": user_id,
@@ -1897,8 +1935,8 @@ async def set_fact_rating(
         }
 
     except Exception as e:
-        logger.error(f"Failed to set fact rating: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to set fact rating")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 # =============================================================================
@@ -1918,7 +1956,7 @@ async def get_custom_instructions(
     from conversations for this specific user.
     """
     verify_user_access(user, user_id)
-    logger.info(f"📝 Fetching custom instructions for user: {user_id}")
+    logger.info("📝 Fetching custom instructions for user: %s", user_id)
 
     try:
         response = await client.graph.list_custom_instructions(user_id=user_id)
@@ -1936,8 +1974,8 @@ async def get_custom_instructions(
         return {"instructions": instructions, "count": len(instructions)}
 
     except Exception as e:
-        logger.error(f"Failed to get custom instructions: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to get custom instructions")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/{user_id}/instructions")
@@ -1953,7 +1991,7 @@ async def add_custom_instructions(
     Each instruction has a unique name and a text body.
     """
     verify_user_access(user, user_id)
-    logger.info(f"📝 Adding {len(body.instructions)} custom instructions for user: {user_id}")
+    logger.info("📝 Adding %s custom instructions for user: %s", len(body.instructions), user_id)
 
     try:
         from zep_cloud import CustomInstruction
@@ -1967,15 +2005,15 @@ async def add_custom_instructions(
             user_ids=[user_id],
         )
 
-        logger.info(f"📝 Added {len(body.instructions)} instructions for user: {user_id}")
+        logger.info("📝 Added %s instructions for user: %s", len(body.instructions), user_id)
         return {
             "success": True,
             "added": len(body.instructions),
         }
 
     except Exception as e:
-        logger.error(f"Failed to add custom instructions: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to add custom instructions")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.delete("/{user_id}/instructions")
@@ -1998,7 +2036,7 @@ async def delete_custom_instructions(
     if names:
         instruction_names = [n.strip() for n in names.split(",") if n.strip()]
 
-    logger.info(f"📝 Deleting instructions for user: {user_id} (names={instruction_names})")
+    logger.info("📝 Deleting instructions for user: %s (names=%s)", user_id, instruction_names)
 
     try:
         await client.graph.delete_custom_instructions(
@@ -2009,8 +2047,8 @@ async def delete_custom_instructions(
         return {"success": True, "deleted": instruction_names or "all"}
 
     except Exception as e:
-        logger.error(f"Failed to delete custom instructions: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to delete custom instructions")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 # =============================================================================
@@ -2036,7 +2074,9 @@ async def ingest_data(
     Supported types: 'text', 'json', 'message'
     """
     verify_user_access(user, user_id)
-    logger.info(f"📥 Ingesting data for user: {user_id} (type={body.type}, len={len(body.data)})")
+    logger.info(
+        "📥 Ingesting data for user: %s (type=%s, len=%s)", user_id, body.type, len(body.data)
+    )
 
     try:
         add_kwargs = {
@@ -2053,7 +2093,7 @@ async def ingest_data(
         if episode:
             episode_uuid = getattr(episode, "uuid_", None) or getattr(episode, "uuid", None)
 
-        logger.info(f"📥 Data ingested as episode: {episode_uuid}")
+        logger.info("📥 Data ingested as episode: %s", episode_uuid)
         return {
             "success": True,
             "episode_uuid": episode_uuid,
@@ -2062,8 +2102,8 @@ async def ingest_data(
         }
 
     except Exception as e:
-        logger.error(f"Failed to ingest data: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to ingest data")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 # =============================================================================
@@ -2089,7 +2129,7 @@ async def _fetch_graph_raw(client: AsyncZep, user_id: str, limit: int = 200):
                     }
                 )
     except Exception as e:
-        logger.warning(f"Failed to fetch nodes for analysis: {e}")
+        logger.warning("Failed to fetch nodes for analysis: %s", e)
 
     try:
         edges_response = await client.graph.edge.get_by_user_id(user_id=user_id, limit=limit)
@@ -2111,7 +2151,7 @@ async def _fetch_graph_raw(client: AsyncZep, user_id: str, limit: int = 200):
                     }
                 )
     except Exception as e:
-        logger.warning(f"Failed to fetch edges for analysis: {e}")
+        logger.warning("Failed to fetch edges for analysis: %s", e)
 
     return nodes_list, edges_list
 
@@ -2130,7 +2170,7 @@ async def detect_communities(
     Groups strongly connected nodes together and returns community assignments.
     """
     verify_user_access(user, user_id)
-    logger.info(f"🔬 Detecting communities for user: {user_id} (resolution={resolution})")
+    logger.info("🔬 Detecting communities for user: %s (resolution=%s)", user_id, resolution)
 
     try:
         import networkx as nx
@@ -2158,7 +2198,12 @@ async def detect_communities(
         if graph.number_of_nodes() == 0:
             return {"communities": [], "count": 0}
 
-        partition = community_louvain.best_partition(graph, resolution=resolution)
+        # Louvain is pure CPU and superlinear in the graph; on a large memory it
+        # holds the event loop for as long as it runs, which stalls every other
+        # request on the worker exactly as a blocking socket read would.
+        partition = await anyio.to_thread.run_sync(
+            partial(community_louvain.best_partition, graph, resolution=resolution)
+        )
 
         # Group nodes by community
         communities_map: dict[int, list[str]] = {}
@@ -2196,12 +2241,12 @@ async def detect_communities(
                 }
             )
 
-        logger.info(f"🔬 Found {len(communities)} communities across {len(nodes_list)} nodes")
+        logger.info("🔬 Found %s communities across %s nodes", len(communities), len(nodes_list))
         return {"communities": communities, "count": len(communities)}
 
     except Exception as e:
-        logger.error(f"Failed to detect communities: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to detect communities")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/{user_id}/duplicates")
@@ -2218,7 +2263,7 @@ async def detect_duplicates(
     Returns pairs of nodes that look like duplicates with similarity scores.
     """
     verify_user_access(user, user_id)
-    logger.info(f"🔍 Detecting duplicates for user: {user_id} (threshold={threshold})")
+    logger.info("🔍 Detecting duplicates for user: %s (threshold=%s)", user_id, threshold)
 
     try:
         from thefuzz import fuzz
@@ -2289,12 +2334,12 @@ async def detect_duplicates(
         # Sort by score descending
         duplicates.sort(key=lambda x: -x["score"])
 
-        logger.info(f"🔍 Found {len(duplicates)} duplicate candidates")
+        logger.info("🔍 Found %s duplicate candidates", len(duplicates))
         return {"duplicates": duplicates, "count": len(duplicates)}
 
     except Exception as e:
-        logger.error(f"Failed to detect duplicates: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to detect duplicates")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/{user_id}/merge")
@@ -2313,7 +2358,10 @@ async def merge_nodes(
     """
     verify_user_access(user, user_id)
     logger.info(
-        f"🔗 Merging nodes for user: {user_id} (keep={body.keep_uuid}, remove={body.remove_uuid})"
+        "🔗 Merging nodes for user: %s (keep=%s, remove=%s)",
+        user_id,
+        body.keep_uuid,
+        body.remove_uuid,
     )
 
     try:
@@ -2321,7 +2369,9 @@ async def merge_nodes(
         try:
             keep_node = await client.graph.node.get(uuid_=body.keep_uuid)
         except Exception:
-            raise HTTPException(status_code=404, detail=f"Keep node {body.keep_uuid} not found")
+            raise HTTPException(
+                status_code=404, detail=f"Keep node {body.keep_uuid} not found"
+            ) from None
 
         keep_name = getattr(keep_node, "name", "Unknown")
 
@@ -2369,16 +2419,19 @@ async def merge_nodes(
                 await client.graph.add_fact_triple(**triple_kwargs)
                 recreated += 1
             except Exception as te:
-                logger.warning(f"🔗 Failed to recreate edge during merge: {te}")
+                logger.warning("🔗 Failed to recreate edge during merge: %s", te)
 
         # 4. Delete the duplicate node (this also removes its old edges)
         try:
             await client.graph.node.delete(uuid_=body.remove_uuid)
         except Exception as de:
-            logger.warning(f"🔗 Failed to delete merged node: {de}")
+            logger.warning("🔗 Failed to delete merged node: %s", de)
 
         logger.info(
-            f"🔗 Merge complete: kept {body.keep_uuid}, removed {body.remove_uuid}, recreated {recreated} edges"
+            "🔗 Merge complete: kept %s, removed %s, recreated %s edges",
+            body.keep_uuid,
+            body.remove_uuid,
+            recreated,
         )
         return {
             "success": True,
@@ -2391,8 +2444,8 @@ async def merge_nodes(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to merge nodes: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to merge nodes")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/{user_id}/reorganize/preview")
@@ -2407,7 +2460,7 @@ async def reorganize_preview(
     actions to apply.
     """
     verify_user_access(user, user_id)
-    logger.info(f"🔍 Reorganize preview for user: {user_id}")
+    logger.info("🔍 Reorganize preview for user: %s", user_id)
 
     try:
         from thefuzz import fuzz
@@ -2508,12 +2561,16 @@ async def reorganize_preview(
                 graph.add_edge(src, tgt)
         communities_estimate = 0
         if graph.number_of_nodes() > 0:
-            partition = community_louvain.best_partition(graph)
+            partition = await anyio.to_thread.run_sync(
+                partial(community_louvain.best_partition, graph)
+            )
             communities_estimate = len(set(partition.values()))
 
         logger.info(
-            f"🔍 Preview: {len(orphans)} orphans, {len(duplicates)} duplicates, "
-            f"{communities_estimate} communities"
+            "🔍 Preview: %s orphans, %s duplicates, %s communities",
+            len(orphans),
+            len(duplicates),
+            communities_estimate,
         )
         return {
             "orphans": orphans,
@@ -2522,8 +2579,8 @@ async def reorganize_preview(
         }
 
     except Exception as e:
-        logger.error(f"Failed reorganize preview: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed reorganize preview")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/{user_id}/reorganize/apply")
@@ -2538,8 +2595,10 @@ async def reorganize_apply(
     """
     verify_user_access(user, user_id)
     logger.info(
-        f"🧹 Applying reorganization for user: {user_id} "
-        f"({len(body.orphan_uuids)} orphans, {len(body.merge_pairs)} merges)"
+        "🧹 Applying reorganization for user: %s (%s orphans, %s merges)",
+        user_id,
+        len(body.orphan_uuids),
+        len(body.merge_pairs),
     )
 
     try:
@@ -2594,12 +2653,12 @@ async def reorganize_apply(
             except Exception as me:
                 report["errors"].append(f"Merge failed for {pair.remove_uuid}: {str(me)[:80]}")
 
-        logger.info(f"🧹 Apply complete: {report}")
+        logger.info("🧹 Apply complete: %s", report)
         return {"success": True, "report": report}
 
     except Exception as e:
-        logger.error(f"Failed to apply reorganization: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to apply reorganization")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/{user_id}/reorganize")
@@ -2620,7 +2679,7 @@ async def reorganize_graph(
     3. Run community detection on the cleaned graph
     """
     verify_user_access(user, user_id)
-    logger.info(f"🧹 Reorganizing graph for user: {user_id} (threshold={auto_merge_threshold})")
+    logger.info("🧹 Reorganizing graph for user: %s (threshold=%s)", user_id, auto_merge_threshold)
 
     try:
         import networkx as nx
@@ -2659,7 +2718,7 @@ async def reorganize_graph(
             try:
                 await client.graph.node.delete(uuid_=nid)
                 report["orphans_removed"] += 1
-                logger.info(f"🧹 Removed orphan node: {n['name']} ({nid})")
+                logger.info("🧹 Removed orphan node: %s (%s)", n["name"], nid)
             except Exception as de:
                 report["errors"].append(f"Failed to remove orphan {nid}: {str(de)}")
 
@@ -2735,7 +2794,7 @@ async def reorganize_graph(
                         await client.graph.node.delete(uuid_=remove["uuid"])
                         merged_uuids.add(remove["uuid"])
                         report["merges_performed"] += 1
-                        logger.info(f"🧹 Auto-merged: '{remove['name']}' -> '{keep_name}'")
+                        logger.info("🧹 Auto-merged: '%s' -> '%s'", remove["name"], keep_name)
                     except Exception as de:
                         report["errors"].append(
                             f"Delete failed for {remove['uuid']}: {str(de)[:80]}"
@@ -2755,16 +2814,18 @@ async def reorganize_graph(
                 graph.add_edge(src, tgt)
 
         if graph.number_of_nodes() > 0:
-            partition = community_louvain.best_partition(graph)
+            partition = await anyio.to_thread.run_sync(
+                partial(community_louvain.best_partition, graph)
+            )
             num_communities = len(set(partition.values()))
             report["communities_found"] = num_communities
 
-        logger.info(f"🧹 Reorganization complete: {report}")
+        logger.info("🧹 Reorganization complete: %s", report)
         return {"success": True, "report": report}
 
     except Exception as e:
-        logger.error(f"Failed to reorganize graph: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to reorganize graph")
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 # =============================================================================
@@ -2785,8 +2846,11 @@ async def connect_nodes(
     """
     verify_user_access(user, user_id)
     logger.info(
-        f"🔗 Connecting nodes for user: {user_id} "
-        f"({body.source_node_uuid} --[{body.relation}]--> {body.target_node_uuid})"
+        "🔗 Connecting nodes for user: %s (%s --[%s]--> %s)",
+        user_id,
+        body.source_node_uuid,
+        body.relation,
+        body.target_node_uuid,
     )
 
     try:
@@ -2797,7 +2861,7 @@ async def connect_nodes(
         except Exception:
             raise HTTPException(
                 status_code=404, detail=f"Source node {body.source_node_uuid} not found"
-            )
+            ) from None
 
         try:
             target_node = await client.graph.node.get(uuid_=body.target_node_uuid)
@@ -2805,7 +2869,7 @@ async def connect_nodes(
         except Exception:
             raise HTTPException(
                 status_code=404, detail=f"Target node {body.target_node_uuid} not found"
-            )
+            ) from None
 
         fact_text = (
             body.fact or f"{source_name} {body.relation.lower().replace('_', ' ')} {target_name}"
@@ -2827,7 +2891,7 @@ async def connect_nodes(
         if result:
             edge_uuid = getattr(result, "edge_uuid", None) or getattr(result, "uuid_", None)
 
-        logger.info(f"🔗 Edge created: {edge_uuid}")
+        logger.info("🔗 Edge created: %s", edge_uuid)
         return {
             "success": True,
             "edge_uuid": edge_uuid,
@@ -2840,5 +2904,5 @@ async def connect_nodes(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to connect nodes: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to connect nodes")
+        raise HTTPException(status_code=500, detail=str(e)) from e

@@ -19,7 +19,7 @@ from src.services.credits import get_supabase_admin
 KWAMI_COLUMNS = "id, user_id, name, config, created_at, updated_at"
 
 
-def resolve_owned_kwami(
+async def resolve_owned_kwami(
     user_id: str, kwami_id: str, *, columns: str = KWAMI_COLUMNS
 ) -> dict[str, Any]:
     """Return the kwami row, or raise ``KwamiNotFoundError``.
@@ -32,7 +32,7 @@ def resolve_owned_kwami(
 
     sb = get_supabase_admin()
     result = (
-        sb.table("user_kwamis")
+        await sb.table("user_kwamis")
         .select(columns)
         .eq("id", kwami_id)
         .eq("user_id", user_id)
@@ -45,7 +45,7 @@ def resolve_owned_kwami(
     return rows[0]
 
 
-def resolve_kwami(kwami_id: str, *, columns: str = KWAMI_COLUMNS) -> dict[str, Any]:
+async def resolve_kwami(kwami_id: str, *, columns: str = KWAMI_COLUMNS) -> dict[str, Any]:
     """Return a kwami without a user filter.
 
     Only for key-authenticated backend routes (``/internal/*``) where there is no
@@ -55,7 +55,7 @@ def resolve_kwami(kwami_id: str, *, columns: str = KWAMI_COLUMNS) -> dict[str, A
         raise KwamiNotFoundError()
 
     sb = get_supabase_admin()
-    result = sb.table("user_kwamis").select(columns).eq("id", kwami_id).limit(1).execute()
+    result = await sb.table("user_kwamis").select(columns).eq("id", kwami_id).limit(1).execute()
     rows = getattr(result, "data", None) or []
     if not rows:
         raise KwamiNotFoundError()

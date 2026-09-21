@@ -33,8 +33,9 @@ make dev                     # uv run python -m src.main
 # listens on API_HOST:API_PORT, default 0.0.0.0:8080
 ```
 
-OpenAPI is at `/docs` and `/redoc` outside production. Set
-`ENABLE_DOCS=true` if you need them with `APP_ENV=production`.
+OpenAPI is at `/docs`, `/redoc` and `/openapi.json` outside production.
+Set `ENABLE_DOCS=true` if you need them with `APP_ENV=production`; the flag
+opens and closes all three together.
 
 `APP_ENV` is `development` | `staging` | `production`. Outside
 production, credits fail-open on a check error and wallets default on.

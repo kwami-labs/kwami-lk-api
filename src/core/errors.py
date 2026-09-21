@@ -34,6 +34,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from src.core.logging import get_request_id
+
 logger = logging.getLogger("kwami-api.errors")
 
 
@@ -148,10 +150,20 @@ class InvalidEmailAddressError(ValidationFailedError):
 
 
 def error_body(code: str, message: str, details: Any = None) -> dict[str, Any]:
+    """The error envelope, carrying the request id when there is one.
+
+    `request_id` is what makes an opaque 500 actionable: the client quotes it and
+    it matches the `request_id` field on every log record for that request. It is
+    also returned as the `X-Request-ID` header.
+    """
+    error: dict[str, Any] = {"code": code, "message": message, "details": details}
+    request_id = get_request_id()
+    if request_id:
+        error["request_id"] = request_id
     return {
         # Kept for the existing app, which reads `detail` on every error.
         "detail": message,
-        "error": {"code": code, "message": message, "details": details},
+        "error": error,
     }
 
 
