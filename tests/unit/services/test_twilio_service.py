@@ -69,16 +69,71 @@ class TestGetTwilioClient:
         with pytest.raises(RuntimeError, match="not configured"):
             get_twilio_client()
 
-    def test_it_builds_and_caches_a_client(self, monkeypatch, enabled):
+    @pytest.mark.anyio
+    async def test_it_builds_and_caches_a_client(self, monkeypatch, enabled):
+        """Async because `AsyncTwilioHttpClient` builds an aiohttp ClientSession,
+        which needs a running loop -- as every caller of this now has.
+
+        The fake keeps the transport it is handed and closes it, rather than
+        dropping it on the floor: an unclosed ClientSession is exactly the leak
+        `close_twilio_client` exists to prevent, and the suite turns the
+        ResourceWarning into an error.
+        """
         built: list[tuple] = []
-        monkeypatch.setattr(
-            twilio_service, "Client", lambda sid, token: built.append((sid, token)) or "CLIENT"
-        )
+        transports: list = []
+
+        def _fake_client(sid, token, http_client=None):
+            built.append((sid, token))
+            transports.append(http_client)
+            return "CLIENT"
+
+        monkeypatch.setattr(twilio_service, "Client", _fake_client)
         monkeypatch.setattr(twilio_service.settings, "twilio_account_sid", "AC1", raising=False)
         monkeypatch.setattr(twilio_service.settings, "twilio_auth_token", "tok", raising=False)
-        assert get_twilio_client() == "CLIENT"
-        assert get_twilio_client() == "CLIENT"
-        assert built == [("AC1", "tok")]
+        try:
+            assert get_twilio_client() == "CLIENT"
+            assert get_twilio_client() == "CLIENT"
+            assert built == [("AC1", "tok")], "one client per process, not one per call"
+            assert transports[0] is not None, "an async transport is what makes the calls async"
+        finally:
+            for transport in transports:
+                session = getattr(transport, "session", None)
+                if session is not None:
+                    await session.close()
+            twilio_service._twilio_client = None
+
+
+class TestCloseTwilioClient:
+    """The aiohttp session has to be released, or it leaks its connector."""
+
+    @pytest.mark.anyio
+    async def test_closing_without_a_client_is_a_no_op(self):
+        twilio_service._twilio_client = None
+        await twilio_service.close_twilio_client()
+
+    @pytest.mark.anyio
+    async def test_it_closes_the_session_and_forgets_the_client(self, monkeypatch):
+        closed: list[bool] = []
+
+        class _Session:
+            async def close(self):
+                closed.append(True)
+
+        class _Transport:
+            session = _Session()
+
+        monkeypatch.setattr(
+            twilio_service, "_twilio_client", type("C", (), {"http_client": _Transport()})()
+        )
+        await twilio_service.close_twilio_client()
+        assert closed == [True]
+        assert twilio_service._twilio_client is None
+
+    @pytest.mark.anyio
+    async def test_a_client_with_no_session_is_dropped_quietly(self, monkeypatch):
+        monkeypatch.setattr(twilio_service, "_twilio_client", object())
+        await twilio_service.close_twilio_client()
+        assert twilio_service._twilio_client is None
 
 
 class TestEnsureTwilioEnabled:
@@ -260,84 +315,107 @@ class TestNumberSearchKw:
 
 
 class TestSearchAvailableNumbers:
-    def test_the_first_responding_subresource_wins(self, fake_client):
+    @pytest.mark.anyio
+    async def test_the_first_responding_subresource_wins(self, fake_client):
         fake_client.available["US"].local.items = [_number("+14155552671")]
-        results = search_available_numbers(
+        results = await search_available_numbers(
             country_code="us", area_code=None, contains=None, limit=5
         )
         assert [r["phoneNumber"] for r in results] == ["+14155552671"]
         assert results[0]["capabilities"] == {"voice": True, "sms": True, "mms": False}
 
-    def test_a_404_falls_through_to_the_next_kind(self, fake_client, caplog):
+    @pytest.mark.anyio
+    async def test_a_404_falls_through_to_the_next_kind(self, fake_client, caplog):
         """Many countries have no Local subresource."""
         fake_client.available["ES"].local.error = TwilioException("HTTP 404 Not Found")
         fake_client.available["ES"].mobile.items = [_number("+34600000000")]
-        results = search_available_numbers(
+        results = await search_available_numbers(
             country_code="ES", area_code=None, contains=None, limit=5
         )
         assert [r["phoneNumber"] for r in results] == ["+34600000000"]
 
-    def test_every_kind_404ing_yields_an_empty_list(self, fake_client, caplog):
+    @pytest.mark.anyio
+    async def test_every_kind_404ing_yields_an_empty_list(self, fake_client, caplog):
         for kind in ("local", "mobile", "toll_free"):
             getattr(fake_client.available["ZZ"], kind).error = TwilioException("HTTP 404")
         with caplog.at_level("WARNING", logger="kwami-api.twilio"):
             assert (
-                search_available_numbers(country_code="ZZ", area_code=None, contains=None, limit=5)
+                await search_available_numbers(
+                    country_code="ZZ", area_code=None, contains=None, limit=5
+                )
                 == []
             )
         assert "No Twilio phone number subresources responded" in caplog.text
 
-    def test_an_absent_subresource_is_skipped(self, fake_client):
+    @pytest.mark.anyio
+    async def test_an_absent_subresource_is_skipped(self, fake_client):
         fake_client.available["ZZ"].local = None
         fake_client.available["ZZ"].mobile.items = [_number("+1")]
         assert (
-            len(search_available_numbers(country_code="ZZ", area_code=None, contains=None, limit=5))
+            len(
+                await search_available_numbers(
+                    country_code="ZZ", area_code=None, contains=None, limit=5
+                )
+            )
             == 1
         )
 
-    def test_a_country_with_no_subresources_at_all_is_empty_and_silent(self, fake_client, caplog):
+    @pytest.mark.anyio
+    async def test_a_country_with_no_subresources_at_all_is_empty_and_silent(
+        self, fake_client, caplog
+    ):
         """No 404 was seen, so there is nothing to warn about -- just no inventory."""
         country = fake_client.available["ZZ"]
         country.local = country.mobile = country.toll_free = None
         with caplog.at_level("WARNING", logger="kwami-api.twilio"):
             assert (
-                search_available_numbers(country_code="ZZ", area_code=None, contains=None, limit=5)
+                await search_available_numbers(
+                    country_code="ZZ", area_code=None, contains=None, limit=5
+                )
                 == []
             )
         assert "No Twilio phone number subresources responded" not in caplog.text
 
-    def test_a_non_404_error_propagates(self, fake_client):
+    @pytest.mark.anyio
+    async def test_a_non_404_error_propagates(self, fake_client):
         """A credentials or rate-limit failure must not read as "no inventory"."""
         fake_client.available["US"].local.error = TwilioException("HTTP 401 Unauthorized")
         with pytest.raises(TwilioException):
-            search_available_numbers(country_code="US", area_code=None, contains=None, limit=5)
+            await search_available_numbers(
+                country_code="US", area_code=None, contains=None, limit=5
+            )
 
-    def test_an_empty_inventory_is_not_a_fallthrough(self, fake_client):
+    @pytest.mark.anyio
+    async def test_an_empty_inventory_is_not_a_fallthrough(self, fake_client):
         """An empty list is an answer; it must not try the next kind."""
         fake_client.available["US"].local.items = []
         fake_client.available["US"].mobile.items = [_number("+1")]
         assert (
-            search_available_numbers(country_code="US", area_code=None, contains=None, limit=5)
+            await search_available_numbers(
+                country_code="US", area_code=None, contains=None, limit=5
+            )
             == []
         )
 
 
 class TestPurchaseAndRelease:
-    def test_purchasing_wires_up_every_webhook(self, monkeypatch, fake_client):
+    @pytest.mark.anyio
+    async def test_purchasing_wires_up_every_webhook(self, monkeypatch, fake_client):
         monkeypatch.setattr(
             twilio_service.settings, "app_public_url", "https://api.kwami.io", raising=False
         )
         monkeypatch.setattr(
             twilio_service.settings, "twilio_voice_status_callback_url", None, raising=False
         )
-        result = purchase_phone_number(phone_number="+14155552671", friendly_name="Kwami")
+        result = await purchase_phone_number(phone_number="+14155552671", friendly_name="Kwami")
         assert result["sid"] == "PN1"
         kwargs = fake_client.incoming_phone_numbers.created
         assert kwargs["voice_url"] == "https://api.kwami.io/webhooks/twilio/voice"
         assert kwargs["status_callback"] == "https://api.kwami.io/webhooks/twilio/voice/status"
         assert kwargs["sms_url"] == "https://api.kwami.io/webhooks/twilio/whatsapp"
 
-    def test_an_explicit_status_callback_overrides(self, monkeypatch, fake_client):
+    @pytest.mark.anyio
+    async def test_an_explicit_status_callback_overrides(self, monkeypatch, fake_client):
         monkeypatch.setattr(
             twilio_service.settings, "app_public_url", "https://api.kwami.io", raising=False
         )
@@ -347,88 +425,100 @@ class TestPurchaseAndRelease:
             "https://override.test/s",
             raising=False,
         )
-        purchase_phone_number(phone_number="+1", friendly_name="K")
+        await purchase_phone_number(phone_number="+1", friendly_name="K")
         assert fake_client.incoming_phone_numbers.created["status_callback"] == (
             "https://override.test/s"
         )
 
-    def test_releasing_a_number(self, fake_client):
-        release_incoming_phone_number("PN1")
+    @pytest.mark.anyio
+    async def test_releasing_a_number(self, fake_client):
+        await release_incoming_phone_number("PN1")
         assert fake_client.incoming_phone_numbers.deleted == ["PN1"]
 
-    def test_releasing_an_already_gone_number_is_forgiven(self, fake_client, caplog):
+    @pytest.mark.anyio
+    async def test_releasing_an_already_gone_number_is_forgiven(self, fake_client, caplog):
         """A retry must not fail on a number that is already released."""
         fake_client.incoming_phone_numbers.delete_error = _rest_exception(404)
         with caplog.at_level("INFO", logger="kwami-api.twilio"):
-            release_incoming_phone_number("PN1")
+            await release_incoming_phone_number("PN1")
         assert "already released" in caplog.text
 
-    def test_another_release_failure_propagates(self, fake_client):
+    @pytest.mark.anyio
+    async def test_another_release_failure_propagates(self, fake_client):
         fake_client.incoming_phone_numbers.delete_error = _rest_exception(500)
         with pytest.raises(TwilioRestException):
-            release_incoming_phone_number("PN1")
+            await release_incoming_phone_number("PN1")
 
-    def test_releasing_without_a_sid_is_refused(self):
+    @pytest.mark.anyio
+    async def test_releasing_without_a_sid_is_refused(self):
         with pytest.raises(ValueError, match="Missing Twilio incoming phone SID"):
-            release_incoming_phone_number("")
+            await release_incoming_phone_number("")
 
 
 class TestSipTrunk:
-    def test_attaching_returns_the_resource_sid(self, monkeypatch, fake_client):
+    @pytest.mark.anyio
+    async def test_attaching_returns_the_resource_sid(self, monkeypatch, fake_client):
         monkeypatch.setattr(twilio_service.settings, "twilio_sip_trunk_sid", "TK1", raising=False)
-        assert attach_phone_number_to_sip_trunk("PN1") == "TP1"
+        assert await attach_phone_number_to_sip_trunk("PN1") == "TP1"
 
-    def test_attaching_is_a_no_op_without_a_trunk(self, monkeypatch):
+    @pytest.mark.anyio
+    async def test_attaching_is_a_no_op_without_a_trunk(self, monkeypatch):
         monkeypatch.setattr(twilio_service.settings, "twilio_sip_trunk_sid", None, raising=False)
-        assert attach_phone_number_to_sip_trunk("PN1") is None
+        assert await attach_phone_number_to_sip_trunk("PN1") is None
 
-    def test_detaching(self, monkeypatch, fake_client):
+    @pytest.mark.anyio
+    async def test_detaching(self, monkeypatch, fake_client):
         monkeypatch.setattr(twilio_service.settings, "twilio_sip_trunk_sid", "TK1", raising=False)
-        detach_phone_number_from_sip_trunk("TP1")
+        await detach_phone_number_from_sip_trunk("TP1")
         assert fake_client.trunking.deleted == ["TP1"]
 
+    @pytest.mark.anyio
     @pytest.mark.parametrize(
         ("trunk_sid", "resource_sid"), [(None, "TP1"), ("TK1", ""), (None, "")]
     )
-    def test_detaching_is_a_no_op_when_either_id_is_missing(
+    async def test_detaching_is_a_no_op_when_either_id_is_missing(
         self, monkeypatch, trunk_sid, resource_sid
     ):
         monkeypatch.setattr(
             twilio_service.settings, "twilio_sip_trunk_sid", trunk_sid, raising=False
         )
-        assert detach_phone_number_from_sip_trunk(resource_sid) is None
+        assert await detach_phone_number_from_sip_trunk(resource_sid) is None
 
-    def test_detaching_an_already_gone_association_is_forgiven(
+    @pytest.mark.anyio
+    async def test_detaching_an_already_gone_association_is_forgiven(
         self, monkeypatch, fake_client, caplog
     ):
         monkeypatch.setattr(twilio_service.settings, "twilio_sip_trunk_sid", "TK1", raising=False)
         fake_client.trunking.delete_error = _rest_exception(404)
         with caplog.at_level("DEBUG", logger="kwami-api.twilio"):
-            detach_phone_number_from_sip_trunk("TP1")
+            await detach_phone_number_from_sip_trunk("TP1")
         assert "already gone" in caplog.text
 
-    def test_another_detach_failure_propagates(self, monkeypatch, fake_client):
+    @pytest.mark.anyio
+    async def test_another_detach_failure_propagates(self, monkeypatch, fake_client):
         monkeypatch.setattr(twilio_service.settings, "twilio_sip_trunk_sid", "TK1", raising=False)
         fake_client.trunking.delete_error = _rest_exception(500)
         with pytest.raises(TwilioRestException):
-            detach_phone_number_from_sip_trunk("TP1")
+            await detach_phone_number_from_sip_trunk("TP1")
 
 
 class TestMessagingAndCalls:
-    def test_a_direct_pstn_test_call(self, fake_client):
-        result = place_direct_pstn_test_call(to_e164="+14155552671", from_e164="+14155552672")
+    @pytest.mark.anyio
+    async def test_a_direct_pstn_test_call(self, fake_client):
+        result = await place_direct_pstn_test_call(to_e164="+14155552671", from_e164="+14155552672")
         assert result == {"sid": "CA1", "status": "queued"}
         twiml = fake_client.calls.created["twiml"]
         assert "<Say" in twiml and "<Hangup" in twiml
 
-    def test_sending_whatsapp(self, monkeypatch, fake_client):
+    @pytest.mark.anyio
+    async def test_sending_whatsapp(self, monkeypatch, fake_client):
         monkeypatch.setattr(
             twilio_service.settings, "app_public_url", "https://api.kwami.io", raising=False
         )
         monkeypatch.setattr(
             twilio_service.settings, "twilio_messaging_status_callback_url", None, raising=False
         )
-        result = send_whatsapp_message(
+        result = await send_whatsapp_message(
             from_address="whatsapp:+1", to_address="whatsapp:+2", body="hi"
         )
         assert result["sid"] == "SM1"
@@ -436,24 +526,26 @@ class TestMessagingAndCalls:
             "https://api.kwami.io/webhooks/twilio/whatsapp/status"
         )
 
-    def test_sending_sms(self, monkeypatch, fake_client):
+    @pytest.mark.anyio
+    async def test_sending_sms(self, monkeypatch, fake_client):
         monkeypatch.setattr(
             twilio_service.settings, "app_public_url", "https://api.kwami.io", raising=False
         )
         monkeypatch.setattr(
             twilio_service.settings, "twilio_messaging_status_callback_url", None, raising=False
         )
-        result = send_sms_message(from_number="+1", to_number="+2", body="hi")
+        result = await send_sms_message(from_number="+1", to_number="+2", body="hi")
         assert result == {"sid": "SM1", "status": "queued", "from": "+1", "to": "+2"}
 
-    def test_an_explicit_messaging_callback_overrides(self, monkeypatch, fake_client):
+    @pytest.mark.anyio
+    async def test_an_explicit_messaging_callback_overrides(self, monkeypatch, fake_client):
         monkeypatch.setattr(
             twilio_service.settings,
             "twilio_messaging_status_callback_url",
             "https://override.test/m",
             raising=False,
         )
-        send_sms_message(from_number="+1", to_number="+2", body="hi")
+        await send_sms_message(from_number="+1", to_number="+2", body="hi")
         assert fake_client.messages.created["status_callback"] == "https://override.test/m"
 
 
@@ -505,8 +597,7 @@ class TestExtractTwilioError:
 
 
 def _rest_exception(status: int, code: int | None = None, msg: str = "boom"):
-    exc = TwilioRestException(status=status, uri="/x", msg=msg, code=code)
-    return exc
+    return TwilioRestException(status=status, uri="/x", msg=msg, code=code)
 
 
 def _number(phone: str):
@@ -529,7 +620,7 @@ class _Sub:
         self.items: list = []
         self.error: Exception | None = None
 
-    def list(self, **kwargs):
+    async def list_async(self, **kwargs):
         if self.error:
             raise self.error
         return self.items
@@ -548,7 +639,7 @@ class _IncomingPhoneNumbers:
         self.deleted: list[str] = []
         self.delete_error: Exception | None = None
 
-    def create(self, **kwargs):
+    async def create_async(self, **kwargs):
         self.created = kwargs
         return type(
             "P",
@@ -565,7 +656,7 @@ class _IncomingPhoneNumbers:
         outer = self
 
         class _Handle:
-            def delete(self):
+            async def delete_async(self):
                 if outer.delete_error:
                     raise outer.delete_error
                 outer.deleted.append(sid)
@@ -586,12 +677,12 @@ class _Trunking:
             @property
             def phone_numbers(self):
                 class _PhoneNumbers:
-                    def create(self, phone_number_sid):
+                    async def create_async(self, phone_number_sid):
                         return type("R", (), {"sid": "TP1"})()
 
                     def __call__(self, resource_sid):
                         class _Handle:
-                            def delete(self):
+                            async def delete_async(self):
                                 if outer.delete_error:
                                     raise outer.delete_error
                                 outer.deleted.append(resource_sid)
@@ -607,7 +698,7 @@ class _Messages:
     def __init__(self):
         self.created: dict = {}
 
-    def create(self, **kwargs):
+    async def create_async(self, **kwargs):
         self.created = kwargs
         return type(
             "M",
@@ -625,7 +716,7 @@ class _Calls:
     def __init__(self):
         self.created: dict = {}
 
-    def create(self, **kwargs):
+    async def create_async(self, **kwargs):
         self.created = kwargs
         return type("C", (), {"sid": "CA1", "status": "queued"})()
 

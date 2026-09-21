@@ -151,30 +151,31 @@ class TestApiPullImport:
         }
 
     async def test_it_pulls_and_imports(self, monkeypatch, admin_client, fake_supabase):
-        monkeypatch.setattr(
-            ar,
-            "pull_provider_usage",
-            lambda *a, **k: {
+        async def _pull_stub(*a, **k):
+            return {
                 "source_label": "openai.organization.costs",
                 "summary": {"pages": 1},
                 "raw_payload": {},
                 "lines": [],
-            },
-        )
+            }
+
+        monkeypatch.setattr(ar, "pull_provider_usage", _pull_stub)
         r = await admin_client.post(f"{BASE}/imports/pull", json=self._body())
         assert r.status_code == 200
         assert r.json()["source_label"] == "openai.organization.costs"
 
     async def test_the_options_reach_the_puller(self, monkeypatch, admin_client, fake_supabase):
         seen: dict = {}
-        monkeypatch.setattr(
-            ar,
-            "pull_provider_usage",
-            lambda p, s, e, *, options: (
-                seen.update(options=options)
-                or {"source_label": "x", "summary": {}, "raw_payload": {}, "lines": []}
-            ),
-        )
+
+        async def _pull_stub(p, s, e, *, options):
+            return seen.update(options=options) or {
+                "source_label": "x",
+                "summary": {},
+                "raw_payload": {},
+                "lines": [],
+            }
+
+        monkeypatch.setattr(ar, "pull_provider_usage", _pull_stub)
         await admin_client.post(
             f"{BASE}/imports/pull", json=self._body(options={"project_ids": ["p1"]})
         )

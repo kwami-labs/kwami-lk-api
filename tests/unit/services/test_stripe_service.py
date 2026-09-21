@@ -48,11 +48,13 @@ class TestCreateCheckoutSession:
     async def test_it_builds_the_session_from_the_pack(self, monkeypatch):
         captured: dict = {}
 
-        def create(**kwargs):
+        async def create(**kwargs):
             captured.update(kwargs)
             return type("S", (), {"id": "cs_1", "url": "https://checkout.example/cs_1"})()
 
-        monkeypatch.setattr(stripe_service.stripe.checkout.Session, "create", create)
+        # `create_async`, not `create`: the checkout call moved to Stripe's async
+        # API so it stops blocking the event loop on an HTTPS round trip.
+        monkeypatch.setattr(stripe_service.stripe.checkout.Session, "create_async", create)
         url = await create_checkout_session("u1", "pro", "https://ok", "https://no")
 
         assert url == "https://checkout.example/cs_1"
@@ -70,11 +72,12 @@ class TestCreateCheckoutSession:
     async def test_the_metadata_carries_everything_the_webhook_needs(self, monkeypatch):
         """The webhook has only this metadata to decide who to credit and how much."""
         captured: dict = {}
-        monkeypatch.setattr(
-            stripe_service.stripe.checkout.Session,
-            "create",
-            lambda **kw: captured.update(kw) or type("S", (), {"id": "cs_1", "url": "https://u"})(),
-        )
+
+        async def _create(**kw):
+            captured.update(kw)
+            return type("S", (), {"id": "cs_1", "url": "https://u"})()
+
+        monkeypatch.setattr(stripe_service.stripe.checkout.Session, "create_async", _create)
         await create_checkout_session("u1", "starter", "https://ok", "https://no")
         assert captured["metadata"] == {
             "user_id": "u1",
@@ -87,18 +90,17 @@ class TestCreateCheckoutSession:
         def explode(**kwargs):
             raise AssertionError("must not reach Stripe")
 
-        monkeypatch.setattr(stripe_service.stripe.checkout.Session, "create", explode)
+        monkeypatch.setattr(stripe_service.stripe.checkout.Session, "create_async", explode)
         with pytest.raises(ValueError, match="Invalid pack_id"):
             await create_checkout_session("u1", "no-such-pack", "https://ok", "https://no")
 
     @pytest.mark.anyio
     @pytest.mark.parametrize("pack_id", list(CREDIT_PACKS))
     async def test_every_shipped_pack_can_be_purchased(self, monkeypatch, pack_id):
-        monkeypatch.setattr(
-            stripe_service.stripe.checkout.Session,
-            "create",
-            lambda **kw: type("S", (), {"id": "cs", "url": "https://u"})(),
-        )
+        async def _create(**_kw):
+            return type("S", (), {"id": "cs", "url": "https://u"})()
+
+        monkeypatch.setattr(stripe_service.stripe.checkout.Session, "create_async", _create)
         assert await create_checkout_session("u1", pack_id, "https://ok", "https://no")
 
 

@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from urllib import error as urllib_error
-from urllib import parse, request
 
+import httpx
 from livekit import api as livekit_api
 
 from src.core.config import settings
@@ -17,6 +15,11 @@ from src.services.credits import get_supabase_admin
 from src.services.pricing import ALL_PRICING
 
 logger = logging.getLogger("kwami-api.admin-reconciliation")
+
+# Largest detail page an admin endpoint will return for one import or run.
+# Above PostgREST's default cap, so the bound is this service's rather than a
+# silent property of whichever gateway is in front of the database.
+MAX_DETAIL_ROWS = 5000
 
 SUPPORTED_PROVIDERS = {"livekit", "openai", "tavily", "zep"}
 
@@ -88,29 +91,37 @@ def _provider_cost(line: dict[str, Any]) -> float:
     return 0.0
 
 
-def _json_request(
+# Provider APIs are slow and paginated, and a reconciliation run walks several of
+# them. The previous implementation used `urllib.request.urlopen(timeout=30)` from
+# inside `async def` route handlers, so one run could hold the event loop for
+# thirty seconds per page -- every other request on the worker, including Twilio
+# webhooks and token issuance, waited behind it.
+PROVIDER_REQUEST_TIMEOUT_SECONDS = 30.0
+
+
+async def _json_request(
     url: str,
     *,
     headers: dict[str, str] | None = None,
     query: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Perform a JSON GET request using the stdlib."""
-    if query:
-        encoded = parse.urlencode(
-            {key: value for key, value in query.items() if value is not None},
-            doseq=True,
-        )
-        url = f"{url}?{encoded}"
+    """Perform a JSON GET against a provider API, without blocking the loop."""
+    # Only https: the bases are operator-configured, but `urlopen` would happily
+    # have followed a `file:` URL out of a mistyped setting (ruff S310).
+    if not url.startswith("https://"):
+        raise RuntimeError(f"Provider API URL must be https, got {url!r}")
 
-    req = request.Request(url, headers=headers or {}, method="GET")
+    params = {k: v for k, v in (query or {}).items() if v is not None}
     try:
-        with request.urlopen(req, timeout=30) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib_error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"Provider API request failed ({exc.code}): {body[:500]}") from exc
-    except urllib_error.URLError as exc:
+        async with httpx.AsyncClient(timeout=PROVIDER_REQUEST_TIMEOUT_SECONDS) as client:
+            response = await client.get(url, headers=headers or {}, params=params or None)
+    except httpx.HTTPError as exc:
         raise RuntimeError(f"Provider API request failed: {exc}") from exc
+
+    if response.status_code >= 400:
+        body = response.text[:500]
+        raise RuntimeError(f"Provider API request failed ({response.status_code}): {body}")
+    return response.json()
 
 
 def _build_livekit_analytics_token() -> str:
@@ -124,7 +135,7 @@ def _build_livekit_analytics_token() -> str:
     return token.to_jwt()
 
 
-def _pull_openai_costs(
+async def _pull_openai_costs(
     period_start: datetime,
     period_end: datetime,
     *,
@@ -142,7 +153,7 @@ def _pull_openai_costs(
     next_page: str | None = None
 
     while True:
-        payload = _json_request(
+        payload = await _json_request(
             f"{settings.openai_api_base}/organization/costs",
             headers=headers,
             query={
@@ -203,7 +214,7 @@ def _pull_openai_costs(
     }
 
 
-def _pull_tavily_usage(
+async def _pull_tavily_usage(
     period_start: datetime,
     period_end: datetime,
     *,
@@ -219,7 +230,7 @@ def _pull_tavily_usage(
     if project_id or settings.tavily_project_id:
         headers["X-Project-ID"] = project_id or settings.tavily_project_id or ""
 
-    payload = _json_request(
+    payload = await _json_request(
         "https://api.tavily.com/usage",
         headers=headers,
     )
@@ -262,7 +273,7 @@ def _pull_tavily_usage(
     }
 
 
-def _pull_livekit_usage(
+async def _pull_livekit_usage(
     period_start: datetime,
     period_end: datetime,
     *,
@@ -282,7 +293,7 @@ def _pull_livekit_usage(
     details: list[dict[str, Any]] = []
 
     while True:
-        payload = _json_request(
+        payload = await _json_request(
             f"{settings.livekit_cloud_api_base}/project/{project_id}/sessions",
             headers=headers,
             query={
@@ -304,7 +315,7 @@ def _pull_livekit_usage(
         detail = {}
         if session_id:
             try:
-                detail = _json_request(
+                detail = await _json_request(
                     f"{settings.livekit_cloud_api_base}/project/{project_id}/sessions/{session_id}",
                     headers=headers,
                 )
@@ -428,7 +439,7 @@ def _normalize_zep_usage_payload(
     return lines
 
 
-def _pull_zep_usage(period_start: datetime, period_end: datetime) -> dict[str, Any]:
+async def _pull_zep_usage(period_start: datetime, period_end: datetime) -> dict[str, Any]:
     if not settings.zep_api_key:
         raise RuntimeError("ZEP_API_KEY is required for Zep reconciliation pulls")
 
@@ -436,7 +447,7 @@ def _pull_zep_usage(period_start: datetime, period_end: datetime) -> dict[str, A
         "Authorization": f"Bearer {settings.zep_api_key}",
         "Content-Type": "application/json",
     }
-    project_info = _json_request(
+    project_info = await _json_request(
         f"{settings.zep_api_base.rstrip('/')}/projects/info",
         headers=headers,
     )
@@ -447,7 +458,7 @@ def _pull_zep_usage(period_start: datetime, period_end: datetime) -> dict[str, A
     summary: dict[str, Any] = {"project": project_info.get("project", {})}
 
     if settings.zep_usage_api_url:
-        usage_payload = _json_request(
+        usage_payload = await _json_request(
             settings.zep_usage_api_url,
             headers=headers,
         )
@@ -469,7 +480,7 @@ def _pull_zep_usage(period_start: datetime, period_end: datetime) -> dict[str, A
     }
 
 
-def pull_provider_usage(
+async def pull_provider_usage(
     provider: str,
     period_start: datetime,
     period_end: datetime,
@@ -481,25 +492,25 @@ def pull_provider_usage(
     options = options or {}
     match normalized_provider:
         case "openai":
-            return _pull_openai_costs(
+            return await _pull_openai_costs(
                 period_start,
                 period_end,
                 project_ids=options.get("project_ids"),
             )
         case "tavily":
-            return _pull_tavily_usage(
+            return await _pull_tavily_usage(
                 period_start,
                 period_end,
                 project_id=options.get("project_id"),
             )
         case "livekit":
-            return _pull_livekit_usage(
+            return await _pull_livekit_usage(
                 period_start,
                 period_end,
                 limit=int(options.get("limit") or 100),
             )
         case "zep":
-            return _pull_zep_usage(period_start, period_end)
+            return await _pull_zep_usage(period_start, period_end)
     raise ValueError(f"Unsupported provider: {provider}")
 
 
@@ -730,7 +741,7 @@ async def import_provider_usage_from_api(
         imported_by=imported_by,
     )
     try:
-        pulled = pull_provider_usage(
+        pulled = await pull_provider_usage(
             provider,
             invoice_period_start,
             invoice_period_end,
@@ -786,6 +797,11 @@ async def get_provider_usage_import(import_id: str) -> dict[str, Any]:
         .select("*")
         .eq("import_id", import_id)
         .order("created_at", desc=True)
+        # An unbounded select is capped at PostgREST's own `max-rows` (1000 on
+        # Supabase) with nothing in the response to say so, so a large invoice
+        # came back quietly truncated. Bounding it here makes the ceiling
+        # explicit and the same on every deployment.
+        .limit(MAX_DETAIL_ROWS)
         .execute()
     )
     return {
@@ -1060,6 +1076,7 @@ async def get_reconciliation_run(run_id: str) -> dict[str, Any]:
         .select("*")
         .eq("run_id", run_id)
         .order("created_at", desc=True)
+        .limit(MAX_DETAIL_ROWS)
         .execute()
     )
     return {

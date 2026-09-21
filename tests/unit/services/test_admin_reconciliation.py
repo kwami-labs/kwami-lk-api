@@ -13,7 +13,9 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 
+import httpx
 import pytest
+import respx
 
 from src.services import admin_reconciliation as ar
 from src.services.admin_reconciliation import (
@@ -62,7 +64,7 @@ def json_requests(monkeypatch):
     calls: list[tuple[str, dict, dict]] = []
     responses: list = []
 
-    def fake(url, *, headers=None, query=None):
+    async def fake(url, *, headers=None, query=None):
         calls.append((url, headers or {}, query or {}))
         if not responses:
             return {}
@@ -166,65 +168,71 @@ class TestInferInternalProvider:
 
 
 class TestJsonRequest:
-    def test_an_http_error_becomes_a_runtime_error(self, monkeypatch):
-        import io
-        import urllib.error as urllib_error
+    """The provider pulls moved from `urllib.request.urlopen` to httpx.
 
-        def boom(req, timeout=None):
-            raise urllib_error.HTTPError(
-                "http://x", 500, "Server Error", {}, io.BytesIO(b"upstream detail")
-            )
+    `urlopen` is synchronous, and these run from `async def` route handlers with a
+    30s timeout, in a loop over paginated provider APIs -- one reconciliation run
+    could hold the event loop for minutes. Stubbed at the transport with respx so
+    the timeout, the status handling and the query encoding are all still covered.
+    """
 
-        monkeypatch.setattr(ar.request, "urlopen", boom)
+    URL = "https://provider.example/api"
+
+    @pytest.mark.anyio
+    @respx.mock
+    async def test_a_http_error_status_becomes_a_runtime_error(self):
+        respx.get(self.URL).mock(return_value=httpx.Response(500, text="upstream detail"))
         with pytest.raises(RuntimeError, match=r"Provider API request failed \(500\)"):
-            _json_request("http://x")
+            await _json_request(self.URL)
 
-    def test_a_url_error_becomes_a_runtime_error(self, monkeypatch):
-        import urllib.error as urllib_error
+    @pytest.mark.anyio
+    @respx.mock
+    async def test_the_upstream_body_is_truncated_into_the_message(self):
+        respx.get(self.URL).mock(return_value=httpx.Response(502, text="x" * 900))
+        with pytest.raises(RuntimeError) as excinfo:
+            await _json_request(self.URL)
+        assert len(str(excinfo.value)) < 600
 
-        def boom(req, timeout=None):
-            raise urllib_error.URLError("connection refused")
-
-        monkeypatch.setattr(ar.request, "urlopen", boom)
+    @pytest.mark.anyio
+    @respx.mock
+    async def test_a_transport_error_becomes_a_runtime_error(self):
+        respx.get(self.URL).mock(side_effect=httpx.ConnectError("connection refused"))
         with pytest.raises(RuntimeError, match="Provider API request failed"):
-            _json_request("http://x")
+            await _json_request(self.URL)
 
-    def test_a_successful_request_parses_json(self, monkeypatch):
-        class _Resp:
-            def __enter__(self):
-                return self
+    @pytest.mark.anyio
+    @respx.mock
+    async def test_a_successful_request_parses_json(self):
+        respx.get(self.URL).mock(return_value=httpx.Response(200, json={"ok": True}))
+        assert await _json_request(self.URL) == {"ok": True}
 
-            def __exit__(self, *exc):
-                return False
+    @pytest.mark.anyio
+    @respx.mock
+    async def test_the_query_is_encoded_and_nones_dropped(self):
+        route = respx.get(self.URL).mock(return_value=httpx.Response(200, json={}))
+        await _json_request(self.URL, query={"a": 1, "b": None, "c": ["x", "y"]})
+        sent = str(route.calls.last.request.url)
+        assert "a=1" in sent
+        assert "b=" not in sent
+        assert "c=x&c=y" in sent
 
-            def read(self):
-                return b'{"ok": true}'
+    @pytest.mark.anyio
+    @respx.mock
+    async def test_the_headers_are_sent(self):
+        route = respx.get(self.URL).mock(return_value=httpx.Response(200, json={}))
+        await _json_request(self.URL, headers={"Authorization": "Bearer t"})
+        assert route.calls.last.request.headers["authorization"] == "Bearer t"
 
-        monkeypatch.setattr(ar.request, "urlopen", lambda req, timeout=None: _Resp())
-        assert _json_request("http://x") == {"ok": True}
+    @pytest.mark.anyio
+    async def test_a_non_https_url_is_refused(self):
+        """`urlopen` would have followed a `file:` URL out of a mistyped setting."""
+        with pytest.raises(RuntimeError, match="must be https"):
+            await _json_request("http://provider.example/api")
 
-    def test_the_query_is_encoded_and_nones_dropped(self, monkeypatch):
-        seen: list[str] = []
-
-        class _Resp:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *exc):
-                return False
-
-            def read(self):
-                return b"{}"
-
-        def urlopen(req, timeout=None):
-            seen.append(req.full_url)
-            return _Resp()
-
-        monkeypatch.setattr(ar.request, "urlopen", urlopen)
-        _json_request("http://x", query={"a": 1, "b": None, "c": ["x", "y"]})
-        assert "a=1" in seen[0]
-        assert "b=" not in seen[0]
-        assert "c=x&c=y" in seen[0]
+    @pytest.mark.anyio
+    async def test_a_file_url_is_refused(self):
+        with pytest.raises(RuntimeError, match="must be https"):
+            await _json_request("file:///etc/passwd")
 
 
 class TestBuildLivekitAnalyticsToken:
@@ -242,16 +250,18 @@ class TestBuildLivekitAnalyticsToken:
 
 
 class TestPullOpenaiCosts:
-    def test_an_unconfigured_key_is_refused(self, monkeypatch):
+    @pytest.mark.anyio
+    async def test_an_unconfigured_key_is_refused(self, monkeypatch):
         monkeypatch.setattr(ar.settings, "openai_admin_key", None, raising=False)
         with pytest.raises(RuntimeError, match="OPENAI_ADMIN_KEY"):
-            _pull_openai_costs(START, END)
+            await _pull_openai_costs(START, END)
 
     @pytest.fixture(autouse=True)
     def _keyed(self, monkeypatch):
         monkeypatch.setattr(ar.settings, "openai_admin_key", "sk-admin", raising=False)
 
-    def test_a_single_page_of_costs(self, json_requests):
+    @pytest.mark.anyio
+    async def test_a_single_page_of_costs(self, json_requests):
         json_requests.responses.append(
             {
                 "data": [
@@ -270,7 +280,7 @@ class TestPullOpenaiCosts:
                 "has_more": False,
             }
         )
-        result = _pull_openai_costs(START, END)
+        result = await _pull_openai_costs(START, END)
         assert result["source_label"] == "openai.organization.costs"
         assert result["summary"] == {"pages": 1, "lines_count": 1}
         (line,) = result["lines"]
@@ -280,50 +290,57 @@ class TestPullOpenaiCosts:
         assert line.currency == "usd"
         assert line.resource_id == "proj_1"
 
-    def test_pagination_follows_next_page(self, json_requests):
+    @pytest.mark.anyio
+    async def test_pagination_follows_next_page(self, json_requests):
         json_requests.responses.extend(
             [
                 {"data": [], "has_more": True, "next_page": "p2"},
                 {"data": [], "has_more": False},
             ]
         )
-        result = _pull_openai_costs(START, END)
+        result = await _pull_openai_costs(START, END)
         assert result["summary"]["pages"] == 2
         assert json_requests.calls[1][2]["page"] == "p2"
 
-    def test_has_more_without_a_next_page_stops(self, json_requests):
+    @pytest.mark.anyio
+    async def test_has_more_without_a_next_page_stops(self, json_requests):
         json_requests.responses.append({"data": [], "has_more": True})
-        assert _pull_openai_costs(START, END)["summary"]["pages"] == 1
+        assert (await _pull_openai_costs(START, END))["summary"]["pages"] == 1
 
-    def test_a_result_with_no_amount_is_skipped(self, json_requests):
+    @pytest.mark.anyio
+    async def test_a_result_with_no_amount_is_skipped(self, json_requests):
         json_requests.responses.append(
             {"data": [{"results": [{"amount": {}}, {"project_id": "p"}]}], "has_more": False}
         )
-        assert _pull_openai_costs(START, END)["lines"] == []
+        assert (await _pull_openai_costs(START, END))["lines"] == []
 
-    def test_the_singular_result_key_is_accepted(self, json_requests):
+    @pytest.mark.anyio
+    async def test_the_singular_result_key_is_accepted(self, json_requests):
         json_requests.responses.append(
             {"data": [{"result": [{"amount": {"value": 1.0}}]}], "has_more": False}
         )
-        assert len(_pull_openai_costs(START, END)["lines"]) == 1
+        assert len((await _pull_openai_costs(START, END))["lines"]) == 1
 
-    def test_a_missing_line_item_defaults(self, json_requests):
+    @pytest.mark.anyio
+    async def test_a_missing_line_item_defaults(self, json_requests):
         json_requests.responses.append(
             {"data": [{"results": [{"amount": {"value": 1.0}}]}], "has_more": False}
         )
-        assert _pull_openai_costs(START, END)["lines"][0].service == "openai_api"
+        assert (await _pull_openai_costs(START, END))["lines"][0].service == "openai_api"
 
-    def test_project_ids_are_passed_through(self, json_requests):
+    @pytest.mark.anyio
+    async def test_project_ids_are_passed_through(self, json_requests):
         json_requests.responses.append({"data": [], "has_more": False})
-        _pull_openai_costs(START, END, project_ids=["proj_1"])
+        await _pull_openai_costs(START, END, project_ids=["proj_1"])
         assert json_requests.calls[0][2]["project_ids"] == ["proj_1"]
 
 
 class TestPullTavilyUsage:
-    def test_an_unconfigured_key_is_refused(self, monkeypatch):
+    @pytest.mark.anyio
+    async def test_an_unconfigured_key_is_refused(self, monkeypatch):
         monkeypatch.setattr(ar.settings, "tavily_api_key", None, raising=False)
         with pytest.raises(RuntimeError, match="TAVILY_API_KEY"):
-            _pull_tavily_usage(START, END)
+            await _pull_tavily_usage(START, END)
 
     @pytest.fixture(autouse=True)
     def _keyed(self, monkeypatch):
@@ -333,7 +350,8 @@ class TestPullTavilyUsage:
             ar.settings, "reconciliation_tavily_cost_per_credit_usd", 0.008, raising=False
         )
 
-    def test_each_used_service_becomes_a_line(self, json_requests):
+    @pytest.mark.anyio
+    async def test_each_used_service_becomes_a_line(self, json_requests):
         json_requests.responses.append(
             {
                 "account": {
@@ -346,44 +364,50 @@ class TestPullTavilyUsage:
                 }
             }
         )
-        result = _pull_tavily_usage(START, END)
+        result = await _pull_tavily_usage(START, END)
         assert {line.service for line in result["lines"]} == {"search", "extract"}
         search = next(line for line in result["lines"] if line.service == "search")
         assert search.usage_quantity == 100
         assert search.raw_cost_usd == pytest.approx(0.8)
 
-    def test_a_zero_or_absent_usage_is_skipped(self, json_requests):
+    @pytest.mark.anyio
+    async def test_a_zero_or_absent_usage_is_skipped(self, json_requests):
         json_requests.responses.append({"account": {"search_usage": 0}})
-        assert _pull_tavily_usage(START, END)["lines"] == []
+        assert (await _pull_tavily_usage(START, END))["lines"] == []
 
-    def test_an_empty_payload(self, json_requests):
+    @pytest.mark.anyio
+    async def test_an_empty_payload(self, json_requests):
         json_requests.responses.append({})
-        result = _pull_tavily_usage(START, END)
+        result = await _pull_tavily_usage(START, END)
         assert result["lines"] == []
         assert result["summary"]["lines_count"] == 0
 
-    def test_an_explicit_project_id_is_sent_as_a_header(self, json_requests):
+    @pytest.mark.anyio
+    async def test_an_explicit_project_id_is_sent_as_a_header(self, json_requests):
         json_requests.responses.append({"account": {}})
-        _pull_tavily_usage(START, END, project_id="proj-x")
+        await _pull_tavily_usage(START, END, project_id="proj-x")
         assert json_requests.calls[0][1]["X-Project-ID"] == "proj-x"
 
-    def test_the_configured_project_id_is_the_fallback(self, monkeypatch, json_requests):
+    @pytest.mark.anyio
+    async def test_the_configured_project_id_is_the_fallback(self, monkeypatch, json_requests):
         monkeypatch.setattr(ar.settings, "tavily_project_id", "proj-cfg", raising=False)
         json_requests.responses.append({"account": {}})
-        _pull_tavily_usage(START, END)
+        await _pull_tavily_usage(START, END)
         assert json_requests.calls[0][1]["X-Project-ID"] == "proj-cfg"
 
-    def test_no_project_id_sends_no_header(self, json_requests):
+    @pytest.mark.anyio
+    async def test_no_project_id_sends_no_header(self, json_requests):
         json_requests.responses.append({"account": {}})
-        _pull_tavily_usage(START, END)
+        await _pull_tavily_usage(START, END)
         assert "X-Project-ID" not in json_requests.calls[0][1]
 
 
 class TestPullLivekitUsage:
-    def test_an_unconfigured_project_is_refused(self, monkeypatch):
+    @pytest.mark.anyio
+    async def test_an_unconfigured_project_is_refused(self, monkeypatch):
         monkeypatch.setattr(ar.settings, "livekit_cloud_project_id", None, raising=False)
         with pytest.raises(RuntimeError, match="LIVEKIT_CLOUD_PROJECT_ID"):
-            _pull_livekit_usage(START, END)
+            await _pull_livekit_usage(START, END)
 
     @pytest.fixture(autouse=True)
     def _configured(self, monkeypatch):
@@ -396,7 +420,8 @@ class TestPullLivekitUsage:
             ar.settings, "reconciliation_livekit_bandwidth_gb_usd", 0.1, raising=False
         )
 
-    def test_sessions_become_estimated_lines(self, json_requests):
+    @pytest.mark.anyio
+    async def test_sessions_become_estimated_lines(self, json_requests):
         json_requests.responses.extend(
             [
                 {"sessions": [{"sessionId": "S1", "roomName": "room-1"}]},
@@ -410,7 +435,7 @@ class TestPullLivekitUsage:
                 },
             ]
         )
-        result = _pull_livekit_usage(START, END, limit=100)
+        result = await _pull_livekit_usage(START, END, limit=100)
         (line,) = result["lines"]
         assert line.session_id == "S1"
         assert line.usage_quantity == 10
@@ -418,7 +443,8 @@ class TestPullLivekitUsage:
         assert line.estimated_cost_usd == pytest.approx(0.1 + 0.2)
         assert line.metadata["bandwidth_gb"] == 2.0
 
-    def test_bandwidth_falls_back_to_the_session_totals(self, json_requests):
+    @pytest.mark.anyio
+    async def test_bandwidth_falls_back_to_the_session_totals(self, json_requests):
         json_requests.responses.extend(
             [
                 {
@@ -433,16 +459,18 @@ class TestPullLivekitUsage:
                 {},
             ]
         )
-        (line,) = _pull_livekit_usage(START, END)["lines"]
+        (line,) = (await _pull_livekit_usage(START, END))["lines"]
         assert line.metadata["bandwidth_gb"] == 2.0
 
-    def test_a_session_without_an_id_skips_the_detail_lookup(self, json_requests):
+    @pytest.mark.anyio
+    async def test_a_session_without_an_id_skips_the_detail_lookup(self, json_requests):
         json_requests.responses.append({"sessions": [{"roomName": "room-1"}]})
-        result = _pull_livekit_usage(START, END)
+        result = await _pull_livekit_usage(START, END)
         assert len(result["lines"]) == 1
         assert len(json_requests.calls) == 1
 
-    def test_a_failing_detail_lookup_does_not_lose_the_session(self, json_requests, caplog):
+    @pytest.mark.anyio
+    async def test_a_failing_detail_lookup_does_not_lose_the_session(self, json_requests, caplog):
         json_requests.responses.extend(
             [
                 {"sessions": [{"sessionId": "S1"}]},
@@ -450,11 +478,12 @@ class TestPullLivekitUsage:
             ]
         )
         with caplog.at_level("WARNING", logger="kwami-api.admin-reconciliation"):
-            result = _pull_livekit_usage(START, END)
+            result = await _pull_livekit_usage(START, END)
         assert len(result["lines"]) == 1
         assert "detail lookup failed" in caplog.text
 
-    def test_pagination_stops_on_a_short_page(self, json_requests):
+    @pytest.mark.anyio
+    async def test_pagination_stops_on_a_short_page(self, json_requests):
         json_requests.responses.extend(
             [
                 {"sessions": [{"sessionId": "S1"}, {"sessionId": "S2"}]},
@@ -462,36 +491,40 @@ class TestPullLivekitUsage:
                 {},
             ]
         )
-        result = _pull_livekit_usage(START, END, limit=2)
+        result = await _pull_livekit_usage(START, END, limit=2)
         assert result["summary"]["pages_fetched"] >= 1
 
-    def test_an_empty_project(self, json_requests):
+    @pytest.mark.anyio
+    async def test_an_empty_project(self, json_requests):
         json_requests.responses.append({"sessions": []})
-        result = _pull_livekit_usage(START, END)
+        result = await _pull_livekit_usage(START, END)
         assert result["lines"] == []
         assert result["summary"]["sessions_count"] == 0
 
 
 class TestPullZepUsage:
-    def test_an_unconfigured_key_is_refused(self, monkeypatch):
+    @pytest.mark.anyio
+    async def test_an_unconfigured_key_is_refused(self, monkeypatch):
         monkeypatch.setattr(ar.settings, "zep_api_key", None, raising=False)
         with pytest.raises(RuntimeError, match="ZEP_API_KEY"):
-            _pull_zep_usage(START, END)
+            await _pull_zep_usage(START, END)
 
     @pytest.fixture(autouse=True)
     def _keyed(self, monkeypatch):
         monkeypatch.setattr(ar.settings, "zep_api_key", "z-1", raising=False)
         monkeypatch.setattr(ar.settings, "zep_usage_api_url", None, raising=False)
 
-    def test_without_a_usage_url_it_warns_and_returns_no_lines(self, json_requests):
+    @pytest.mark.anyio
+    async def test_without_a_usage_url_it_warns_and_returns_no_lines(self, json_requests):
         """Zep has no standard billing endpoint; say so rather than pretend."""
         json_requests.responses.append({"project": {"name": "kwami"}})
-        result = _pull_zep_usage(START, END)
+        result = await _pull_zep_usage(START, END)
         assert result["source_label"] == "zep.project_info"
         assert result["lines"] == []
         assert "does not expose a standard usage billing endpoint" in result["summary"]["warning"]
 
-    def test_with_a_usage_url_the_lines_are_normalized(self, monkeypatch, json_requests):
+    @pytest.mark.anyio
+    async def test_with_a_usage_url_the_lines_are_normalized(self, monkeypatch, json_requests):
         monkeypatch.setattr(
             ar.settings, "zep_usage_api_url", "https://zep.test/usage", raising=False
         )
@@ -501,7 +534,7 @@ class TestPullZepUsage:
                 {"data": [{"service": "search", "count": 5, "cost_usd": 0.5}]},
             ]
         )
-        result = _pull_zep_usage(START, END)
+        result = await _pull_zep_usage(START, END)
         assert result["source_label"] == "zep.usage_api"
         assert result["summary"]["lines_count"] == 1
 
@@ -571,8 +604,9 @@ class TestNormalizeZepUsagePayload:
 
 
 class TestPullProviderUsage:
+    @pytest.mark.anyio
     @pytest.mark.parametrize("provider", sorted(SUPPORTED_PROVIDERS))
-    def test_each_provider_routes_to_its_puller(self, monkeypatch, provider):
+    async def test_each_provider_routes_to_its_puller(self, monkeypatch, provider):
         seen: list[str] = []
         for name in (
             "_pull_openai_costs",
@@ -580,35 +614,48 @@ class TestPullProviderUsage:
             "_pull_livekit_usage",
             "_pull_zep_usage",
         ):
-            monkeypatch.setattr(ar, name, lambda *a, _n=name, **k: seen.append(_n) or {"lines": []})
-        pull_provider_usage(provider, START, END)
+
+            async def _stub(*_a, _n=name, **_k):
+                seen.append(_n)
+                return {"lines": []}
+
+            monkeypatch.setattr(ar, name, _stub)
+        await pull_provider_usage(provider, START, END)
         assert len(seen) == 1
 
-    def test_options_reach_the_puller(self, monkeypatch):
+    @pytest.mark.anyio
+    async def test_options_reach_the_puller(self, monkeypatch):
         seen: dict = {}
-        monkeypatch.setattr(
-            ar,
-            "_pull_livekit_usage",
-            lambda s, e, *, limit: seen.update(limit=limit) or {"lines": []},
-        )
-        pull_provider_usage("livekit", START, END, options={"limit": 7})
+
+        async def _stub(_start, _end, *, limit):
+            seen.update(limit=limit)
+            return {"lines": []}
+
+        monkeypatch.setattr(ar, "_pull_livekit_usage", _stub)
+        await pull_provider_usage("livekit", START, END, options={"limit": 7})
         assert seen["limit"] == 7
 
-    def test_an_absent_limit_defaults(self, monkeypatch):
+    @pytest.mark.anyio
+    async def test_an_absent_limit_defaults(self, monkeypatch):
         seen: dict = {}
-        monkeypatch.setattr(
-            ar,
-            "_pull_livekit_usage",
-            lambda s, e, *, limit: seen.update(limit=limit) or {"lines": []},
-        )
-        pull_provider_usage("livekit", START, END, options={})
+
+        async def _stub(_start, _end, *, limit):
+            seen.update(limit=limit)
+            return {"lines": []}
+
+        monkeypatch.setattr(ar, "_pull_livekit_usage", _stub)
+        await pull_provider_usage("livekit", START, END, options={})
         assert seen["limit"] == 100
 
-    def test_an_unsupported_provider_is_refused(self):
+    @pytest.mark.anyio
+    async def test_an_unsupported_provider_is_refused(self):
         with pytest.raises(ValueError, match="Unsupported provider"):
-            pull_provider_usage("stripe", START, END)
+            await pull_provider_usage("stripe", START, END)
 
-    def test_a_supported_provider_with_no_case_falls_through_to_a_clear_error(self, monkeypatch):
+    @pytest.mark.anyio
+    async def test_a_supported_provider_with_no_case_falls_through_to_a_clear_error(
+        self, monkeypatch
+    ):
         """The guard after the `match`, which `_normalize_provider` normally shadows.
 
         Adding a provider to SUPPORTED_PROVIDERS without adding a `case` for it
@@ -618,7 +665,7 @@ class TestPullProviderUsage:
         """
         monkeypatch.setattr(ar, "SUPPORTED_PROVIDERS", SUPPORTED_PROVIDERS | {"newprovider"})
         with pytest.raises(ValueError, match="Unsupported provider: newprovider"):
-            pull_provider_usage("newprovider", START, END)
+            await pull_provider_usage("newprovider", START, END)
 
 
 class TestNormalizeManualImportLines:
@@ -1041,10 +1088,8 @@ class TestImportLifecycle:
 
     @pytest.mark.anyio
     async def test_an_api_pull_records_lines(self, monkeypatch, fake_supabase):
-        monkeypatch.setattr(
-            ar,
-            "pull_provider_usage",
-            lambda *a, **k: {
+        async def _pull_stub(*a, **k):
+            return {
                 "source_label": "openai.organization.costs",
                 "summary": {"pages": 1},
                 "raw_payload": {"pages": []},
@@ -1053,8 +1098,9 @@ class TestImportLifecycle:
                         provider="openai", service="api", usage_unit="usd", raw_cost_usd=1.0
                     )
                 ],
-            },
-        )
+            }
+
+        monkeypatch.setattr(ar, "pull_provider_usage", _pull_stub)
         result = await import_provider_usage_from_api(
             provider="openai",
             invoice_period_start=START,
@@ -1066,16 +1112,16 @@ class TestImportLifecycle:
     @pytest.mark.anyio
     async def test_a_zep_pull_with_no_lines_is_partial(self, monkeypatch, fake_supabase):
         """Zep has no billing endpoint, so an empty pull is expected, not a failure."""
-        monkeypatch.setattr(
-            ar,
-            "pull_provider_usage",
-            lambda *a, **k: {
+
+        async def _pull_stub(*a, **k):
+            return {
                 "source_label": "zep.project_info",
                 "summary": {},
                 "raw_payload": {},
                 "lines": [],
-            },
-        )
+            }
+
+        monkeypatch.setattr(ar, "pull_provider_usage", _pull_stub)
         await import_provider_usage_from_api(
             provider="zep", invoice_period_start=START, invoice_period_end=END
         )
@@ -1085,11 +1131,10 @@ class TestImportLifecycle:
     async def test_another_provider_with_no_lines_is_still_completed(
         self, monkeypatch, fake_supabase
     ):
-        monkeypatch.setattr(
-            ar,
-            "pull_provider_usage",
-            lambda *a, **k: {"source_label": "x", "summary": {}, "raw_payload": {}, "lines": []},
-        )
+        async def _pull_stub(*a, **k):
+            return {"source_label": "x", "summary": {}, "raw_payload": {}, "lines": []}
+
+        monkeypatch.setattr(ar, "pull_provider_usage", _pull_stub)
         await import_provider_usage_from_api(
             provider="openai", invoice_period_start=START, invoice_period_end=END
         )

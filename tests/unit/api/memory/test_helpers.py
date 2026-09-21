@@ -91,3 +91,89 @@ class TestBuildOntologyModels:
         assert len(DEFAULT_EDGE_TYPES) >= 10
         assert all("description" in e for e in DEFAULT_ENTITY_TYPES)
         assert all("description" in e for e in DEFAULT_EDGE_TYPES)
+
+
+class TestSharedZepClient:
+    """One client per process, closed at shutdown.
+
+    A fresh `AsyncZep` per request meant a fresh httpx connection pool per
+    request across all 29 memory routes, none of them ever closed.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset(self):
+        mem_mod._zep_client = None
+        yield
+        mem_mod._zep_client = None
+
+    @pytest.mark.anyio
+    async def test_an_unconfigured_key_is_a_503(self, monkeypatch):
+        monkeypatch.setattr(mem_mod.settings, "zep_api_key", None, raising=False)
+        with pytest.raises(HTTPException) as excinfo:
+            await mem_mod.get_zep_client()
+        assert excinfo.value.status_code == 503
+
+    @pytest.mark.anyio
+    async def test_the_client_is_built_once_and_reused(self, monkeypatch):
+        monkeypatch.setattr(mem_mod.settings, "zep_api_key", "zep-key", raising=False)
+        built: list[str] = []
+
+        class _Zep:
+            def __init__(self, api_key):
+                built.append(api_key)
+
+        monkeypatch.setattr(mem_mod, "AsyncZep", _Zep)
+        first = await mem_mod.get_zep_client()
+        second = await mem_mod.get_zep_client()
+        assert first is second
+        assert built == ["zep-key"], "one client, not one per request"
+
+    @pytest.mark.anyio
+    async def test_closing_without_a_client_is_a_no_op(self):
+        await mem_mod.close_zep_client()  # must not raise
+
+    @pytest.mark.anyio
+    async def test_closing_releases_the_connection_pool(self, monkeypatch):
+        monkeypatch.setattr(mem_mod.settings, "zep_api_key", "zep-key", raising=False)
+        closed: list[bool] = []
+
+        class _Httpx:
+            async def aclose(self):
+                closed.append(True)
+
+        class _Zep:
+            def __init__(self, api_key):
+                self.httpx_client = _Httpx()
+
+        monkeypatch.setattr(mem_mod, "AsyncZep", _Zep)
+        await mem_mod.get_zep_client()
+        await mem_mod.close_zep_client()
+        assert closed == [True]
+        assert mem_mod._zep_client is None
+
+    @pytest.mark.anyio
+    async def test_a_transport_on_the_wrapper_is_also_closed(self, monkeypatch):
+        """zep-cloud has moved the transport between versions."""
+        monkeypatch.setattr(mem_mod.settings, "zep_api_key", "zep-key", raising=False)
+        closed: list[bool] = []
+
+        class _Httpx:
+            async def aclose(self):
+                closed.append(True)
+
+        class _Zep:
+            def __init__(self, api_key):
+                self._client_wrapper = type("W", (), {"httpx_client": _Httpx()})()
+
+        monkeypatch.setattr(mem_mod, "AsyncZep", _Zep)
+        await mem_mod.get_zep_client()
+        await mem_mod.close_zep_client()
+        assert closed == [True]
+
+    @pytest.mark.anyio
+    async def test_a_client_with_no_reachable_transport_is_dropped_quietly(self, monkeypatch):
+        monkeypatch.setattr(mem_mod.settings, "zep_api_key", "zep-key", raising=False)
+        monkeypatch.setattr(mem_mod, "AsyncZep", lambda api_key: object())
+        await mem_mod.get_zep_client()
+        await mem_mod.close_zep_client()
+        assert mem_mod._zep_client is None
