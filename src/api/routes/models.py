@@ -39,8 +39,8 @@ def _load_yaml_config(filename: str) -> dict:
     try:
         with open(yaml_path) as f:
             return yaml.safe_load(f) or {}
-    except Exception as e:
-        logger.error(f"Failed to load {filename} from {yaml_path}: {e}")
+    except Exception:
+        logger.exception("Failed to load %s from %s", filename, yaml_path)
         return {}
 
 
@@ -123,7 +123,7 @@ def _safe_import_and_extract(module_path: str, type_name: str) -> list[str]:
         if type_hint:
             return _extract_literal_values(type_hint)
     except (ImportError, AttributeError) as e:
-        logger.debug(f"Could not import {module_path}.{type_name}: {e}")
+        logger.debug("Could not import %s.%s: %s", module_path, type_name, e)
     return []
 
 

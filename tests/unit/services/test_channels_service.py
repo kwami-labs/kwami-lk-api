@@ -388,13 +388,13 @@ class TestEnsureConversation:
             user_id=tenant.user_id, kwami_id=tenant.kwami_id, phone_number="+14155552671"
         )
         channel = await _channel(tenant, kind="sms")
-        kwargs = dict(
-            user_id=tenant.user_id,
-            kwami_id=tenant.kwami_id,
-            channel_id=channel["id"],
-            kind="call",
-            contact_id=contact["id"],
-        )
+        kwargs = {
+            "user_id": tenant.user_id,
+            "kwami_id": tenant.kwami_id,
+            "channel_id": channel["id"],
+            "kind": "call",
+            "contact_id": contact["id"],
+        }
         first = await ensure_conversation(**kwargs, metadata={"a": 1})
         second = await ensure_conversation(**kwargs, metadata={"b": 2}, external_thread_id="CA1")
         assert second["id"] == first["id"]
@@ -404,12 +404,12 @@ class TestEnsureConversation:
     @pytest.mark.anyio
     async def test_an_existing_thread_id_is_kept(self, fake_supabase, tenant):
         channel = await _channel(tenant, kind="sms")
-        kwargs = dict(
-            user_id=tenant.user_id,
-            kwami_id=tenant.kwami_id,
-            channel_id=channel["id"],
-            kind="call",
-        )
+        kwargs = {
+            "user_id": tenant.user_id,
+            "kwami_id": tenant.kwami_id,
+            "channel_id": channel["id"],
+            "kind": "call",
+        }
         await ensure_conversation(**kwargs, external_thread_id="CA1")
         again = await ensure_conversation(**kwargs)
         assert again["external_thread_id"] == "CA1"
@@ -419,12 +419,12 @@ class TestEnsureConversation:
         self, monkeypatch, fake_supabase, tenant
     ):
         channel = await _channel(tenant, kind="sms")
-        kwargs = dict(
-            user_id=tenant.user_id,
-            kwami_id=tenant.kwami_id,
-            channel_id=channel["id"],
-            kind="call",
-        )
+        kwargs = {
+            "user_id": tenant.user_id,
+            "kwami_id": tenant.kwami_id,
+            "channel_id": channel["id"],
+            "kind": "call",
+        }
         await ensure_conversation(**kwargs)
         real = ch._single
         calls = {"n": 0}

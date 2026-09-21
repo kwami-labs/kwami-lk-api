@@ -344,7 +344,9 @@ async def add_credits(
     ).execute()
 
     new_balance = result.data
-    logger.info(f"Added {amount_micro} micro-credits to user {user_id}, new balance: {new_balance}")
+    logger.info(
+        "Added %s micro-credits to user %s, new balance: %s", amount_micro, user_id, new_balance
+    )
     return new_balance
 
 
@@ -372,7 +374,10 @@ async def deduct_credits(
 
         new_balance = result.data
         logger.info(
-            f"Deducted {amount_micro} micro-credits from user {user_id}, new balance: {new_balance}"
+            "Deducted %s micro-credits from user %s, new balance: %s",
+            amount_micro,
+            user_id,
+            new_balance,
         )
         return new_balance
     except Exception as e:

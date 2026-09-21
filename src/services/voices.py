@@ -82,7 +82,7 @@ def _extract_openai_tts_voices() -> list[Voice]:
             )
         return voices
     except ImportError as e:
-        logger.warning(f"Could not import OpenAI TTS voices: {e}")
+        logger.warning("Could not import OpenAI TTS voices: %s", e)
         return []
 
 
@@ -111,7 +111,7 @@ def _extract_gemini_realtime_voices() -> list[Voice]:
             )
         return voices
     except ImportError as e:
-        logger.warning(f"Could not import Gemini Live voices: {e}")
+        logger.warning("Could not import Gemini Live voices: %s", e)
         return []
 
 
@@ -134,7 +134,7 @@ def _extract_rime_voices() -> list[Voice]:
             )
         return voices
     except ImportError as e:
-        logger.warning(f"Could not import Rime voices: {e}")
+        logger.warning("Could not import Rime voices: %s", e)
         return []
 
 
@@ -155,14 +155,14 @@ def _load_voices_yaml() -> dict:
     try:
         with open(yaml_path) as f:
             _VOICES_YAML = yaml.safe_load(f) or {}
-            logger.info(f"Loaded voices from {yaml_path}")
+            logger.info("Loaded voices from %s", yaml_path)
             return _VOICES_YAML
     except FileNotFoundError:
-        logger.warning(f"Voices YAML not found at {yaml_path}, using empty config")
+        logger.warning("Voices YAML not found at %s, using empty config", yaml_path)
         _VOICES_YAML = {}
         return _VOICES_YAML
-    except Exception as e:
-        logger.error(f"Failed to load voices YAML: {e}")
+    except Exception:
+        logger.exception("Failed to load voices YAML")
         _VOICES_YAML = {}
         return _VOICES_YAML
 

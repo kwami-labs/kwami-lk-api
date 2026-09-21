@@ -124,7 +124,9 @@ def verify_inbound_webhook(
     try:
         signed_at = int(timestamp)
     except ValueError:
-        raise HTTPException(status_code=401, detail="Invalid SendGrid signature timestamp")
+        raise HTTPException(
+            status_code=401, detail="Invalid SendGrid signature timestamp"
+        ) from None
 
     # Symmetric: a timestamp far in the future is as suspect as a stale one, and
     # tolerating it would reopen the replay window from the other side.

@@ -1,5 +1,9 @@
 """A PostgREST-shaped client over a raw Postgres connection.
 
+S608 is suppressed for the file: the SQL is assembled from a fixed operator
+table and quoted identifiers, every value is a bound parameter, and nothing
+user-supplied reaches it -- it exists only to compare against the fake.
+
 `tests/fakes/supabase.py` claims to behave like PostgREST. Nothing checked that
 claim, so this is the other half of the comparison: the same builder surface,
 backed by real SQL, so a scenario can be run against both and the results
@@ -17,6 +21,7 @@ translates each call the way PostgREST does:
 * A unique violation surfaces as an `APIError` carrying SQLSTATE 23505.
 """
 
+# ruff: noqa: S608
 from __future__ import annotations
 
 from typing import Any

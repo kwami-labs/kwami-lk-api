@@ -365,11 +365,13 @@ class TestCreateOutboundCall:
         lkapi.sip.create_error = _twirp(
             code="unavailable", message="no route", metadata={"sip_status": "503"}
         )
-        with caplog.at_level("WARNING", logger="kwami-api.telephony"):
-            with pytest.raises(HTTPException) as exc:
-                await create_outbound_call(
-                    kwami_id="k1", phone_number="+1", caller_id="+2", participant_name="Ada"
-                )
+        with (
+            caplog.at_level("WARNING", logger="kwami-api.telephony"),
+            pytest.raises(HTTPException) as exc,
+        ):
+            await create_outbound_call(
+                kwami_id="k1", phone_number="+1", caller_id="+2", participant_name="Ada"
+            )
         assert exc.value.status_code == 502
         assert "unavailable: no route" in exc.value.detail
         assert "sip_status=503" in exc.value.detail
@@ -389,11 +391,13 @@ class TestCreateOutboundCall:
         lkapi.agent_dispatch.error = _twirp(
             code="not_found", message="no worker", metadata={"agent": "kwami-agent"}
         )
-        with caplog.at_level("WARNING", logger="kwami-api.telephony"):
-            with pytest.raises(HTTPException) as exc:
-                await create_outbound_call(
-                    kwami_id="k1", phone_number="+1", caller_id="+2", participant_name="Ada"
-                )
+        with (
+            caplog.at_level("WARNING", logger="kwami-api.telephony"),
+            pytest.raises(HTTPException) as exc,
+        ):
+            await create_outbound_call(
+                kwami_id="k1", phone_number="+1", caller_id="+2", participant_name="Ada"
+            )
         assert exc.value.status_code == 502
         assert "SIP leg was created" in exc.value.detail
         assert "not_found: no worker" in exc.value.detail

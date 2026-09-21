@@ -89,9 +89,11 @@ class TestClaimRoom:
     @pytest.mark.anyio
     async def test_another_users_room_is_refused(self, fake_supabase, caplog):
         await claim_room("r1", user_id="u1", kwami_id="k1")
-        with caplog.at_level("WARNING", logger="kwami-api.sessions"):
-            with pytest.raises(ForbiddenError, match="belongs to another user"):
-                await claim_room("r1", user_id="attacker", kwami_id="k1")
+        with (
+            caplog.at_level("WARNING", logger="kwami-api.sessions"),
+            pytest.raises(ForbiddenError, match="belongs to another user"),
+        ):
+            await claim_room("r1", user_id="attacker", kwami_id="k1")
         assert "Rejected token request" in caplog.text
 
     @pytest.mark.anyio

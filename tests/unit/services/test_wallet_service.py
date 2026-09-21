@@ -380,16 +380,16 @@ class TestCreateFundingIntent:
         self, fake_supabase, tenant, allowlisted
     ):
         await self._wallet(tenant)
-        kwargs = dict(
-            kwami_id=tenant.kwami_id,
-            provider="phantom_transfer",
-            asset_mint=SOL_MINT,
-            asset_symbol="SOL",
-            amount=Decimal("1"),
-            amount_usd=None,
-            sender_wallet_pubkey=None,
-            idempotency_key="  key-1  ",
-        )
+        kwargs = {
+            "kwami_id": tenant.kwami_id,
+            "provider": "phantom_transfer",
+            "asset_mint": SOL_MINT,
+            "asset_symbol": "SOL",
+            "amount": Decimal("1"),
+            "amount_usd": None,
+            "sender_wallet_pubkey": None,
+            "idempotency_key": "  key-1  ",
+        }
         first = await create_funding_intent(tenant.user_id, **kwargs)
         second = await create_funding_intent(tenant.user_id, **kwargs)
         assert second["id"] == first["id"]

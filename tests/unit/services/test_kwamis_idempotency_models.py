@@ -16,6 +16,7 @@ from src.services.idempotency import (
     already_in_ledger,
     claim_event,
     complete_event,
+    insert_or_existing,
     ledger_key,
 )
 from src.services.kwamis import KWAMI_COLUMNS, resolve_kwami, resolve_owned_kwami
@@ -171,6 +172,143 @@ class TestClaimEvent:
         )
         with pytest.raises(RuntimeError, match="connection refused"):
             await claim_event("stripe", "evt_1", "t")
+
+
+class TestInsertOrExisting:
+    """A provider redelivery has to come back as the stored row, not a 23505.
+
+    The event tables are uniquely indexed on the provider's own id, so a duplicate
+    row was never possible -- but the violation escaped as a 500, and both Twilio
+    and SendGrid retry a 5xx, so the retry could never succeed.
+    """
+
+    PAYLOAD = {"channel_id": "c", "direction": "inbound", "provider_call_sid": "CA1"}
+
+    def _payload(self, tenant, **overrides):
+        return {
+            **self.PAYLOAD,
+            "user_id": tenant.user_id,
+            "kwami_id": tenant.kwami_id,
+            **overrides,
+        }
+
+    @pytest.mark.anyio
+    async def test_a_first_insert_returns_the_new_row(self, fake_supabase, tenant):
+        row = await insert_or_existing(
+            "kwami_call_events", self._payload(tenant), conflict_column="provider_call_sid"
+        )
+        assert row["provider_call_sid"] == "CA1"
+        assert len(fake_supabase.db.rows("kwami_call_events")) == 1
+
+    @pytest.mark.anyio
+    async def test_a_redelivery_returns_the_stored_row(self, fake_supabase, tenant, caplog):
+        first = await insert_or_existing(
+            "kwami_call_events", self._payload(tenant), conflict_column="provider_call_sid"
+        )
+        with caplog.at_level("INFO", logger="kwami-api.idempotency"):
+            second = await insert_or_existing(
+                "kwami_call_events", self._payload(tenant), conflict_column="provider_call_sid"
+            )
+        assert second["id"] == first["id"]
+        assert len(fake_supabase.db.rows("kwami_call_events")) == 1
+        assert "Redelivery" in caplog.text
+
+    @pytest.mark.anyio
+    async def test_a_null_conflict_value_is_not_deduplicated(self, fake_supabase, tenant):
+        """The unique indexes are partial (`WHERE ... IS NOT NULL`)."""
+        for _ in range(2):
+            await insert_or_existing(
+                "kwami_call_events",
+                self._payload(tenant, provider_call_sid=None),
+                conflict_column="provider_call_sid",
+            )
+        assert len(fake_supabase.db.rows("kwami_call_events")) == 2
+
+    @pytest.mark.anyio
+    async def test_a_non_unique_failure_propagates(self, monkeypatch, fake_supabase):
+        """A connection error must not be mistaken for a redelivery."""
+        monkeypatch.setattr(
+            idempotency,
+            "get_supabase_admin",
+            lambda: _insert_raising(RuntimeError("connection refused")),
+        )
+        with pytest.raises(RuntimeError, match="connection refused"):
+            await insert_or_existing(
+                "kwami_call_events",
+                {"provider_call_sid": "CA1"},
+                conflict_column="provider_call_sid",
+            )
+
+    @pytest.mark.anyio
+    async def test_a_unique_violation_with_no_conflict_value_still_propagates(
+        self, monkeypatch, fake_supabase
+    ):
+        """Some *other* unique index was violated; there is nothing to look up."""
+        monkeypatch.setattr(
+            idempotency,
+            "get_supabase_admin",
+            lambda: _insert_raising(APIError({"message": "duplicate key", "code": "23505"})),
+        )
+        with pytest.raises(APIError):
+            await insert_or_existing(
+                "kwami_call_events",
+                {"provider_call_sid": None},
+                conflict_column="provider_call_sid",
+            )
+
+    @pytest.mark.anyio
+    async def test_a_vanished_conflicting_row_is_none(self, monkeypatch, fake_supabase):
+        """The winner was deleted between the failed insert and the re-read."""
+
+        class _Client:
+            def table(self, name):
+                return self
+
+            def insert(self, payload):
+                self._mode = "insert"
+                return self
+
+            def select(self, *a, **k):
+                self._mode = "select"
+                return self
+
+            def eq(self, *a, **k):
+                return self
+
+            def limit(self, *a, **k):
+                return self
+
+            async def execute(self):
+                if self._mode == "insert":
+                    raise APIError({"message": "duplicate key", "code": "23505"})
+                return type("R", (), {"data": []})()
+
+        monkeypatch.setattr(idempotency, "get_supabase_admin", _Client)
+        assert (
+            await insert_or_existing(
+                "kwami_call_events",
+                {"provider_call_sid": "CA1"},
+                conflict_column="provider_call_sid",
+            )
+            is None
+        )
+
+    @pytest.mark.anyio
+    async def test_a_bare_dict_response_is_returned_as_the_row(self, monkeypatch, fake_supabase):
+        """PostgREST answers with an object rather than a list for some shapes."""
+
+        class _Client:
+            def table(self, name):
+                return self
+
+            def insert(self, payload):
+                return self
+
+            async def execute(self):
+                return type("R", (), {"data": {"id": "x"}})()
+
+        monkeypatch.setattr(idempotency, "get_supabase_admin", _Client)
+        assert await insert_or_existing("t", {"c": 1}, conflict_column="c") == {"id": "x"}
 
 
 class TestCompleteEvent:

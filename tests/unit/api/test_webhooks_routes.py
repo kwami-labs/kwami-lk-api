@@ -354,6 +354,66 @@ class TestWhatsappStatusWebhook:
         assert event["error_message"] == "Unknown destination"
 
 
+class TestProviderRedelivery:
+    """A retried delivery has to be a 2xx no-op.
+
+    Both provider-event tables carry a partial unique index on the provider's own
+    id, so a duplicate row was never possible. What happened instead was that the
+    23505 escaped the route as a 500 -- and Twilio retries a 5xx, so a redelivered
+    message failed forever and each failure requested another delivery.
+
+    These went unnoticed because `tests/fakes/supabase.py` declared both indexes on
+    a column called `provider_sid`, which neither table has, so the fake accepted
+    the duplicate that Postgres would have refused.
+    """
+
+    async def test_a_redelivered_sms_is_acknowledged_once(self, client, sms_channel, fake_supabase):
+        payload = {
+            "MessageSid": "SM-retry",
+            "From": "+14155552671",
+            "To": "+14155552672",
+            "Body": "hello",
+            "SmsStatus": "received",
+        }
+        first = await post_twilio(client, WHATSAPP, payload)
+        second = await post_twilio(client, WHATSAPP, payload)
+
+        assert first.status_code == 200
+        assert second.status_code == 200, "a 5xx here is what Twilio retries"
+        assert len(fake_supabase.db.rows("kwami_message_events")) == 1
+
+    async def test_a_redelivered_call_is_acknowledged_once(
+        self, client, sms_channel, fake_supabase
+    ):
+        payload = {"CallSid": "CA-retry", "From": "+14155552671", "To": "+14155552672"}
+        first = await post_twilio(client, VOICE, payload)
+        second = await post_twilio(client, VOICE, payload)
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert len(fake_supabase.db.rows("kwami_call_events")) == 1
+
+    async def test_two_distinct_messages_both_land(self, client, sms_channel, fake_supabase):
+        """Deduplication keys on the provider id; it must not collapse everything."""
+        for sid in ("SM-a", "SM-b"):
+            await post_twilio(
+                client,
+                WHATSAPP,
+                {"MessageSid": sid, "From": "+14155552671", "To": "+14155552672", "Body": "x"},
+            )
+        assert len(fake_supabase.db.rows("kwami_message_events")) == 2
+
+    async def test_a_message_with_no_sid_is_not_deduplicated(
+        self, client, sms_channel, fake_supabase
+    ):
+        """The index is partial (`WHERE ... IS NOT NULL`): with no id there is
+        nothing to deduplicate on, so both deliveries are stored."""
+        payload = {"From": "+14155552671", "To": "+14155552672", "Body": "x"}
+        await post_twilio(client, WHATSAPP, payload)
+        await post_twilio(client, WHATSAPP, payload)
+        assert len(fake_supabase.db.rows("kwami_message_events")) == 2
+
+
 class TestSendgridInbound:
     """Every post here is signed.
 

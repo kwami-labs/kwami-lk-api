@@ -693,7 +693,7 @@ class TestSendRoute:
 
         async def fake_send(**kwargs):
             seen.update(kwargs)
-            return None
+            return
 
         monkeypatch.setattr(email_route, "send_email", fake_send)
         await tenant_client.post("/email/send", json=self._body(tenant.kwami_id))
@@ -741,6 +741,9 @@ def _rows_client(rows):
             return self
 
         def eq(self, *a, **k):
+            return self
+
+        def limit(self, *a, **k):
             return self
 
         async def execute(self):
