@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 from pydantic import BaseModel, Field
 
 from src.api.deps import require_auth
+from src.api.ratelimit import PURCHASE_LIMIT, limiter
 from src.core.config import settings
 from src.core.security import AuthUser
 from src.services.credits import (
@@ -275,27 +276,29 @@ async def get_credit_packs():
 
 
 @router.post("/purchase", response_model=PurchaseResponse)
+@limiter.limit(PURCHASE_LIMIT)
 async def purchase_credits(
-    request: PurchaseRequest,
+    request: Request,
+    body: PurchaseRequest,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
     """Create a Stripe Checkout Session to purchase credits."""
     try:
         checkout_url = await create_checkout_session(
             user_id=user.id,
-            pack_id=request.pack_id,
-            success_url=request.success_url,
-            cancel_url=request.cancel_url,
+            pack_id=body.pack_id,
+            success_url=body.success_url,
+            cancel_url=body.cancel_url,
         )
         return PurchaseResponse(checkout_url=checkout_url)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except RuntimeError as e:
-        logger.error(f"Stripe not configured: {e}")
+        logger.exception("Stripe not configured")
         raise HTTPException(
             status_code=503,
             detail="Payment processing is not currently available",
-        )
+        ) from e
 
 
 @router.get("/transactions", response_model=TransactionsResponse)
@@ -396,13 +399,12 @@ async def stripe_webhook(request: Request):
         raise HTTPException(status_code=400, detail="Missing stripe-signature header")
 
     try:
-        result = await handle_webhook_event(payload, sig_header)
-        return result
+        return await handle_webhook_event(payload, sig_header)
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid signature")
+        raise HTTPException(status_code=400, detail="Invalid signature") from None
     except RuntimeError as e:
-        logger.error(f"Webhook processing error: {e}")
-        raise HTTPException(status_code=500, detail="Webhook processing failed")
+        logger.exception("Webhook processing error")
+        raise HTTPException(status_code=500, detail="Webhook processing failed") from e
 
 
 # =============================================================================
@@ -443,8 +445,10 @@ async def report_usage(
     still settled only once.
     """
     logger.info(
-        f"Usage report received: user={request.user_id}, "
-        f"session={request.session_id}, items={len(request.usage)}"
+        "Usage report received: user=%s, session=%s, items=%s",
+        request.user_id,
+        request.session_id,
+        len(request.usage),
     )
 
     usage_items = [

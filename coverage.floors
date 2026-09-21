@@ -37,6 +37,22 @@
 # the behaviour worth keeping covered: the alternative is a process that starts and then 500s.
 src/core/config.py                           100
 
+# The three middlewares every request passes through: the correlation id and
+# access log, the security headers, and the body cap. Written as raw ASGI rather
+# than BaseHTTPMiddleware -- that base class runs the rest of the app in a
+# separate anyio task, which costs a task and two queue hops per request and
+# hides everything downstream from this very coverage measurement.
+src/api/middleware.py                        100
+
+# Per-caller limits. The key function is the part worth keeping covered: billing
+# by user rather than by address is what stops one NAT sharing a budget, and what
+# stops one account buying headroom by changing address.
+src/api/ratelimit.py                         100
+
+# JSON records and the request-id ContextVar. An error response quotes the id and
+# this is what puts the same id on every log line for that request.
+src/core/logging.py                          100
+
 # The domain-error layer every route maps through. Each error class has to keep producing the
 # status code the app relies on; a silent remap here turns a 402 into a 500 for every caller.
 src/core/errors.py                           100

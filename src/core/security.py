@@ -4,6 +4,7 @@ import hmac
 import logging
 from dataclasses import dataclass
 
+import anyio.to_thread
 import jwt
 from jwt import PyJWKClient
 
@@ -20,7 +21,7 @@ def get_jwks_client() -> PyJWKClient | None:
     global _jwks_client
     if _jwks_client is None and settings.supabase_jwks_url:
         _jwks_client = PyJWKClient(settings.supabase_jwks_url, cache_keys=True)
-        logger.info(f"JWKS client initialized: {settings.supabase_jwks_url}")
+        logger.info("JWKS client initialized: %s", settings.supabase_jwks_url)
     return _jwks_client
 
 
@@ -80,7 +81,13 @@ async def verify_token(token: str) -> dict:
             "JWKS not configured. Set SUPABASE_URL to enable authentication."
         )
 
-    signing_key = jwks_client.get_signing_key_from_jwt(token)
+    # `PyJWKClient` fetches the key set with urllib, synchronously. It caches, so
+    # most requests never reach the network -- but a cold worker, a rotated key or
+    # an expired cache entry makes the *next* request block the event loop on an
+    # HTTPS round trip to Supabase, and this runs on the dependency chain of
+    # nearly every authenticated route. A thread keeps that off the loop without
+    # giving up PyJWT's key handling.
+    signing_key = await anyio.to_thread.run_sync(jwks_client.get_signing_key_from_jwt, token)
     return jwt.decode(
         token,
         signing_key.key,
@@ -126,9 +133,7 @@ def is_admin_user(user: AuthUser | None) -> bool:
         return False
     if user.role == "service_role":
         return True
-    if user.email and user.email.lower() in settings.admin_emails:
-        return True
-    return False
+    return bool(user.email and user.email.lower() in settings.admin_emails)
 
 
 def is_valid_admin_api_key(api_key: str | None) -> bool:

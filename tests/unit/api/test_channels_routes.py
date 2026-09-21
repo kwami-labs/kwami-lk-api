@@ -17,6 +17,7 @@ from httpx import ASGITransport, AsyncClient
 
 from src.api.routes import channels as ch
 from src.core.config import settings
+from tests.helpers import async_return
 
 pytestmark = pytest.mark.anyio
 
@@ -56,7 +57,12 @@ async def tenant_client_soft(app_instance, tenant, auth_registry):
 
 @pytest.fixture
 def stub_providers(monkeypatch):
-    """Replace every Twilio/LiveKit call site with a recording stub."""
+    """Replace every Twilio/LiveKit call site with a recording stub.
+
+    All of these are coroutines now: the Twilio helpers moved to the SDK's
+    `*_async` resource methods so provisioning a number or sending a message
+    stops parking the event loop on an HTTPS round trip.
+    """
     calls: dict[str, Any] = {
         "purchased": None,
         "released": [],
@@ -66,23 +72,16 @@ def stub_providers(monkeypatch):
         "messages": [],
     }
 
-    monkeypatch.setattr(
-        ch,
-        "search_available_numbers",
-        lambda **kw: [{"phoneNumber": "+14155552671", "capabilities": {"voice": True}}],
-    )
-    monkeypatch.setattr(
-        ch,
-        "purchase_phone_number",
-        lambda **kw: (
-            calls.__setitem__("purchased", kw) or {"sid": "PN1", "phone_number": kw["phone_number"]}
-        ),
-    )
-    monkeypatch.setattr(
-        ch,
-        "attach_phone_number_to_sip_trunk",
-        lambda sid: calls["attached"].append(sid) or "TP1",
-    )
+    async def search_available_numbers(**kw):
+        return [{"phoneNumber": "+14155552671", "capabilities": {"voice": True}}]
+
+    async def purchase_phone_number(**kw):
+        calls["purchased"] = kw
+        return {"sid": "PN1", "phone_number": kw["phone_number"]}
+
+    async def attach_phone_number_to_sip_trunk(sid):
+        calls["attached"].append(sid)
+        return "TP1"
 
     async def sync(phone):
         return {"outbound": {"configured": True, "synced": True}, "strategy": "shared_trunks"}
@@ -90,14 +89,11 @@ def stub_providers(monkeypatch):
     async def remove(phone):
         return {"outbound": {"configured": True, "synced": True}}
 
-    monkeypatch.setattr(ch, "sync_shared_livekit_trunks", sync)
-    monkeypatch.setattr(ch, "remove_phone_from_shared_livekit_trunks", remove)
-    monkeypatch.setattr(
-        ch, "detach_phone_number_from_sip_trunk", lambda sid: calls["detached"].append(sid)
-    )
-    monkeypatch.setattr(
-        ch, "release_incoming_phone_number", lambda sid: calls["released"].append(sid)
-    )
+    async def detach_phone_number_from_sip_trunk(sid):
+        calls["detached"].append(sid)
+
+    async def release_incoming_phone_number(sid):
+        calls["released"].append(sid)
 
     async def outbound_call(**kw):
         calls["calls"].append(kw)
@@ -108,33 +104,37 @@ def stub_providers(monkeypatch):
             "agent_dispatch_id": "AD_1",
         }
 
-    monkeypatch.setattr(ch, "create_outbound_call", outbound_call)
-    monkeypatch.setattr(
-        ch,
-        "place_direct_pstn_test_call",
-        lambda **kw: calls["calls"].append(kw) or {"sid": "CA1", "status": "queued"},
-    )
-    monkeypatch.setattr(
-        ch,
-        "send_whatsapp_message",
-        lambda **kw: (
-            calls["messages"].append(kw)
-            or {
-                "sid": "SM1",
-                "status": "queued",
-                "from": kw["from_address"],
-                "to": kw["to_address"],
-            }
-        ),
-    )
-    monkeypatch.setattr(
-        ch,
-        "send_sms_message",
-        lambda **kw: (
-            calls["messages"].append(kw)
-            or {"sid": "SM2", "status": "queued", "from": kw["from_number"], "to": kw["to_number"]}
-        ),
-    )
+    async def place_direct_pstn_test_call(**kw):
+        calls["calls"].append(kw)
+        return {"sid": "CA1", "status": "queued"}
+
+    async def send_whatsapp_message(**kw):
+        calls["messages"].append(kw)
+        return {
+            "sid": "SM1",
+            "status": "queued",
+            "from": kw["from_address"],
+            "to": kw["to_address"],
+        }
+
+    async def send_sms_message(**kw):
+        calls["messages"].append(kw)
+        return {"sid": "SM2", "status": "queued", "from": kw["from_number"], "to": kw["to_number"]}
+
+    for name, stub in [
+        ("search_available_numbers", search_available_numbers),
+        ("purchase_phone_number", purchase_phone_number),
+        ("attach_phone_number_to_sip_trunk", attach_phone_number_to_sip_trunk),
+        ("sync_shared_livekit_trunks", sync),
+        ("remove_phone_from_shared_livekit_trunks", remove),
+        ("detach_phone_number_from_sip_trunk", detach_phone_number_from_sip_trunk),
+        ("release_incoming_phone_number", release_incoming_phone_number),
+        ("create_outbound_call", outbound_call),
+        ("place_direct_pstn_test_call", place_direct_pstn_test_call),
+        ("send_whatsapp_message", send_whatsapp_message),
+        ("send_sms_message", send_sms_message),
+    ]:
+        monkeypatch.setattr(ch, name, stub)
     return calls
 
 
@@ -251,7 +251,7 @@ class TestPurchase:
     async def test_a_purchase_without_a_sid_skips_provider_wiring(
         self, monkeypatch, tenant_client, tenant, stub_providers
     ):
-        monkeypatch.setattr(ch, "purchase_phone_number", lambda **kw: {"sid": None})
+        monkeypatch.setattr(ch, "purchase_phone_number", async_return({"sid": None}))
         body = await _purchase(tenant_client, tenant.kwami_id)
         assert body["sharedInfrastructure"] is None
         assert stub_providers["attached"] == []
@@ -388,7 +388,7 @@ class TestRelease:
     async def test_a_channel_with_no_incoming_sid_releases_only_itself(
         self, monkeypatch, tenant_client, tenant, stub_providers, fake_supabase
     ):
-        monkeypatch.setattr(ch, "purchase_phone_number", lambda **kw: {"sid": ""})
+        monkeypatch.setattr(ch, "purchase_phone_number", async_return({"sid": ""}))
         body = await _purchase(tenant_client, tenant.kwami_id)
         r = await tenant_client.post(
             "/channels/phone/release",

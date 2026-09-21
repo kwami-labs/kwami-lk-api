@@ -137,9 +137,9 @@ async def test_a_forbidden_room_claim_propagates_as_a_domain_error(monkeypatch, 
 
 
 @pytest.mark.anyio
-async def test_the_participant_name_falls_back_through_email_then_identity(
-    monkeypatch, tenant_client, tenant
-):
+async def test_the_participant_name_never_defaults_to_the_email(monkeypatch, tenant_client, tenant):
+    """The name is embedded in the token and every other participant in the room
+    can read it. It used to default to the caller's email address."""
     seen: dict = {}
 
     def capture(**kwargs):
@@ -148,8 +148,23 @@ async def test_the_participant_name_falls_back_through_email_then_identity(
 
     monkeypatch.setattr(token_route, "create_token", capture)
     await tenant_client.post("/token", json={})
-    assert seen["participant_name"] == tenant.auth_user.email
+    assert seen["participant_name"] == tenant.user_id
+    assert seen["participant_name"] != tenant.auth_user.email
     assert seen["participant_identity"] == tenant.user_id
+
+
+@pytest.mark.anyio
+async def test_a_caller_supplied_display_name_is_used(monkeypatch, tenant_client, tenant):
+    """Choosing to publish a name is the caller's decision to make."""
+    seen: dict = {}
+
+    def capture(**kwargs):
+        seen.update(kwargs)
+        return "tok"
+
+    monkeypatch.setattr(token_route, "create_token", capture)
+    await tenant_client.post("/token", json={"participantName": "Ada"})
+    assert seen["participant_name"] == "Ada"
 
 
 @pytest.mark.anyio

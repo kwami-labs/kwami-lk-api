@@ -6,8 +6,15 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi.errors import RateLimitExceeded
 
 from src import __version__
+from src.api.middleware import (
+    BodySizeLimitMiddleware,
+    RequestContextMiddleware,
+    SecurityHeadersMiddleware,
+)
+from src.api.ratelimit import limiter, rate_limit_exceeded_handler
 from src.api.routes import (
     admin_reconciliation,
     calendar,
@@ -25,25 +32,25 @@ from src.api.routes import (
     wallet,
     webhooks,
 )
+from src.api.routes.memory import close_zep_client
 from src.core.config import settings
 from src.core.errors import install_error_handlers
+from src.core.logging import configure_logging
 from src.services.credits import init_supabase_admin
+from src.services.twilio_service import close_twilio_client
 
-# Configure logging
-logging.basicConfig(
-    level=logging.DEBUG if settings.debug else logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-)
+# JSON records carrying the request id, so a reported error can be found.
+configure_logging(debug=settings.debug, json_output=settings.log_json)
 logger = logging.getLogger("kwami-api")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
-    logger.info(f"🚀 Starting {settings.app_name} v{__version__}")
-    logger.info(f"🌐 Listening on {settings.api_host}:{settings.api_port}")
-    logger.info(f"📡 LiveKit URL: {settings.livekit_url}")
-    logger.info(f"🌍 Environment: {settings.app_env}")
+    logger.info("🚀 Starting %s v%s", settings.app_name, __version__)
+    logger.info("🌐 Listening on %s:%s", settings.api_host, settings.api_port)
+    logger.info("📡 LiveKit URL: %s", settings.livekit_url)
+    logger.info("🌍 Environment: %s", settings.app_env)
     if settings.kwami_api_key and settings.kwami_api_key.strip():
         logger.info("📊 Kwami API key for usage report: set")
     else:
@@ -63,6 +70,9 @@ async def lifespan(app: FastAPI):
         logger.warning("🗄️  Supabase not configured; database-backed routes will fail")
 
     yield
+
+    await close_zep_client()
+    await close_twilio_client()
     logger.info("👋 Shutting down...")
 
 
@@ -88,6 +98,9 @@ app = FastAPI(
     **docs_urls(settings.show_docs),
 )
 
+# Middleware runs outermost-last: Starlette applies these in reverse, so the
+# request context is established first and therefore covers everything below
+# it, including the rate limiter's rejections and the CORS preflight.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -95,6 +108,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_request_body_bytes)
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RequestContextMiddleware)
+
+# `errors.py` has mapped 429 to `rate_limited` since it was written; this is the
+# implementation that finally raises one.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 # Registered before the routers so every route is covered, including the
 # catch-all that stops `detail=str(e)` forwarding upstream text to clients.
@@ -128,6 +149,10 @@ def run():
         host=settings.api_host,
         port=settings.api_port,
         reload=settings.debug,
+        # One worker cannot use more than one core, and it is also a single point
+        # of failure: a restart drops every request in flight. Reload mode is
+        # single-worker by definition, so this only applies to a real run.
+        workers=None if settings.debug else settings.web_concurrency,
         log_level="debug" if settings.debug else "info",
         # Fly terminates TLS and forwards over the internal network. Without
         # these, request.url.scheme stays "http" (breaking Twilio signature

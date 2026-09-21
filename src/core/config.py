@@ -47,7 +47,10 @@ class Settings(BaseSettings):
     debug: bool = False
 
     # API Server - must listen on 0.0.0.0 and port from Fly.io (PORT) or API_PORT
-    api_host: str = Field(default="0.0.0.0", alias="API_HOST")
+    api_host: str = Field(
+        default="0.0.0.0",  # noqa: S104 - a container must bind every interface
+        alias="API_HOST",
+    )
     api_port: int = Field(default_factory=_default_port, alias="API_PORT")
 
     # CORS - stored as comma-separated string, accessed via property
@@ -268,6 +271,29 @@ class Settings(BaseSettings):
     )
     zep_usage_api_url: str | None = Field(default=None, alias="ZEP_USAGE_API_URL")
 
+    # Rate limiting
+    #
+    # In-process by default, so limits are per worker. A `redis://` URI makes them
+    # exact across machines; see src/api/ratelimit.py for why the approximate
+    # version is still the right shape for abuse control.
+    rate_limit_enabled: bool = Field(default=True, alias="RATE_LIMIT_ENABLED")
+    rate_limit_storage_uri: str = Field(default="memory://", alias="RATE_LIMIT_STORAGE_URI")
+
+    # Largest request body accepted, in bytes. Inbound email carries attachments.
+    max_request_body_bytes: int = Field(
+        default=10 * 1024 * 1024,
+        ge=1024,
+        alias="MAX_REQUEST_BODY_BYTES",
+    )
+
+    # JSON logs in production, human-readable lines on a laptop.
+    log_json: bool = Field(default=True, alias="LOG_JSON")
+
+    # uvicorn worker processes. One per core is the usual starting point; the Fly
+    # VM is sized to match in fly.toml. `WEB_CONCURRENCY` is the conventional name
+    # and is what Fly and Heroku set.
+    web_concurrency: int = Field(default=2, ge=1, le=32, alias="WEB_CONCURRENCY")
+
     # Enable OpenAPI docs (/docs, /redoc) in production when set to true
     enable_docs: bool = Field(default=False, alias="ENABLE_DOCS")
 
@@ -344,11 +370,14 @@ class Settings(BaseSettings):
                 "WALLET_CUSTODY_PROVIDER is 'mock' while WALLET_ENABLED is true. "
                 "The mock provider mints addresses that cannot receive funds."
             )
-        if self.wallet_enabled and self.wallet_custody_provider != "mock":
-            if not self.wallet_custody_signing_secret:
-                problems.append(
-                    "WALLET_CUSTODY_SIGNING_SECRET is required for a non-mock custody provider."
-                )
+        if (
+            self.wallet_enabled
+            and self.wallet_custody_provider != "mock"
+            and not self.wallet_custody_signing_secret
+        ):
+            problems.append(
+                "WALLET_CUSTODY_SIGNING_SECRET is required for a non-mock custody provider."
+            )
 
         if problems:
             raise ValueError("Refusing to start in production:\n  - " + "\n  - ".join(problems))

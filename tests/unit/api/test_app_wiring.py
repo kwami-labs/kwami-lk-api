@@ -31,6 +31,36 @@ class TestLifespan:
         assert "Shutting down" in caplog.text
 
     @pytest.mark.anyio
+    async def test_an_unconfigured_database_warns_rather_than_failing_to_boot(
+        self, monkeypatch, caplog
+    ):
+        """A development run with no database still has to start; the routes that
+        need one raise a clear error of their own."""
+        settings_obj = lifespan.__wrapped__.__globals__["settings"]
+        monkeypatch.setattr(settings_obj, "supabase_url", None, raising=False)
+        with caplog.at_level("WARNING", logger="kwami-api"):
+            async with lifespan(app):
+                pass
+        assert "Supabase not configured" in caplog.text
+
+    @pytest.mark.anyio
+    async def test_a_configured_database_builds_the_client_once(self, monkeypatch, caplog):
+        built: list[int] = []
+
+        async def _init():
+            built.append(1)
+
+        settings_obj = lifespan.__wrapped__.__globals__["settings"]
+        monkeypatch.setattr(settings_obj, "supabase_url", "https://p.supabase.co", raising=False)
+        monkeypatch.setattr(settings_obj, "supabase_secret_key", "k", raising=False)
+        monkeypatch.setitem(lifespan.__wrapped__.__globals__, "init_supabase_admin", _init)
+        with caplog.at_level("INFO", logger="kwami-api"):
+            async with lifespan(app):
+                pass
+        assert built == [1], "one client per process, built at startup"
+        assert "Supabase async client: ready" in caplog.text
+
+    @pytest.mark.anyio
     async def test_a_configured_agent_key_is_reported_as_set(self, monkeypatch, caplog):
         monkeypatch.setattr(
             lifespan.__wrapped__.__globals__["settings"], "kwami_api_key", "k", raising=False

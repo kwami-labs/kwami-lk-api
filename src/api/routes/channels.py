@@ -5,10 +5,11 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from src.api.deps import require_auth
+from src.api.ratelimit import PROVISIONING_LIMIT, limiter
 from src.core.config import settings
 from src.core.security import AuthUser
 from src.services.channels import (
@@ -120,7 +121,7 @@ async def search_phone_numbers(
 ):
     await get_owned_kwami(user.id, kwami_id)
     return NumberSearchResponse(
-        results=search_available_numbers(
+        results=await search_available_numbers(
             country_code=country_code,
             area_code=area_code,
             contains=contains,
@@ -130,16 +131,18 @@ async def search_phone_numbers(
 
 
 @router.post("/phone/purchase")
+@limiter.limit(PROVISIONING_LIMIT)
 async def purchase_kwami_phone_number(
-    request: PhonePurchaseRequest,
+    request: Request,
+    body: PhonePurchaseRequest,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
-    kwami = await get_owned_kwami(user.id, request.kwami_id)
-    phone_number = normalize_phone_number(request.phone_number, request.country_code)
+    kwami = await get_owned_kwami(user.id, body.kwami_id)
+    phone_number = normalize_phone_number(body.phone_number, body.country_code)
 
-    purchase = purchase_phone_number(
+    purchase = await purchase_phone_number(
         phone_number=phone_number,
-        friendly_name=request.display_name or f"{kwami.get('name') or 'Kwami'} Line",
+        friendly_name=body.display_name or f"{kwami.get('name') or 'Kwami'} Line",
     )
 
     trunk_phone_sid = None
@@ -148,7 +151,7 @@ async def purchase_kwami_phone_number(
     voice_outbound_ready = bool(settings.livekit_sip_outbound_trunk_id)
     if purchase.get("sid"):
         try:
-            trunk_phone_sid = attach_phone_number_to_sip_trunk(str(purchase["sid"]))
+            trunk_phone_sid = await attach_phone_number_to_sip_trunk(str(purchase["sid"]))
         except Exception as exc:
             logger.warning("Failed to attach number to Twilio SIP trunk: %s", exc)
         try:
@@ -169,11 +172,11 @@ async def purchase_kwami_phone_number(
 
     voice_channel = await upsert_channel(
         user_id=user.id,
-        kwami_id=request.kwami_id,
+        kwami_id=body.kwami_id,
         kind="voice_phone",
         phone_number=phone_number,
-        display_name=request.display_name or kwami.get("name"),
-        country_code=request.country_code,
+        display_name=body.display_name or kwami.get("name"),
+        country_code=body.country_code,
         status=voice_status,
         capabilities={"voice": True, "outbound": voice_outbound_ready},
         metadata={
@@ -185,11 +188,11 @@ async def purchase_kwami_phone_number(
     )
     whatsapp_channel = await upsert_channel(
         user_id=user.id,
-        kwami_id=request.kwami_id,
+        kwami_id=body.kwami_id,
         kind="whatsapp",
         phone_number=phone_number,
-        display_name=request.display_name or kwami.get("name"),
-        country_code=request.country_code,
+        display_name=body.display_name or kwami.get("name"),
+        country_code=body.country_code,
         status="active",
         capabilities={"whatsapp": True, "requiresApproval": False},
         metadata={
@@ -205,11 +208,11 @@ async def purchase_kwami_phone_number(
     )
     sms_channel = await upsert_channel(
         user_id=user.id,
-        kwami_id=request.kwami_id,
+        kwami_id=body.kwami_id,
         kind="sms",
         phone_number=phone_number,
-        display_name=request.display_name or kwami.get("name"),
-        country_code=request.country_code,
+        display_name=body.display_name or kwami.get("name"),
+        country_code=body.country_code,
         status="active",
         capabilities={"sms": True},
         metadata={
@@ -232,26 +235,28 @@ async def purchase_kwami_phone_number(
 
 
 @router.post("/phone/release")
+@limiter.limit(PROVISIONING_LIMIT)
 async def release_kwami_phone_number(
-    request: PhoneReleaseRequest,
+    request: Request,
+    body: PhoneReleaseRequest,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
     """Drop voice + WhatsApp channel rows and optionally release the Twilio number and shared trunk state."""
     try:
-        await get_owned_kwami(user.id, request.kwami_id)
+        await get_owned_kwami(user.id, body.kwami_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     try:
-        anchor = await get_channel(user.id, request.channel_id)
+        anchor = await get_channel(user.id, body.channel_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Channel not found") from exc
 
-    if anchor["kwami_id"] != request.kwami_id:
+    if anchor["kwami_id"] != body.kwami_id:
         raise HTTPException(status_code=400, detail="Channel does not belong to this kwami")
 
     incoming_sid = (anchor.get("provider_channel_sid") or "").strip()
     rows = (
-        await list_channels_sharing_twilio_incoming(user.id, request.kwami_id, incoming_sid)
+        await list_channels_sharing_twilio_incoming(user.id, body.kwami_id, incoming_sid)
         if incoming_sid
         else [anchor]
     )
@@ -269,7 +274,7 @@ async def release_kwami_phone_number(
 
     provider_steps: dict[str, Any] = {"livekit": None, "twilioTrunk": None, "twilioIncoming": None}
 
-    if request.release_provider_resources and phone_e164:
+    if body.release_provider_resources and phone_e164:
         try:
             provider_steps["livekit"] = await remove_phone_from_shared_livekit_trunks(phone_e164)
         except Exception as exc:
@@ -278,14 +283,14 @@ async def release_kwami_phone_number(
 
         if incoming_sid:
             try:
-                detach_phone_number_from_sip_trunk(trunk_attach_sid or "")
+                await detach_phone_number_from_sip_trunk(trunk_attach_sid or "")
                 provider_steps["twilioTrunk"] = "detached" if trunk_attach_sid else "skipped"
             except Exception as exc:
                 logger.warning("Twilio SIP trunk detach failed (continuing): %s", exc)
                 provider_steps["twilioTrunk"] = {"error": str(exc)}
 
             try:
-                release_incoming_phone_number(incoming_sid)
+                await release_incoming_phone_number(incoming_sid)
                 provider_steps["twilioIncoming"] = "released"
             except Exception as exc:
                 err_t = extract_twilio_error(exc)
@@ -439,7 +444,7 @@ async def start_twilio_direct_test_call(
     )
 
     try:
-        twilio_result = place_direct_pstn_test_call(
+        twilio_result = await place_direct_pstn_test_call(
             to_e164=to_number,
             from_e164=channel["phone_number"],
         )
@@ -551,13 +556,13 @@ async def send_outbound_message(
 
     try:
         if channel_kind == "sms":
-            message = send_sms_message(
+            message = await send_sms_message(
                 from_number=from_address,
                 to_number=to_address,
                 body=request.body.strip(),
             )
         else:
-            message = send_whatsapp_message(
+            message = await send_whatsapp_message(
                 from_address=from_address,
                 to_address=to_address,
                 body=request.body.strip(),

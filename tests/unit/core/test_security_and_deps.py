@@ -16,6 +16,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
+from starlette.requests import Request
 
 from src.api import deps
 from src.core import security
@@ -326,15 +327,20 @@ class TestIsValidAdminApiKey:
         assert calls == [("secret", "secret")]
 
 
+def _request() -> Request:
+    """A bare Request with a usable `.state`, which `get_current_user` writes to."""
+    return Request({"type": "http", "method": "GET", "path": "/", "headers": []})
+
+
 class TestGetCurrentUser:
     @pytest.mark.anyio
     async def test_no_credentials_is_anonymous(self):
-        assert await deps.get_current_user(None) is None
+        assert await deps.get_current_user(_request(), None) is None
 
     @pytest.mark.anyio
     async def test_auth_not_configured_is_anonymous(self, monkeypatch):
         monkeypatch.setattr(type(deps.settings), "auth_enabled", property(lambda self: False))
-        assert await deps.get_current_user(_creds()) is None
+        assert await deps.get_current_user(_request(), _creds()) is None
 
     @pytest.mark.anyio
     async def test_a_valid_token_becomes_an_auth_user(self, monkeypatch):
@@ -345,7 +351,7 @@ class TestGetCurrentUser:
             return {"sub": "u1", "email": "a@b.c"}
 
         monkeypatch.setattr(deps, "verify_token", ok)
-        user = await deps.get_current_user(_creds("the-token"))
+        user = await deps.get_current_user(_request(), _creds("the-token"))
         assert user is not None and user.id == "u1"
 
     @pytest.mark.parametrize(
@@ -368,7 +374,7 @@ class TestGetCurrentUser:
 
         monkeypatch.setattr(deps, "verify_token", boom)
         with pytest.raises(HTTPException) as exc:
-            await deps.get_current_user(_creds())
+            await deps.get_current_user(_request(), _creds())
         assert exc.value.status_code == 401
         assert exc.value.detail == detail
         assert exc.value.headers == {"WWW-Authenticate": "Bearer"}
