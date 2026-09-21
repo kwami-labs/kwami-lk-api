@@ -10,6 +10,10 @@ from src.services.credits import get_supabase_admin
 
 VALID_EVENT_TYPES = {"meeting", "task", "personal", "reminder", "focus", "other"}
 
+# The most events one range query will return. A month of 15-minute slots is
+# under 3000; this is generous for a calendar and finite for the database.
+MAX_EVENTS_PER_RANGE = 500
+
 
 def _single(result: Any) -> dict[str, Any] | None:
     data = getattr(result, "data", None)
@@ -67,6 +71,11 @@ async def list_events(
         .lte("starts_at", end.isoformat())
         .gte("ends_at", start.isoformat())
         .order("starts_at", desc=False)
+        # PostgREST caps an unbounded select at its own `max-rows` (1000 on
+        # Supabase) and says nothing about it, so a busy calendar silently
+        # returned a truncated month. An explicit bound makes the ceiling the
+        # caller's, and visible.
+        .limit(MAX_EVENTS_PER_RANGE)
         .execute()
     )
     return list(getattr(result, "data", None) or [])

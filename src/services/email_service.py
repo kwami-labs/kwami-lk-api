@@ -19,6 +19,9 @@ from src.services.idempotency import insert_or_existing
 
 logger = logging.getLogger("kwami-api.email")
 
+# How many unread messages `get_unread_counts` will scan.
+MAX_UNREAD_SCAN = 2000
+
 USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{1,28}[a-z0-9]$")
 
 
@@ -284,6 +287,11 @@ async def get_unread_counts(user_id: str, kwami_id: str) -> dict[str, int]:
         .eq("kwami_id", kwami_id)
         .eq("is_read", False)
         .eq("is_archived", False)
+        # Counting by reading every row is already the wrong shape for a large
+        # mailbox; bounding it at least makes the number wrong in a visible,
+        # fixed way rather than at PostgREST's silent 1000-row cap. A `count`
+        # aggregate is the real fix.
+        .limit(MAX_UNREAD_SCAN)
         .execute()
     )
     rows = getattr(result, "data", None) or []
