@@ -25,7 +25,7 @@ help: ## List targets
 # `make` / `make check` is the whole gate, and it is the same set of checks ci.yml runs as
 # separate jobs. The two it leaves out both need the network: `make vuln` and the image build.
 .PHONY: check
-check: lint fmt-check coverage coverage-gate migrate-dry-run ## Full gate (needs Postgres)
+check: lint typecheck fmt-check coverage coverage-gate migrate-dry-run ## Full gate (needs Postgres)
 
 # =============================================================================
 # Development
@@ -163,6 +163,13 @@ fmt-check: ## Fail if ruff format would rewrite a file
 #
 # `--no-deps` audits exactly the versions uv.lock pins, with no resolution of its own; without
 # it pip-audit would re-resolve and report on versions this project does not install.
+# mypy over src/. `pyproject.toml` runs it strict on the modules where a wrong
+# type is a money or an auth bug, and carries a named, shrinking list of the
+# modules that do not check yet. An entry may be deleted, never added.
+.PHONY: typecheck
+typecheck: ## Type-check src/ with mypy
+	uv run --extra dev mypy
+
 .PHONY: vuln
 vuln: ## pip-audit over the locked dependency set (network; not part of check)
 	uv export --frozen --no-emit-project --no-hashes --format requirements-txt -o "$${TMPDIR:-/tmp}/kwami-requirements.txt"

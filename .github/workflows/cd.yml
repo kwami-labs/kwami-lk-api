@@ -193,6 +193,8 @@ jobs:
       && github.event.workflow_run.head_branch == 'main'
       && (needs.release.result == 'success' || needs.release.result == 'skipped')
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     permissions:
       contents: write
       packages: write
@@ -271,6 +273,34 @@ jobs:
   # Production. `needs: publish` rather than `needs: release`, so a run with no releasable
   # changes still deploys: every green commit on `main` is meant to be running, whether or not it
   # earned a version number.
+  # The image is what a rollback pins to, so it needs to be verifiable. The
+  # attestation records which workflow, commit and runner produced this digest;
+  # `cosign verify-attestation` checks it without any long-lived key.
+  #
+  # Note the standing caveat: Fly does NOT run this image -- `flyctl deploy`
+  # rebuilds from the same Dockerfile on Fly's builders. The attestation
+  # therefore covers the archived artifact, not the running process. Pointing Fly
+  # at GHCR would close that gap and needs registry credentials on the Fly side.
+  attest:
+    name: attest
+    needs: publish
+    if: >-
+      always()
+      && needs.publish.result == 'success'
+      && github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ needs.publish.outputs.digest }}
+          push-to-registry: true
+
   deploy-production:
     name: deploy · production
     needs: publish
