@@ -43,6 +43,7 @@ dependencies = [
     "networkx>=3.2.0",
     "python-louvain>=0.16",
     "thefuzz[speedup]>=0.22.0",
+    "slowapi>=0.1.10",
 ]
 
 [project.optional-dependencies]
@@ -62,6 +63,7 @@ dev = [
     "freezegun>=1.5.0",
     "dirty-equals>=0.8.0",
     "ruff>=0.8.0",
+    "mypy>=2.3.1",
 ]
 integration = [
     "testcontainers[postgres]>=4.8.0",
@@ -79,17 +81,33 @@ target-version = "py311"
 # ASYNC (flake8-async) is what keeps the async-I/O work from regressing: it flags
 # blocking HTTP/file/sleep calls inside `async def`, which is the defect class that
 # made every Supabase call stall the event loop.
-select = ["E", "F", "I", "N", "W", "UP", "B", "ASYNC"]
+# G and TRY400 are the two that keep production diagnosable: `G` forbids
+# f-string log messages, which an aggregator cannot group and which pay their
+# formatting cost even at a suppressed level; `TRY400` catches `logger.error`
+# inside an `except`, which silently drops the traceback -- it was doing so on 39
+# paths. `S` is flake8-bandit, which `per-file-ignores` below has referred to
+# since it was written without the rule set ever being selected.
+select = ["E", "F", "I", "N", "W", "UP", "B", "ASYNC", "S", "G", "TRY", "DTZ", "RET", "SIM", "C4"]
 ignore = [
     "E501",
-    # B904 (`raise ... from err`) fires 44 times, almost all inside the per-route
-    # `except` blocks that the shared domain-error layer deletes outright. Fixing
-    # them now would be churn against that work. Re-enable once it lands.
-    "B904",
+    # Ruff wants every exception message in a named constant. That is a style
+    # this codebase does not follow, and the messages here are deliberately
+    # written at the raise site so the reason is readable where it is thrown.
+    "TRY003",
+    # `try/except/else` where the happy path trails the try. Reads worse than the
+    # straight-line version in this codebase's handlers.
+    "TRY300",
+    # Re-raising inside a try is how the webhook handlers distinguish a duplicate
+    # from a real failure.
+    "TRY301",
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"]
+# assert is what a test is made of; a fixture's "secret" is inert; the fixed
+# timestamps in the reconciliation fixtures are deliberately naive so the
+# conversion under test is the thing being exercised; and the integration
+# harness shells out to scripts/migrate.py on purpose.
+"tests/**" = ["S101", "S105", "S106", "S107", "S311", "S603", "DTZ001"]
 
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI's whole dependency system is function calls in argument defaults;
@@ -104,6 +122,77 @@ extend-immutable-calls = [
     "fastapi.Query",
     "fastapi.Security",
 ]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src"]
+# Without it, mypy cannot see that pydantic-settings fills every field from the
+# environment, so it reports `Settings()` as missing the required LiveKit
+# arguments, and it does not understand `@computed_field` over `@property`.
+plugins = ["pydantic.mypy"]
+# Third-party SDKs here ship partial or no stubs (livekit, zep_cloud, supabase,
+# twilio). Their absence is not a finding about this codebase.
+ignore_missing_imports = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+# The defect class that matters right after the async migration: a forgotten
+# `await` leaves a Coroutine where a value is expected, and this is the check
+# that names it.
+disallow_untyped_defs = false
+check_untyped_defs = true
+warn_return_any = true
+# `@computed_field` over `@property` is the documented pydantic idiom and mypy
+# has no representation for a decorator above a property. Four sites in config.py.
+disable_error_code = ["prop-decorator"]
+
+# ---- The ratchet -----------------------------------------------------------
+#
+# These modules do not type-check yet. They are listed one by one, with their
+# error count at the time of writing, rather than hidden behind a repo-wide
+# `ignore_errors` that nobody ever revisits: a list that names its debts is a
+# list someone can pay down, and deleting an entry is a visible, reviewable act.
+#
+# The two rules: an entry may be deleted, never added. A new module type-checks
+# from the day it is written.
+[[tool.mypy.overrides]]
+module = [
+    "src.services.wallet_service",      # 155
+    "src.api.routes.memory",            #  86
+    "src.services.credits",             #  38
+    "src.main",                         #  18
+    "src.services.admin_reconciliation",#  16
+    "src.api.routes.models",            #   6
+    "src.api.routes.credits",           #   6
+    "src.services.stripe_service",      #   3
+    "src.api.routes.token",             #   3
+    "src.services.twilio_service",      #   2
+    "src.services.telephony",           #   2
+    "src.services.kwamis",              #   2
+    "src.services.channels",            #   2
+    "src.services.voices",              #   1
+    "src.services.sendgrid_service",    #   1
+    "src.services.calendar_service",    #   1
+]
+ignore_errors = true
+
+# Strict where the money and the auth decisions are. The list widens module by
+# module rather than repo-wide, because a repo-wide `ignore_errors` that never
+# shrinks is the same as having no type checker.
+[[tool.mypy.overrides]]
+module = [
+    "src.core.config",
+    "src.core.errors",
+    "src.core.logging",
+    "src.core.security",
+    "src.api.middleware",
+    "src.api.ratelimit",
+    "src.services.pricing",
+    "src.services.idempotency",
+]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+strict_equality = true
 
 [tool.pytest.ini_options]
 minversion = "8.0"
