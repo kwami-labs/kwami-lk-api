@@ -12,6 +12,7 @@ export const CONTAINER_ENV_KEYS = [
   "CORS_ORIGINS",
   "ENABLE_DOCS",
   "APP_PUBLIC_URL",
+  "WEB_CONCURRENCY",
   // LiveKit
   "LIVEKIT_URL",
   "LIVEKIT_API_KEY",
