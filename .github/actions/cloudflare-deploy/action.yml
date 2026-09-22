@@ -1,11 +1,13 @@
 name: Deploy to Cloudflare Workers
 description: >-
-  Build the FastAPI image and deploy the Worker + Container with Wrangler. Skips green when the
-  tier is entirely unconfigured; fails when it is only half-configured.
+  Build the FastAPI image and deploy the Worker + Container with Wrangler. Fails when
+  CLOUDFLARE_API_TOKEN or CLOUDFLARE_ACCOUNT_ID is missing, unless skip-if-unconfigured.
 
-# Same two rules as the Fly action:
+# Two rules:
 #   1. A tier with a token but no account id is an error, not a skip.
 #   2. Only a tier with neither token nor account id is skipped, and only when skip-if-unconfigured.
+# Production / staging / development all pass skip-if-unconfigured=false: Cloudflare is the
+# live origin, so a missing credential is a red deploy, not a quiet success.
 
 inputs:
   wrangler-env:
@@ -20,8 +22,8 @@ inputs:
   skip-if-unconfigured:
     description: >-
       Set to "true" so a missing token+account means "this tier does not exist yet" and the
-      job stays green. A token without an account is still a failure.
-    default: 'true'
+      job stays green. A token without an account is still a failure. Default is required.
+    default: 'false'
   working-directory:
     description: Directory that contains wrangler.jsonc.
     default: infra
@@ -30,6 +32,9 @@ outputs:
   deployed:
     description: '"true" when a deploy actually happened.'
     value: ${{ steps.resolve.outputs.deploy }}
+  worker-url:
+    description: workers.dev URL printed by wrangler, when a deploy happened.
+    value: ${{ steps.deploy.outputs.worker-url }}
 
 runs:
   using: composite
@@ -53,6 +58,8 @@ runs:
             exit 0
           fi
           echo "::error::CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are not set."
+          echo 'Create an API token on Admin@nexow.ai'\''s Account with Workers Scripts Write and Containers Write,'
+          echo 'save it as CLOUDFLARE_API_TOKEN, and set CLOUDFLARE_ACCOUNT_ID to 132a7551ad4a90e979a18f7c4cfd364e.'
           exit 1
         fi
 
@@ -63,6 +70,10 @@ runs:
 
         echo 'deploy=true' >> "$GITHUB_OUTPUT"
         echo "deploying Worker env: ${WRANGLER_ENV:-'(top-level)'}"
+
+    # wrangler builds the Container image from Dockerfile; the runner's Docker socket is enough.
+    - uses: docker/setup-buildx-action@v3
+      if: steps.resolve.outputs.deploy == 'true'
 
     - uses: pnpm/action-setup@v4
       if: steps.resolve.outputs.deploy == 'true'
@@ -83,6 +94,7 @@ runs:
       run: pnpm install --frozen-lockfile
 
     - name: wrangler deploy
+      id: deploy
       if: steps.resolve.outputs.deploy == 'true'
       shell: bash
       working-directory: ${{ inputs.working-directory }}
@@ -94,16 +106,23 @@ runs:
         set -euo pipefail
         args=(deploy)
         [ -n "${WRANGLER_ENV:-}" ] && args+=(--env "$WRANGLER_ENV")
-        pnpm exec wrangler "${args[@]}"
+        pnpm exec wrangler "${args[@]}" 2>&1 | tee "$RUNNER_TEMP/wrangler-deploy.log"
+        url="$(grep -Eo 'https://[a-zA-Z0-9.-]+\.workers\.dev' "$RUNNER_TEMP/wrangler-deploy.log" | tail -1 || true)"
+        echo "worker-url=${url}" >> "$GITHUB_OUTPUT"
 
     - name: Summary
       if: steps.resolve.outputs.deploy == 'true'
       shell: bash
       env:
         WRANGLER_ENV: ${{ inputs.wrangler-env }}
+        WORKER_URL: ${{ steps.deploy.outputs.worker-url }}
       run: |
         {
           echo '### Deployed'
           echo ''
           echo "Cloudflare Workers \`${WRANGLER_ENV:-top-level}\`, from \`${GITHUB_SHA}\`"
+          if [ -n "${WORKER_URL:-}" ]; then
+            echo ''
+            echo "URL: \`${WORKER_URL}\`"
+          fi
         } >> "$GITHUB_STEP_SUMMARY"
