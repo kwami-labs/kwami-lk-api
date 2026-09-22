@@ -158,7 +158,11 @@ disable_error_code = ["prop-decorator"]
 [[tool.mypy.overrides]]
 module = [
     "src.services.wallet_service",      # 155
-    "src.api.routes.memory",            #  86
+    "src.api.routes.memory.analysis",   # from the 86 the old memory.py carried
+    "src.api.routes.memory.core",
+    "src.api.routes.memory.graph",
+    "src.api.routes.memory.ontology",
+    "src.services.memory.graph",
     "src.services.credits",             #  38
     "src.main",                         #  18
     "src.services.admin_reconciliation",#  16

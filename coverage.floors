@@ -88,10 +88,19 @@ src/api/routes/health.py                     100
 src/api/routes/internal.py                   100
 src/api/routes/languages.py                  100
 
-# By far the largest module in the tree (1162 statements) and the lowest-covered surface of any
-# size. It is a thin-ish layer over Zep, so most of it is reachable with a faked transport; the
-# floor is where it is because nobody has written those tests yet, not because they are hard.
-src/api/routes/memory.py                     100
+# The memory surface, which used to be one 2,900-line module holding 29 routes, 14 request
+# models and the graph algorithms -- the only surface in the service with no service layer
+# beneath it. The routes are grouped by what they operate on; the algorithms moved to
+# src/services/memory/ and can now be exercised without going through a router.
+#
+# Registration order across these sub-routers is load-bearing, because FastAPI matches in
+# order and `GET /debug/{user_id}` and `GET /{user_id}/facts` both match `/debug/facts`.
+# tests/unit/api/memory/test_route_table.py pins it.
+src/api/routes/memory/schemas.py             100
+src/api/routes/memory/core.py                100
+src/api/routes/memory/graph.py               100
+src/api/routes/memory/ontology.py            100
+src/api/routes/memory/analysis.py            100
 src/api/routes/models.py                     100
 
 # LiveKit token issuance -- the endpoint the app cannot work without, and the one that decides
@@ -130,6 +139,14 @@ src/services/email_service.py                100
 # double charge or a double credit.
 src/services/idempotency.py                  100
 src/services/kwamis.py                       100
+
+# Lifted out of the memory route module. `graph.py` is the bulk of it: ~350 lines of node
+# typing and display-name extraction that could not be reached except through a router.
+# `tenancy.py` carries the anchored ownership checks that replaced substring matching.
+src/services/memory/client.py                100
+src/services/memory/tenancy.py               100
+src/services/memory/ontology.py              100
+src/services/memory/graph.py                 100
 src/services/languages.py                    100
 src/services/livekit.py                      100
 src/services/models.py                       100

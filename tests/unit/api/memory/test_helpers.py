@@ -9,21 +9,21 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
-from src.api.routes import memory as mem_mod
-from src.api.routes.memory import (
+from src.core.security import AuthUser
+from src.services.memory import (
     DEFAULT_EDGE_TYPES,
     DEFAULT_ENTITY_TYPES,
     _build_ontology_models,
     get_zep_client,
     verify_user_access,
 )
-from src.core.security import AuthUser
+from src.services.memory import client as zep_client_mod
 
 
 class TestGetZepClient:
     @pytest.mark.anyio
     async def test_an_unconfigured_key_is_a_503(self, monkeypatch):
-        monkeypatch.setattr(mem_mod.settings, "zep_api_key", None, raising=False)
+        monkeypatch.setattr(zep_client_mod.settings, "zep_api_key", None, raising=False)
         with pytest.raises(HTTPException) as exc:
             await get_zep_client()
         assert exc.value.status_code == 503
@@ -32,8 +32,10 @@ class TestGetZepClient:
     @pytest.mark.anyio
     async def test_a_configured_key_builds_a_client(self, monkeypatch):
         built: list[str] = []
-        monkeypatch.setattr(mem_mod.settings, "zep_api_key", "z-key", raising=False)
-        monkeypatch.setattr(mem_mod, "AsyncZep", lambda api_key: built.append(api_key) or "CLIENT")
+        monkeypatch.setattr(zep_client_mod.settings, "zep_api_key", "z-key", raising=False)
+        monkeypatch.setattr(
+            zep_client_mod, "AsyncZep", lambda api_key: built.append(api_key) or "CLIENT"
+        )
         assert await get_zep_client() == "CLIENT"
         assert built == ["z-key"]
 
@@ -102,39 +104,39 @@ class TestSharedZepClient:
 
     @pytest.fixture(autouse=True)
     def _reset(self):
-        mem_mod._zep_client = None
+        zep_client_mod._zep_client = None
         yield
-        mem_mod._zep_client = None
+        zep_client_mod._zep_client = None
 
     @pytest.mark.anyio
     async def test_an_unconfigured_key_is_a_503(self, monkeypatch):
-        monkeypatch.setattr(mem_mod.settings, "zep_api_key", None, raising=False)
+        monkeypatch.setattr(zep_client_mod.settings, "zep_api_key", None, raising=False)
         with pytest.raises(HTTPException) as excinfo:
-            await mem_mod.get_zep_client()
+            await zep_client_mod.get_zep_client()
         assert excinfo.value.status_code == 503
 
     @pytest.mark.anyio
     async def test_the_client_is_built_once_and_reused(self, monkeypatch):
-        monkeypatch.setattr(mem_mod.settings, "zep_api_key", "zep-key", raising=False)
+        monkeypatch.setattr(zep_client_mod.settings, "zep_api_key", "zep-key", raising=False)
         built: list[str] = []
 
         class _Zep:
             def __init__(self, api_key):
                 built.append(api_key)
 
-        monkeypatch.setattr(mem_mod, "AsyncZep", _Zep)
-        first = await mem_mod.get_zep_client()
-        second = await mem_mod.get_zep_client()
+        monkeypatch.setattr(zep_client_mod, "AsyncZep", _Zep)
+        first = await zep_client_mod.get_zep_client()
+        second = await zep_client_mod.get_zep_client()
         assert first is second
         assert built == ["zep-key"], "one client, not one per request"
 
     @pytest.mark.anyio
     async def test_closing_without_a_client_is_a_no_op(self):
-        await mem_mod.close_zep_client()  # must not raise
+        await zep_client_mod.close_zep_client()  # must not raise
 
     @pytest.mark.anyio
     async def test_closing_releases_the_connection_pool(self, monkeypatch):
-        monkeypatch.setattr(mem_mod.settings, "zep_api_key", "zep-key", raising=False)
+        monkeypatch.setattr(zep_client_mod.settings, "zep_api_key", "zep-key", raising=False)
         closed: list[bool] = []
 
         class _Httpx:
@@ -145,16 +147,16 @@ class TestSharedZepClient:
             def __init__(self, api_key):
                 self.httpx_client = _Httpx()
 
-        monkeypatch.setattr(mem_mod, "AsyncZep", _Zep)
-        await mem_mod.get_zep_client()
-        await mem_mod.close_zep_client()
+        monkeypatch.setattr(zep_client_mod, "AsyncZep", _Zep)
+        await zep_client_mod.get_zep_client()
+        await zep_client_mod.close_zep_client()
         assert closed == [True]
-        assert mem_mod._zep_client is None
+        assert zep_client_mod._zep_client is None
 
     @pytest.mark.anyio
     async def test_a_transport_on_the_wrapper_is_also_closed(self, monkeypatch):
         """zep-cloud has moved the transport between versions."""
-        monkeypatch.setattr(mem_mod.settings, "zep_api_key", "zep-key", raising=False)
+        monkeypatch.setattr(zep_client_mod.settings, "zep_api_key", "zep-key", raising=False)
         closed: list[bool] = []
 
         class _Httpx:
@@ -165,15 +167,15 @@ class TestSharedZepClient:
             def __init__(self, api_key):
                 self._client_wrapper = type("W", (), {"httpx_client": _Httpx()})()
 
-        monkeypatch.setattr(mem_mod, "AsyncZep", _Zep)
-        await mem_mod.get_zep_client()
-        await mem_mod.close_zep_client()
+        monkeypatch.setattr(zep_client_mod, "AsyncZep", _Zep)
+        await zep_client_mod.get_zep_client()
+        await zep_client_mod.close_zep_client()
         assert closed == [True]
 
     @pytest.mark.anyio
     async def test_a_client_with_no_reachable_transport_is_dropped_quietly(self, monkeypatch):
-        monkeypatch.setattr(mem_mod.settings, "zep_api_key", "zep-key", raising=False)
-        monkeypatch.setattr(mem_mod, "AsyncZep", lambda api_key: object())
-        await mem_mod.get_zep_client()
-        await mem_mod.close_zep_client()
-        assert mem_mod._zep_client is None
+        monkeypatch.setattr(zep_client_mod.settings, "zep_api_key", "zep-key", raising=False)
+        monkeypatch.setattr(zep_client_mod, "AsyncZep", lambda api_key: object())
+        await zep_client_mod.get_zep_client()
+        await zep_client_mod.close_zep_client()
+        assert zep_client_mod._zep_client is None
