@@ -136,7 +136,7 @@ class TestReorganizePreview:
         assert r.status_code == 422
 
     async def test_a_failure_is_a_500(self, monkeypatch, mem, zep, caplog):
-        from src.api.routes import memory as mem_mod
+        from src.api.routes.memory import analysis as mem_mod
 
         async def boom(client, user_id, limit=200):
             raise RuntimeError("fetch exploded")
@@ -412,7 +412,7 @@ class TestReorganizeGraph:
         assert r.status_code == 422
 
     async def test_a_failure_is_a_500(self, monkeypatch, mem, zep, caplog):
-        from src.api.routes import memory as mem_mod
+        from src.api.routes.memory import analysis as mem_mod
 
         async def boom(client, user_id, limit=200):
             raise RuntimeError("fetch exploded")
@@ -516,7 +516,7 @@ class TestRemainingErrorPaths:
     """Outer handlers and duplicate-pair dedup, in the analysis routes."""
 
     async def test_the_graph_route_outer_handler(self, monkeypatch, mem, zep, caplog):
-        from src.api.routes import memory as mem_mod
+        from src.api.routes.memory import graph as mem_mod
 
         def boom(*a, **k):
             raise RuntimeError("len exploded")
@@ -529,7 +529,7 @@ class TestRemainingErrorPaths:
 
     async def test_the_fact_rating_outer_handler(self, monkeypatch, mem, zep, caplog):
         """The inner `except` logs a warning; if that itself raises, the outer one runs."""
-        from src.api.routes import memory as mem_mod
+        from src.api.routes.memory import analysis as mem_mod
 
         real_warning = mem_mod.logger.warning
 
@@ -545,7 +545,7 @@ class TestRemainingErrorPaths:
         assert real_warning is not None
 
     async def test_the_merge_outer_handler(self, monkeypatch, mem, zep, caplog):
-        from src.api.routes import memory as mem_mod
+        from src.api.routes.memory import analysis as mem_mod
 
         def boom(*a, **k):
             raise RuntimeError("getattr exploded")
@@ -561,7 +561,7 @@ class TestRemainingErrorPaths:
 
     async def test_the_reorganize_apply_outer_handler(self, monkeypatch, mem, zep, caplog):
         """Everything inside is individually wrapped, so the final log is the way in."""
-        from src.api.routes import memory as mem_mod
+        from src.api.routes.memory import analysis as mem_mod
 
         real_info = mem_mod.logger.info
         calls = {"n": 0}
@@ -633,7 +633,7 @@ class TestFinalBranches:
 
     async def test_the_delete_memory_outer_handler(self, monkeypatch, mem, zep, caplog):
         """Every inner step is wrapped; the completion log is the only way in."""
-        from src.api.routes import memory as mem_mod
+        from src.api.routes.memory import analysis as mem_mod
 
         real_info = mem_mod.logger.info
         calls = {"n": 0}
@@ -745,7 +745,7 @@ class TestPartialBranches:
 
     async def test_a_community_member_missing_from_the_node_list(self, monkeypatch, mem, zep):
         """`if node_data` -- a uuid in the partition with no matching node row."""
-        from src.api.routes import memory as mem_mod
+        from src.api.routes.memory import analysis as mem_mod
 
         async def fetch(client, user_id, limit=200):
             return (

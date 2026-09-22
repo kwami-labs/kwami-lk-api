@@ -114,7 +114,7 @@ class TestCommunities:
         assert r.status_code == 422
 
     async def test_a_failure_is_a_500(self, monkeypatch, mem, zep, caplog):
-        from src.api.routes import memory as mem_mod
+        from src.api.routes.memory import analysis as mem_mod
 
         async def boom(client, user_id, limit=200):
             raise RuntimeError("fetch exploded")
@@ -210,7 +210,7 @@ class TestDuplicates:
         assert r.status_code == 422
 
     async def test_a_failure_is_a_500(self, monkeypatch, mem, zep, caplog):
-        from src.api.routes import memory as mem_mod
+        from src.api.routes.memory import analysis as mem_mod
 
         async def boom(client, user_id, limit=200):
             raise RuntimeError("fetch exploded")

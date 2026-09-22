@@ -1,0 +1,21 @@
+# Allowlists for the gitleaks scan in ci.yml.
+#
+# `useDefault` keeps the stock rule set. Everything below is a documented
+# exception, not a silenced detector.
+
+title = "kwami-lk-api"
+
+[extend]
+useDefault = true
+
+# The suite points Settings at this file via KWAMI_ENV_FILE so a test that
+# reaches an unmocked path cannot talk to production. The values are inert
+# placeholders; the file says so on line 3. `generic-api-key` still fires on
+# LIVEKIT_API_SECRET because TokenVerifier needs a long HS256 secret, which
+# looks like a key to a detector that only sees entropy.
+#
+# A path allowlist, not a rule ignore: the same detector must still catch a
+# real key pasted into a migration comment or a fixture.
+[[allowlists]]
+description = "Inert test-suite env; nothing in this file may be a real credential"
+paths = ['''(^|/)tests/\.env\.test$''']

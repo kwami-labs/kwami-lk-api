@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import pytest
 
-from src.api.routes.memory import _extract_user_display_name, _infer_node_type
 from src.core.security import AuthUser
+from src.services.memory import _extract_user_display_name, _infer_node_type
 
 
 class TestInferNodeTypeFromLabels:
