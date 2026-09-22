@@ -248,7 +248,7 @@ class TestOuterErrorHandlers:
     letting it reach the app's catch-all."""
 
     async def test_delete_user_memory(self, monkeypatch, mem, zep, caplog):
-        from src.api.routes import memory as mem_mod
+        from src.api.routes.memory import core as mem_mod
 
         def boom(*a, **k):
             raise RuntimeError("iterator exploded")
@@ -264,7 +264,7 @@ class TestOuterErrorHandlers:
 
     async def test_messages_outer_handler(self, monkeypatch, mem, zep, caplog):
         """The sort and the slice sit outside the inner try/except."""
-        from src.api.routes import memory as mem_mod
+        from src.api.routes.memory import core as mem_mod
 
         def boom(*a, **k):
             raise RuntimeError("len exploded")
@@ -284,7 +284,7 @@ class TestOuterErrorHandlers:
     )
     async def test_list_routes_outer_handler(self, monkeypatch, mem, zep, caplog, path, message):
         """`offset`/`limit` slicing is outside the inner try, so a bad slice lands here."""
-        from src.api.routes import memory as mem_mod
+        from src.api.routes.memory import graph as mem_mod
 
         def boom(*a, **k):
             raise RuntimeError("len exploded")
@@ -296,7 +296,7 @@ class TestOuterErrorHandlers:
         assert message in caplog.text
 
     async def test_search_outer_handler(self, monkeypatch, mem, zep, caplog):
-        from src.api.routes import memory as mem_mod
+        from src.api.routes.memory import graph as mem_mod
 
         def boom(*a, **k):
             raise RuntimeError("len exploded")
