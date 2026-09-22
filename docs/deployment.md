@@ -14,25 +14,25 @@ flowchart TD
 
   CI -->|red| STOP[nothing]
   CI -->|green on main| CD["cd.yml"]
-  FAST -->|green on dev| DEVDEP["deploy development when FLY_APP is set"]
+  CI -->|green on stg| STGDEP["wrangler deploy --env staging"]
+  FAST -->|green on dev| DEVDEP["wrangler deploy --env development"]
 
   CD --> REL["semantic-release: tag + CHANGELOG + GitHub Release"]
   REL --> PUB["docker build, push GHCR"]
-  PUB --> FLY["flyctl deploy --remote-only"]
-  PUB --> CF["wrangler deploy (Worker + Container)"]
+  PUB --> CF["wrangler deploy --env production"]
 ```
 
-Two production targets run side by side. Fly is the live origin; the
-Cloudflare Worker is deployed on every green `main` run and stays dark
-until a custom domain is attached to it. Both build the same
-`Dockerfile` from the same commit.
+Cloudflare is the live origin. The same `Dockerfile` is built twice on a
+`main` run: once into GHCR (the archive) and once as the Container
+behind the Worker. `stg` and `dev` skip the archive and deploy their
+channel Workers only.
 
 | Event | lint / unit / migrations | integration / coverage / build | vuln | cd |
 |-------|--------------------------|--------------------------------|------|----|
 | pull request | yes | yes | advisory | no |
-| push `dev` | yes | no | no | development deploy, if configured |
-| push `stg` | yes | yes | advisory | no |
-| push `main` | yes | yes | advisory | **release, publish, deploy production** |
+| push `dev` | yes | no | no | deploy `kwami-lk-api-dev` |
+| push `stg` | yes | yes | advisory | deploy `kwami-lk-api-stg` |
+| push `main` | yes | yes | advisory | **release, publish, deploy `kwami-lk-api`** |
 
 The fast lane on `dev` is a shorter feedback loop, not a lower bar. Every
 pull request still runs the full suite, so nothing reaches `main` without
@@ -100,11 +100,10 @@ active. See [CONTRIBUTING.md](../CONTRIBUTING.md#the-release-needs-release_token
 
 Registry: `ghcr.io/kwami-labs/kwami-lk-api`.
 
-GHCR is the archive, not what Fly runs. `flyctl deploy --remote-only`
-builds the same `Dockerfile` from the same commit on Fly's builders.
-Pointing Fly at GHCR would need registry credentials on the Fly side for
-a package that is private by default — the trade is a second build
-rather than a second credential.
+GHCR is the archive, not what Cloudflare runs. `wrangler deploy` builds
+the same `Dockerfile` from the same commit as a Container. The trade is
+a second build rather than giving Cloudflare credentials for a private
+GHCR package.
 
 The image is `python:3.11-slim`, installs `uv`, runs
 `uv sync --frozen --no-dev`, and starts with
@@ -120,37 +119,6 @@ needs no privilege, and writes nothing outside the virtualenv.
 `UV_FROZEN` and `UV_NO_SYNC` stop `uv run` from trying to re-resolve and
 rewrite the lockfile at start-up, which that user cannot do and should
 not — the image ships the environment it was built with.
-
-## Fly.io
-
-[`fly.toml`](../fly.toml) names the production app (`kwami-ai-api`) in
-`lhr`.
-
-| Setting | Value | Why |
-|---------|-------|-----|
-| `internal_port` | 8080 | matches `API_PORT` |
-| `force_https` | true | Twilio signs the HTTPS URL |
-| `auto_stop_machines` | stop | scale to zero |
-| `min_machines_running` | 0 | same |
-| HTTP check | `GET /health` every 30s | liveness |
-| VM | 1 shared CPU, 512 MB | current size |
-
-Secrets live in `fly secrets`, not the repo. `FLY_API_TOKEN` is the
-GitHub secret. `make deploy` is the manual escape hatch.
-
-There is one Fly app today. `deploy · development` skips — green — until
-`FLY_APP` is set as a variable on the `development` GitHub Environment.
-The app name, not the token, enables the tier: `FLY_API_TOKEN` is already
-a repository secret, and without a second app name `dev` would ship to
-production. [`.github/actions/fly-deploy`](../.github/actions/fly-deploy/action.yml)
-refuses that fallback.
-
-Add a `staging` job and `stg` to the `cd.yml` trigger when a staging app
-exists.
-
-Uvicorn runs with `proxy_headers=True` and `forwarded_allow_ips="*"`.
-Only the Fly proxy can reach the port. Without forwarded headers,
-`request.url.scheme` stays `http` and Twilio signature checks fail.
 
 ## Cloudflare
 
@@ -169,23 +137,26 @@ in `src/index.ts`, and Terraform for the DNS and custom-domain side.
 `KwamiApiContainer` is a Durable Object owning one container instance on
 port 8080, with `/health` as its ping endpoint and `sleepAfter = "10m"`.
 The Worker sets `X-Forwarded-Proto`, `X-Forwarded-Host` and
-`X-Forwarded-For` from `CF-Connecting-IP` before proxying — the same
-reason Fly needs `proxy_headers=True`: Twilio signs the HTTPS URL, so a
+`X-Forwarded-For` from `CF-Connecting-IP` before proxying. Uvicorn
+runs with `proxy_headers=True`: Twilio signs the HTTPS URL, so a
 request that arrives looking like `http` fails signature validation.
 
-The container image is `"image": "../Dockerfile"` — the same file Fly and
-GHCR build. One Dockerfile, three consumers.
+The container image is `"image": "../Dockerfile"` — the same file GHCR
+builds. One Dockerfile, two consumers.
 
 Deploys go through
-[`.github/actions/cloudflare-deploy`](../.github/actions/cloudflare-deploy/action.yml),
-which follows the same two rules as the Fly action: a tier with neither
-`CLOUDFLARE_API_TOKEN` nor `CLOUDFLARE_ACCOUNT_ID` skips green, and a
-tier with only one of them is a failure rather than a silent skip.
+[`.github/actions/cloudflare-deploy`](../.github/actions/cloudflare-deploy/action.yml).
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are required; a
+missing credential fails the job. The token belongs to
+Admin@nexow.ai's account (`132a7551ad4a90e979a18f7c4cfd364e`).
 
-| GitHub Environment | Wrangler env | Worker |
-|---|---|---|
-| `production` | `production` | `kwami-lk-api` |
-| `development` | `development` | `kwami-lk-api-dev` |
+| GitHub Environment | Wrangler env | Worker | URL |
+|---|---|---|---|
+| `production` | `production` | `kwami-lk-api` | `https://kwami-lk-api.nexow.workers.dev` |
+| `stg` | `staging` | `kwami-lk-api-stg` | `https://kwami-lk-api-stg.nexow.workers.dev` |
+| `development` | `development` | `kwami-lk-api-dev` | `https://kwami-lk-api-dev.nexow.workers.dev` |
+
+`kwami-app` bakes `VITE_API_URL` to the matching URL at build time.
 
 Run it by hand from `infra/` with `pnpm install && pnpm exec wrangler deploy --env <env>`.
 

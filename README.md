@@ -143,23 +143,20 @@ tests/
 
 ## Deployment
 
-Deploys are automatic. A green `ci` run on `main` triggers [`cd.yml`](.github/workflows/cd.yml),
-which cuts the version and the changelog with semantic-release, publishes the image to GHCR, and
-deploys to Fly.io and Cloudflare — in that order, all from the commit CI tested. Nothing is
-released or shipped from a commit whose tests did not pass, and no version is ever bumped in a
-pull request.
+Deploys are automatic. A green `ci` run triggers [`cd.yml`](.github/workflows/cd.yml): `main`
+cuts the version and the changelog with semantic-release, publishes the image to GHCR, and
+deploys the production Worker + Container; `stg` and `dev` deploy their channel Workers.
+Nothing is released or shipped from a commit whose tests did not pass, and no version is ever
+bumped in a pull request.
 
-- **Fly.io** — the live origin. `fly.toml` names the production app. Secrets live in
-  `fly secrets`, not the repo; `FLY_API_TOKEN` is the one GitHub needs. `make deploy` is the
-  manual escape hatch.
-- **Cloudflare** — the same image as a Container behind a Worker; [`infra/`](infra) holds
-  `wrangler.jsonc`, the Worker, and Terraform for DNS. Deployed on every green `main` run, dark
-  until a custom domain is attached. Needs `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`;
-  without both, the job skips green.
+- **Cloudflare** — the live origin, on Admin@nexow.ai's account. [`infra/`](infra) holds
+  `wrangler.jsonc` and the Worker that proxies into the FastAPI Container. Channel URLs:
+  `https://kwami-lk-api.nexow.workers.dev` (production), `-stg` and `-dev`. Needs
+  `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`; a missing credential fails the deploy.
 - **GHCR** — `ghcr.io/kwami-labs/kwami-lk-api`, tagged with the version, the minor, `main` and the
   full commit SHA.
-- **Docker** — `Dockerfile` builds the same image locally; set env via `--env-file`. Fly, GHCR and
-  the Cloudflare Container all build this one file.
+- **Docker** — `Dockerfile` builds the same image locally; set env via `--env-file`. GHCR and
+  the Cloudflare Container both build this one file.
 
 [docs/deployment.md](docs/deployment.md) is the pipeline in full. [CONTRIBUTING.md](CONTRIBUTING.md)
 has the branch model, the release rules and what each CI check means. [SECURITY.md](SECURITY.md) is

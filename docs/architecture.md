@@ -237,9 +237,9 @@ Python prices a usage item (`src/services/pricing.py`) and applies markup
 | `staging` | on | on (unless set) | on (unless set) |
 | `production` | off unless `ENABLE_DOCS=true` (UIs *and* `/openapi.json`) | off | off unless `WALLET_ENABLED=true` |
 
-Fly terminates TLS and forwards over the internal network. Uvicorn runs with
-`proxy_headers=True` so `request.url.scheme` stays `https` — Twilio signs the
-public HTTPS URL, and a scheme mismatch fails every inbound call.
+The Cloudflare Worker terminates TLS and proxies into the Container. Uvicorn
+runs with `proxy_headers=True` so `request.url.scheme` stays `https` — Twilio
+signs the public HTTPS URL, and a scheme mismatch fails every inbound call.
 
 
 ## Concurrency model
