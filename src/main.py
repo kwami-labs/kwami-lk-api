@@ -154,10 +154,10 @@ def run():
         # single-worker by definition, so this only applies to a real run.
         workers=None if settings.debug else settings.web_concurrency,
         log_level="debug" if settings.debug else "info",
-        # Fly terminates TLS and forwards over the internal network. Without
-        # these, request.url.scheme stays "http" (breaking Twilio signature
-        # validation, which signs the https URL) and request.client.host is the
-        # proxy rather than the caller. Only the Fly proxy can reach this port.
+        # The Cloudflare Worker terminates TLS and proxies here. Without these,
+        # request.url.scheme stays "http" (breaking Twilio signature validation,
+        # which signs the https URL) and request.client.host is the proxy
+        # rather than the caller. Only the Worker can reach this port.
         proxy_headers=True,
         forwarded_allow_ips="*",
     )
