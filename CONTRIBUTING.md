@@ -31,8 +31,8 @@ The type prefix matches the Conventional Commit types below. Branches are delete
 ### `dev`, `stg` and `main`
 
 **`main` is the branch that ships.** A green `ci` run on it cuts the version, publishes the image
-and deploys to Fly.io. `dev` has a deploy job waiting for it — see below — and `stg` is tested and
-reaches `cd` not at all.
+and deploys the production Cloudflare Worker + Container. `stg` and `dev` each deploy their own
+channel Worker (`kwami-lk-api-stg`, `kwami-lk-api-dev`).
 
 They are not tested the same way. A push to `stg` or a pull request runs everything; a push to
 `dev` runs the **fast lane** — `lint`, `unit` and `migrations` — and skips `integration`,
@@ -44,21 +44,13 @@ fast lane is a shorter feedback loop, not a lower bar.
 | | `lint` `unit` `migrations` | `integration` `coverage` `build` | `vuln` | `cd` |
 |---|---|---|---|---|
 | pull request | yes | yes | advisory | no |
-| push `dev` | yes | **no** | **no** | deploy development (when configured) |
-| push `stg` | yes | yes | advisory | no |
-| push `main` | yes | yes | advisory | **release, publish, deploy production** |
+| push `dev` | yes | **no** | **no** | deploy `kwami-lk-api-dev` |
+| push `stg` | yes | yes | advisory | deploy `kwami-lk-api-stg` |
+| push `main` | yes | yes | advisory | **release, publish, deploy `kwami-lk-api`** |
 
-`cd.yml` listens to `main` and `dev`. Release, publish and the production deploy are gated to
-`main`; the development deploy is gated to `dev` and is deliberately not `needs:` those, since a
-job that needs a skipped job is itself skipped.
-
-**There is one Fly app today.** `deploy · development` skips — green — until `FLY_APP` is set as a
-variable on the `development` GitHub Environment. It is the app name rather than the token that
-enables the tier, because `FLY_API_TOKEN` is already a repository secret: without a second app
-name there is nowhere for `dev` to go except production, and
-[`.github/actions/fly-deploy`](.github/actions/fly-deploy/action.yml) refuses that outright rather
-than falling back to `fly.toml`. Add a `staging` job beside it, and `stg` to the `cd.yml` trigger,
-when a staging app exists.
+`cd.yml` listens to `main`, `stg` and `dev`. Release and publish are gated to `main`. Each
+branch deploys its Wrangler environment on Admin@nexow.ai's account. The deploy fails if
+`CLOUDFLARE_API_TOKEN` or `CLOUDFLARE_ACCOUNT_ID` is missing.
 
 ## Commits and pull request titles
 
@@ -153,8 +145,8 @@ Every job in [`ci.yml`](.github/workflows/ci.yml) except `vuln` is a required st
 | `build` | The release image does not build |
 | `vuln` | **Advisory today.** pip-audit reports every advisory against the resolved dependency set with no reachability analysis — 78 of them across 15 packages as of writing, none introduced by a pull request. Requiring it now would mean every PR is red for something nobody in the PR can fix. Dependabot opens the bumps weekly; once the job is green, drop `continue-on-error` from `ci.yml` and add `vuln` to `main.json`. |
 
-[`cd.yml`](.github/workflows/cd.yml) runs after `ci` goes green on `main`: it cuts the release,
-publishes to GHCR, and deploys to Fly.
+[`cd.yml`](.github/workflows/cd.yml) runs after `ci` goes green: it cuts the release on `main`,
+publishes to GHCR, and deploys the matching Cloudflare Worker + Container.
 
 ## Releases
 
@@ -174,8 +166,7 @@ merge a PR into main
       cd.yml
         ├─ release   semantic-release → CHANGELOG.md + tag vX.Y.Z + GitHub Release
         ├─ publish   one image build, tagged with the version that was just cut
-        ├─ deploy    flyctl deploy --remote-only          (the live origin)
-        └─ deploy    wrangler deploy (Worker + Container) (dark until a domain is attached)
+        └─ deploy    wrangler deploy (Worker + Container)  (live origin)
 ```
 
 The service is **1.x**, so [`.releaserc.json`](.releaserc.json) maps plain semver:
@@ -218,10 +209,9 @@ running service reports through `/docs` and the startup log.
 | `main` | every green run on `main` |
 | `sha-<full sha>` | every green run on `main` |
 
-GHCR is the archive, not what Fly runs: `flyctl deploy --remote-only` builds the same Dockerfile
-from the same commit on Fly's own builders. Pointing Fly at the GHCR image instead would need
-registry credentials on the Fly side for a package that is private by default — the trade taken
-here is a second build rather than a second credential.
+GHCR is the archive, not what Cloudflare runs: `wrangler deploy` builds the same Dockerfile
+from the same commit as a Container. The trade is a second build rather than giving Cloudflare
+credentials for a private GHCR package.
 
 Two things follow from the release commit being pushed with `GITHUB_TOKEN`, which by design triggers
 no workflow. It is what stops `cd → tag → cd`. It also means the `chore(release):` commit is never

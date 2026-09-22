@@ -9,13 +9,18 @@
   // Do not add `routes` / `custom_domain` here — that would fight Terraform.
   "name": "kwami-lk-api",
   "main": "src/index.ts",
+  // Admin@nexow.ai's Account — the same one that hosts kwami-app.
+  "account_id": "132a7551ad4a90e979a18f7c4cfd364e",
   "compatibility_date": "2026-09-17",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "preview_urls": true,
   "observability": {
     "enabled": true,
-    "head_sampling_rate": 1
+    "head_sampling_rate": 1,
+    "traces": {
+      "enabled": true
+    }
   },
   "vars": {
     "APP_ENV": "development",
@@ -23,14 +28,17 @@
     "API_PORT": "8080",
     "DEBUG": "false",
     "ENABLE_DOCS": "false",
-    "CONTAINER_INSTANCES": "2"
+    "CONTAINER_INSTANCES": "2",
+    "WEB_CONCURRENCY": "2",
+    "APP_PUBLIC_URL": "https://kwami-lk-api.nexow.workers.dev",
+    "CORS_ORIGINS": "https://kwami.io,https://kwami-app.nexow.workers.dev"
   },
   "containers": [
     {
       "class_name": "KwamiApiContainer",
       // Build context is the repo root (parent of this config).
       "image": "../Dockerfile",
-      "instance_type": "basic",
+      "instance_type": "standard-1",
       "max_instances": 2
     }
   ],
@@ -65,13 +73,16 @@
         "API_PORT": "8080",
         "DEBUG": "false",
         "ENABLE_DOCS": "true",
-        "CONTAINER_INSTANCES": "1"
+        "CONTAINER_INSTANCES": "1",
+        "WEB_CONCURRENCY": "1",
+        "APP_PUBLIC_URL": "https://kwami-lk-api-dev.nexow.workers.dev",
+        "CORS_ORIGINS": "https://kwami-app-dev.nexow.workers.dev,http://localhost:5173"
       },
       "containers": [
         {
           "class_name": "KwamiApiContainer",
           "image": "../Dockerfile",
-          "instance_type": "basic",
+          "instance_type": "standard-1",
           "max_instances": 1
         }
       ]
@@ -92,13 +103,16 @@
         "API_PORT": "8080",
         "DEBUG": "false",
         "ENABLE_DOCS": "false",
-        "CONTAINER_INSTANCES": "2"
+        "CONTAINER_INSTANCES": "2",
+        "WEB_CONCURRENCY": "1",
+        "APP_PUBLIC_URL": "https://kwami-lk-api-stg.nexow.workers.dev",
+        "CORS_ORIGINS": "https://kwami-app-stg.nexow.workers.dev"
       },
       "containers": [
         {
           "class_name": "KwamiApiContainer",
           "image": "../Dockerfile",
-          "instance_type": "basic",
+          "instance_type": "standard-1",
           "max_instances": 2
         }
       ]
@@ -119,7 +133,10 @@
         "API_PORT": "8080",
         "DEBUG": "false",
         "ENABLE_DOCS": "false",
-        "CONTAINER_INSTANCES": "3"
+        "CONTAINER_INSTANCES": "3",
+        "WEB_CONCURRENCY": "2",
+        "APP_PUBLIC_URL": "https://kwami-lk-api.nexow.workers.dev",
+        "CORS_ORIGINS": "https://kwami.io,https://kwami-app.nexow.workers.dev"
       },
       "containers": [
         {

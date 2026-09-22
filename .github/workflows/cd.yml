@@ -17,12 +17,11 @@ on:
   workflow_run:
     workflows: [ci]
     types: [completed]
-    # Two branches, two different sets of jobs:
-    #   main — release, publish, deploy production. This is the branch that ships.
-    #   dev  — deploy development, once a Fly app and token exist for it. No release, no image.
-    # `stg` is tested by ci and reaches nothing here; add a job beside deploy-development and
-    # `stg` to the list below when a staging Fly app exists.
-    branches: [main, dev]
+    # Three branches, three different sets of jobs:
+    #   main — release, publish, deploy production Worker + Container.
+    #   stg  — deploy staging Worker + Container. No release, no image.
+    #   dev  — deploy development Worker + Container. No release, no image.
+    branches: [main, stg, dev]
 
 # Keyed on the branch that triggered ci, NOT github.ref: a workflow_run event always runs in the
 # context of the default branch, so every run — a `main` release and a `dev` deploy alike — would
@@ -178,10 +177,9 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # GHCR is the archive: an immutable, versioned image for every release, addressable by digest.
-  # It is not what Fly runs — `flyctl deploy --remote-only` builds on Fly's own builders from the
-  # same Dockerfile and the same commit. Pointing Fly at this image instead would need registry
-  # credentials on the Fly side for a package that is private by default; the trade taken here is
-  # a second build rather than a second credential.
+  # It is not what Cloudflare runs — `wrangler deploy` builds the Container from the same
+  # Dockerfile on the runner. The trade is a second build rather than giving Cloudflare
+  # credentials for a private GHCR package.
   publish:
     name: publish
     needs: release
@@ -270,17 +268,12 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # Production. `needs: publish` rather than `needs: release`, so a run with no releasable
-  # changes still deploys: every green commit on `main` is meant to be running, whether or not it
-  # earned a version number.
   # The image is what a rollback pins to, so it needs to be verifiable. The
   # attestation records which workflow, commit and runner produced this digest;
   # `cosign verify-attestation` checks it without any long-lived key.
   #
-  # Note the standing caveat: Fly does NOT run this image -- `flyctl deploy`
-  # rebuilds from the same Dockerfile on Fly's builders. The attestation
-  # therefore covers the archived artifact, not the running process. Pointing Fly
-  # at GHCR would close that gap and needs registry credentials on the Fly side.
+  # Cloudflare Containers build the same Dockerfile on wrangler's side; GHCR is
+  # the archive, not what the Worker runs.
   attest:
     name: attest
     needs: publish
@@ -301,38 +294,12 @@ jobs:
           subject-digest: ${{ needs.publish.outputs.digest }}
           push-to-registry: true
 
+  # Cloudflare is the live origin. `needs: publish` rather than `needs: release`, so a run
+  # with no releasable changes still deploys: every green commit on `main` is meant to be
+  # running, whether or not it earned a version number. Wrangler builds the Container from
+  # the same Dockerfile GHCR just archived.
   deploy-production:
     name: deploy · production
-    needs: publish
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    # Holds FLY_API_TOKEN, and optionally FLY_APP as a variable. Repository-level secrets are
-    # visible to an environment job too, so the token that deploys today keeps working unchanged.
-    environment: production
-    # Never two deploys racing onto one Fly app: the loser wins the rollout and it is whichever
-    # finished last, not whichever was newer.
-    concurrency:
-      group: deploy-production
-      cancel-in-progress: false
-    steps:
-      # The commit ci tested, not the branch tip — by now that is one changelog commit further on.
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-
-      # No `app`: production is the app named in fly.toml, which stays the only place it is
-      # written down. `vars.FLY_APP` on the production Environment overrides it if one is ever
-      # needed.
-      - uses: ./.github/actions/fly-deploy
-        with:
-          app: ${{ vars.FLY_APP }}
-          fly-api-token: ${{ secrets.FLY_API_TOKEN }}
-
-  # Cloudflare production. Skips — green — until CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID
-  # are set on the production Environment. Fly stays the live origin until the custom domain
-  # is attached in infra/terraform (enable_custom_domain).
-  deploy-production-cloudflare:
-    name: deploy · production · cloudflare
     needs: publish
     if: >-
       always()
@@ -343,7 +310,7 @@ jobs:
     timeout-minutes: 40
     environment: production
     concurrency:
-      group: deploy-production-cloudflare
+      group: deploy-production
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
@@ -354,45 +321,40 @@ jobs:
         with:
           wrangler-env: production
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          cloudflare-account-id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID }}
+          skip-if-unconfigured: 'false'
 
-  # Development. There is one Fly app today, so this job skips — green — until `FLY_APP` is set
-  # as a variable on the `development` Environment. It is FLY_APP rather than the token that
-  # enables the tier because the token is a repository secret already: without a second app name
-  # there is nowhere for `dev` to go except production, which the action refuses.
-  #
-  # Deliberately NOT `needs: [release, publish]`: both are gated to `main`, and a job that needs
-  # a skipped job is itself skipped.
-  deploy-development:
-    name: deploy · development
-    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'dev'
+  # Staging. Deliberately NOT `needs: [release, publish]`: those jobs are gated to `main`,
+  # and a job that needs a skipped job is itself skipped.
+  deploy-staging:
+    name: deploy · staging
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'stg'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    environment: development
+    timeout-minutes: 40
+    environment: stg
     concurrency:
-      group: deploy-development
+      group: deploy-staging
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
-      - uses: ./.github/actions/fly-deploy
+      - uses: ./.github/actions/cloudflare-deploy
         with:
-          app: ${{ vars.FLY_APP }}
-          fly-api-token: ${{ secrets.FLY_API_TOKEN }}
-          # Not production: an unset FLY_APP is a tier that does not exist yet, and an FLY_APP
-          # equal to fly.toml's is a misconfiguration the action refuses.
-          require-distinct-app: 'true'
+          wrangler-env: staging
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID }}
+          skip-if-unconfigured: 'false'
 
-  deploy-development-cloudflare:
-    name: deploy · development · cloudflare
+  deploy-development:
+    name: deploy · development
     if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'dev'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     environment: development
     concurrency:
-      group: deploy-development-cloudflare
+      group: deploy-development
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
@@ -403,4 +365,5 @@ jobs:
         with:
           wrangler-env: development
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          cloudflare-account-id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID }}
+          skip-if-unconfigured: 'false'

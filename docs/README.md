@@ -10,7 +10,7 @@ The [root README](../README.md) is the short path: install, run, ship.
 | [Security](./security.md) | Auth, webhooks, money invariants, secrets |
 | [Billing](./billing.md) | Credits, pricing, settlement, wallets |
 | [Data model](./data-model.md) | Postgres schema, RLS, migrations |
-| [Deployment](./deployment.md) | CI, CD, Fly.io, Cloudflare, GHCR |
+| [Deployment](./deployment.md) | CI, CD, Cloudflare Workers, GHCR |
 | [Development](./development.md) | Local setup, tests, coverage |
 
 Policy that lives at the repository root because GitHub looks for it there:

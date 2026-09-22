@@ -19,7 +19,7 @@ flowchart TB
   end
 
   subgraph Edge
-    Fly["Fly.io TLS terminator"]
+    CF["Cloudflare Worker TLS terminator"]
   end
 
   subgraph ThisProcess["kwami-lk-api"]
@@ -35,13 +35,13 @@ flowchart TB
     RLS["RLS policies"]
   end
 
-  Browser --> Fly
-  Phone --> Fly
-  Mail --> Fly
-  Card --> Fly
-  Fly --> JWT
-  Fly --> Sig
-  Fly --> Key
+  Browser --> CF
+  Phone --> CF
+  Mail --> CF
+  Card --> CF
+  CF --> JWT
+  CF --> Sig
+  CF --> Key
   JWT --> Own
   Own --> SB
   Sig --> RPC
@@ -123,7 +123,7 @@ Unauthenticated input. Safety is the signature plus an idempotency claim.
 `claim_event` is an `INSERT` that either wins or hits the unique index.
 A read-then-write check has a window in which two deliveries both proceed.
 
-Twilio signs the **public HTTPS URL**. Fly terminates TLS, so Uvicorn must
+Twilio signs the **public HTTPS URL**. The Worker terminates TLS, so Uvicorn must
 see `https` via `proxy_headers=True`. A scheme mismatch rejects every
 legitimate call and looks like an outage.
 
@@ -189,15 +189,15 @@ is unrecoverable.
 
 | Secret | Rotate in |
 |--------|-----------|
-| `LIVEKIT_API_SECRET` | LiveKit Cloud + Fly |
-| `SUPABASE_SECRET_KEY` | Supabase + Fly |
-| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | Stripe + Fly |
-| `TWILIO_AUTH_TOKEN` | Twilio + Fly |
-| `SENDGRID_API_KEY` / `SENDGRID_INBOUND_WEBHOOK_SECRET` | SendGrid + Fly |
-| `ZEP_API_KEY` | Zep + Fly |
-| `KWAMI_API_KEY` | agent deploy + Fly, together |
-| `ADMIN_API_KEY` | operators + Fly |
-| `WALLET_CUSTODY_SIGNING_SECRET` / `WALLET_WEBHOOK_SECRET` | custody + Fly |
+| `LIVEKIT_API_SECRET` | LiveKit Cloud + the Worker |
+| `SUPABASE_SECRET_KEY` | Supabase + the Worker |
+| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | Stripe + the Worker |
+| `TWILIO_AUTH_TOKEN` | Twilio + the Worker |
+| `SENDGRID_API_KEY` / `SENDGRID_INBOUND_WEBHOOK_SECRET` | SendGrid + the Worker |
+| `ZEP_API_KEY` | Zep + the Worker |
+| `KWAMI_API_KEY` | agent deploy + the Worker, together |
+| `ADMIN_API_KEY` | operators + the Worker |
+| `WALLET_CUSTODY_SIGNING_SECRET` / `WALLET_WEBHOOK_SECRET` | custody + the Worker |
 | `FLY_API_TOKEN` | GitHub Actions secrets |
 
 `GITHUB_TOKEN` is the only credential `cd.yml` uses for the release and
