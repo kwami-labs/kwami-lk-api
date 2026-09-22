@@ -22,7 +22,7 @@ async def kwami_from_path(
     user: Annotated[AuthUser, Depends(require_auth)],
 ) -> dict[str, Any]:
     """For routes shaped `/.../kwamis/{kwami_id}`."""
-    return resolve_owned_kwami(user.id, kwami_id)
+    return await resolve_owned_kwami(user.id, kwami_id)
 
 
 async def kwami_from_query(
@@ -30,12 +30,12 @@ async def kwami_from_query(
     kwami_id: Annotated[str, Query(alias="kwamiId")],
 ) -> dict[str, Any]:
     """For routes taking `?kwamiId=` (contacts, email, calendar)."""
-    return resolve_owned_kwami(user.id, kwami_id)
+    return await resolve_owned_kwami(user.id, kwami_id)
 
 
-def require_kwami_owned(user_id: str, kwami_id: str) -> dict[str, Any]:
+async def require_kwami_owned(user_id: str, kwami_id: str) -> dict[str, Any]:
     """For `kwami_id` carried in a request body, where a dependency cannot read it."""
-    return resolve_owned_kwami(user_id, kwami_id)
+    return await resolve_owned_kwami(user_id, kwami_id)
 
 
 OwnedKwamiPath = Annotated[dict[str, Any], Depends(kwami_from_path)]

@@ -52,13 +52,14 @@ make docker-build
 make docker-up
 ```
 
-API listens on `API_HOST:API_PORT` (default `0.0.0.0:8080`). OpenAPI docs at `/docs` and `/redoc` when `ENABLE_DOCS=true`.
+API listens on `API_HOST:API_PORT` (default `0.0.0.0:8080`). OpenAPI docs at `/docs` and `/redoc`, and the schema at `/openapi.json`, when `ENABLE_DOCS=true`.
 
 ## API overview
 
 | Prefix | Description |
 |--------|-------------|
-| `/` `/health` | Liveness |
+| `/` `/health` | Liveness (static; never touches a dependency) |
+| `/health/ready` | Readiness — checks Supabase and Zep, 503 when one is down |
 | `/token` | LiveKit token generation and room claim |
 | `/memory` | Zep memory (sessions, graph, search) |
 | `/models` `/voices` `/languages` | Catalogs |
@@ -89,7 +90,12 @@ The **token** endpoint expects a POST body with optional `roomName`, `participan
 | `CORS_ORIGINS` | No | Comma-separated origins (default `*` in dev) |
 | `API_HOST` / `API_PORT` | No | Bind address and port (default `0.0.0.0:8080`) |
 | `APP_ENV` | No | `development` \| `staging` \| `production` |
-| `ENABLE_DOCS` | No | Set to `true` to expose `/docs` and `/redoc` in production |
+| `ENABLE_DOCS` | No | Set to `true` to expose `/docs`, `/redoc` and `/openapi.json` in production |
+| `RATE_LIMIT_ENABLED` | No | Per-caller rate limits (default on) |
+| `RATE_LIMIT_STORAGE_URI` | No | `memory://` (per worker) or a `redis://` URL for exact limits across machines |
+| `MAX_REQUEST_BODY_BYTES` | No | Largest accepted body (default 10 MiB) |
+| `WEB_CONCURRENCY` | No | uvicorn worker processes (default 2) |
+| `LOG_JSON` | No | JSON log records (default true); set false for readable local output |
 
 See `.env.sample` for a full list and comments.
 
@@ -99,7 +105,7 @@ See `.env.sample` for a full list and comments.
 
 | Command | Description |
 |---------|-------------|
-| `make check` | The full gate: lint, format, both test lanes, coverage floors, migrations |
+| `make check` | The full gate: lint, typecheck, format, both test lanes, coverage floors, migrations |
 | `make install` | Sync the venv, dev extra included |
 | `make dev` | Run the API on :8080 |
 | `make test` | Unit and API tests — no database, no network |
@@ -107,11 +113,15 @@ See `.env.sample` for a full list and comments.
 | `make test-integration` | Migrations and money invariants against that Postgres |
 | `make coverage` | Run both lanes and merge their profiles |
 | `make coverage-gate` | Enforce the per-module floors in `coverage.floors` |
+| `make typecheck` | mypy over `src/` — strict on the money and auth modules |
 | `make lint` / `make format` | Ruff check / format and fix |
 | `make vuln` | pip-audit over the locked dependency set (network) |
 | `make hooks` | Install the pre-push hook that refuses a direct push to `main` |
 | `make docker-build` | Build the release image CD publishes |
 | `make docker-up` / `make docker-down` | Run or stop that container |
+| `make cf-dev` | `wrangler dev` — the Worker and Container locally |
+| `make cf-deploy-production` | `wrangler deploy --env production` (CD normally does this) |
+| `make deploy` | `fly deploy --remote-only` (CD normally does this) |
 
 ## Project structure
 
@@ -126,22 +136,27 @@ src/
 └── services/            # LiveKit, credits, channels, wallets, …
 config/                  # LiveKit plugin YAML (inference, voices, languages)
 migrations/              # numbered SQL, applied by scripts/migrate.py
+infra/                   # Cloudflare Worker + Container, Terraform for DNS
 docs/                    # architecture, API, security, billing, …
 tests/
 ```
 
 ## Deployment
 
-Deploys are automatic. A green `ci` run on `main` triggers [`cd.yml`](.github/workflows/cd.yml),
-which cuts the version and the changelog with semantic-release, publishes the image to GHCR, and
-deploys to Fly.io — in that order, all from the commit CI tested. Nothing is released or shipped
-from a commit whose tests did not pass, and no version is ever bumped in a pull request.
+Deploys are automatic. A green `ci` run triggers [`cd.yml`](.github/workflows/cd.yml): `main`
+cuts the version and the changelog with semantic-release, publishes the image to GHCR, and
+deploys the production Worker + Container; `stg` and `dev` deploy their channel Workers.
+Nothing is released or shipped from a commit whose tests did not pass, and no version is ever
+bumped in a pull request.
 
-- **Fly.io** — `fly.toml` names the production app. Secrets live in `fly secrets`, not the repo;
-  `FLY_API_TOKEN` is the one GitHub needs. `make deploy` is the manual escape hatch.
+- **Cloudflare** — the live origin, on Admin@nexow.ai's account. [`infra/`](infra) holds
+  `wrangler.jsonc` and the Worker that proxies into the FastAPI Container. Channel URLs:
+  `https://kwami-lk-api.nexow.workers.dev` (production), `-stg` and `-dev`. Needs
+  `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`; a missing credential fails the deploy.
 - **GHCR** — `ghcr.io/kwami-labs/kwami-lk-api`, tagged with the version, the minor, `main` and the
   full commit SHA.
-- **Docker** — `Dockerfile` builds the same image locally; set env via `--env-file`.
+- **Docker** — `Dockerfile` builds the same image locally; set env via `--env-file`. GHCR and
+  the Cloudflare Container both build this one file.
 
 [docs/deployment.md](docs/deployment.md) is the pipeline in full. [CONTRIBUTING.md](CONTRIBUTING.md)
 has the branch model, the release rules and what each CI check means. [SECURITY.md](SECURITY.md) is

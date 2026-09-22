@@ -28,10 +28,10 @@ def build_room_name(kwami_id: str | None) -> str:
     return f"{prefix}-{uuid4().hex[:12]}"
 
 
-def get_session(room_name: str) -> dict[str, Any] | None:
+async def get_session(room_name: str) -> dict[str, Any] | None:
     sb = get_supabase_admin()
     result = (
-        sb.table("livekit_sessions")
+        await sb.table("livekit_sessions")
         .select("id, room_name, user_id, kwami_id, source, status")
         .eq("room_name", room_name)
         .limit(1)
@@ -41,7 +41,7 @@ def get_session(room_name: str) -> dict[str, Any] | None:
     return rows[0] if rows else None
 
 
-def claim_room(
+async def claim_room(
     room_name: str,
     *,
     user_id: str,
@@ -54,7 +54,7 @@ def claim_room(
     that closes the cross-tenant join: an attacker who learns a room name cannot
     obtain a token for it, because the row already names a different owner.
     """
-    existing = get_session(room_name)
+    existing = await get_session(room_name)
     if existing is not None:
         if str(existing.get("user_id")) != str(user_id):
             logger.warning(
@@ -74,12 +74,12 @@ def claim_room(
         "status": "issued",
     }
     try:
-        result = sb.table("livekit_sessions").insert(payload).execute()
+        result = await sb.table("livekit_sessions").insert(payload).execute()
     except Exception as exc:
         # UNIQUE(room_name) is the real arbiter: on a race, whoever lost re-reads
         # and is accepted only if they are the owner.
         if "23505" in str(exc) or "duplicate key" in str(exc).lower():
-            existing = get_session(room_name)
+            existing = await get_session(room_name)
             if existing and str(existing.get("user_id")) == str(user_id):
                 return existing
             raise ForbiddenError("This room belongs to another user") from exc

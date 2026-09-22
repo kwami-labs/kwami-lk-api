@@ -111,10 +111,9 @@ async def test_run_admin_reconciliation_builds_provider_delta(monkeypatch):
         admin_reconciliation, "replace_reconciliation_findings", fake_replace_findings
     )
     monkeypatch.setattr(admin_reconciliation, "finalize_reconciliation_run", fake_finalize_run)
-    monkeypatch.setattr(
-        admin_reconciliation,
-        "_fetch_rows",
-        lambda table_name, **kwargs: (
+
+    async def fake_fetch_rows(table_name, **kwargs):
+        return (
             [
                 {
                     "provider": "openai",
@@ -141,8 +140,9 @@ async def test_run_admin_reconciliation_builds_provider_delta(monkeypatch):
                     "created_at": "2026-03-01T00:00:00+00:00",
                 }
             ]
-        ),
-    )
+        )
+
+    monkeypatch.setattr(admin_reconciliation, "_fetch_rows", fake_fetch_rows)
 
     result = await admin_reconciliation.run_admin_reconciliation(
         provider_filters=["openai"],

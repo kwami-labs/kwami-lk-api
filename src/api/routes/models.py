@@ -8,7 +8,7 @@ Provides endpoints for:
 """
 
 import logging
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal, Union, get_args, get_origin
 
@@ -39,37 +39,31 @@ def _load_yaml_config(filename: str) -> dict:
     try:
         with open(yaml_path) as f:
             return yaml.safe_load(f) or {}
-    except Exception as e:
-        logger.error(f"Failed to load {filename} from {yaml_path}: {e}")
+    except Exception:
+        logger.exception("Failed to load %s from %s", filename, yaml_path)
         return {}
 
 
-# Cached YAML data (full dict with models + last_updated)
-_INFERENCE_LLM_DATA: dict | None = None
-_INFERENCE_STT_DATA: dict | None = None
-_INFERENCE_TTS_DATA: dict | None = None
+# Cached YAML data (full dict with models + last_updated), one entry per model type.
+#
+# This was three module globals behind an if/elif chain that mirrored the two
+# dict lookups above it. The chain had no `else`, so it carried a branch that
+# could never be taken -- an unknown `model_type` raises KeyError on the lookup
+# before it is ever reached. One dict keyed the same way as the filenames says
+# the same thing with nothing dead in it.
+_INFERENCE_FILES = {
+    "llm": "livekit_inference_llm.yaml",
+    "stt": "livekit_inference_stt.yaml",
+    "tts": "livekit_inference_tts.yaml",
+}
+_INFERENCE_DATA: dict[str, dict | None] = {"llm": None, "stt": None, "tts": None}
 
 
 def _get_inference_data(model_type: str) -> dict:
     """Get cached inference YAML data for a model type."""
-    global _INFERENCE_LLM_DATA, _INFERENCE_STT_DATA, _INFERENCE_TTS_DATA
-
-    filenames = {
-        "llm": "livekit_inference_llm.yaml",
-        "stt": "livekit_inference_stt.yaml",
-        "tts": "livekit_inference_tts.yaml",
-    }
-    cache_ref = {"llm": _INFERENCE_LLM_DATA, "stt": _INFERENCE_STT_DATA, "tts": _INFERENCE_TTS_DATA}
-    if cache_ref[model_type] is None:
-        data = _load_yaml_config(filenames[model_type])
-        if model_type == "llm":
-            _INFERENCE_LLM_DATA = data
-        elif model_type == "stt":
-            _INFERENCE_STT_DATA = data
-        elif model_type == "tts":
-            _INFERENCE_TTS_DATA = data
-        return data
-    return cache_ref[model_type]
+    if _INFERENCE_DATA[model_type] is None:
+        _INFERENCE_DATA[model_type] = _load_yaml_config(_INFERENCE_FILES[model_type])
+    return _INFERENCE_DATA[model_type]
 
 
 def get_inference_llm_models() -> list[dict]:
@@ -129,7 +123,7 @@ def _safe_import_and_extract(module_path: str, type_name: str) -> list[str]:
         if type_hint:
             return _extract_literal_values(type_hint)
     except (ImportError, AttributeError) as e:
-        logger.debug(f"Could not import {module_path}.{type_name}: {e}")
+        logger.debug("Could not import %s.%s: %s", module_path, type_name, e)
     return []
 
 
@@ -259,7 +253,7 @@ def _get_realtime_models() -> dict[str, Any]:
 # =============================================================================
 
 
-class ModelTypeEnum(str, Enum):
+class ModelTypeEnum(StrEnum):
     llm = "llm"
     stt = "stt"
     tts = "tts"

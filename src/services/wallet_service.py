@@ -24,10 +24,10 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _resolve_owned_kwami(user_id: str, kwami_id: str) -> dict[str, Any]:
+async def _resolve_owned_kwami(user_id: str, kwami_id: str) -> dict[str, Any]:
     sb = get_supabase_admin()
     result = (
-        sb.table("user_kwamis")
+        await sb.table("user_kwamis")
         .select("id,user_id,name")
         .eq("id", kwami_id)
         .eq("user_id", user_id)
@@ -40,10 +40,10 @@ def _resolve_owned_kwami(user_id: str, kwami_id: str) -> dict[str, Any]:
     return rows[0]
 
 
-def _fetch_wallet(user_id: str, kwami_id: str) -> dict[str, Any] | None:
+async def _fetch_wallet(user_id: str, kwami_id: str) -> dict[str, Any] | None:
     sb = get_supabase_admin()
     result = (
-        sb.table("kwami_wallets")
+        await sb.table("kwami_wallets")
         .select("*")
         .eq("user_id", user_id)
         .eq("kwami_id", kwami_id)
@@ -54,10 +54,10 @@ def _fetch_wallet(user_id: str, kwami_id: str) -> dict[str, Any] | None:
     return rows[0] if rows else None
 
 
-def _fetch_allowlist(user_id: str) -> list[dict[str, Any]]:
+async def _fetch_allowlist(user_id: str) -> list[dict[str, Any]]:
     sb = get_supabase_admin()
     result = (
-        sb.table("wallet_token_allowlist")
+        await sb.table("wallet_token_allowlist")
         .select("*")
         .order("is_default", desc=True)
         .order("symbol")
@@ -71,8 +71,8 @@ def _fetch_allowlist(user_id: str) -> list[dict[str, Any]]:
     ]
 
 
-def _is_allowed_mint(user_id: str, mint_address: str) -> bool:
-    allowlist = _fetch_allowlist(user_id)
+async def _is_allowed_mint(user_id: str, mint_address: str) -> bool:
+    allowlist = await _fetch_allowlist(user_id)
     wanted = mint_address.strip()
     return any(row.get("mint_address") == wanted for row in allowlist)
 
@@ -104,7 +104,7 @@ def _compute_credit_amount(
     return max(credits * MICRO_CREDITS_PER_CREDIT, 1)
 
 
-def _already_credited(user_id: str, intent_id: str) -> bool:
+async def _already_credited(user_id: str, intent_id: str) -> bool:
     """Has this intent already produced a ledger entry?
 
     Keyed on the ledger, not on `wallet_funding_intents.status`. The status was
@@ -114,7 +114,7 @@ def _already_credited(user_id: str, intent_id: str) -> bool:
     """
     sb = get_supabase_admin()
     result = (
-        sb.table("credit_transactions")
+        await sb.table("credit_transactions")
         .select("id")
         .eq("user_id", user_id)
         .eq("metadata->>intent_id", intent_id)
@@ -125,8 +125,8 @@ def _already_credited(user_id: str, intent_id: str) -> bool:
 
 
 async def create_kwami_wallet(user_id: str, kwami_id: str) -> dict[str, Any]:
-    _resolve_owned_kwami(user_id, kwami_id)
-    existing = _fetch_wallet(user_id, kwami_id)
+    await _resolve_owned_kwami(user_id, kwami_id)
+    existing = await _fetch_wallet(user_id, kwami_id)
     if existing:
         return existing
 
@@ -148,33 +148,37 @@ async def create_kwami_wallet(user_id: str, kwami_id: str) -> dict[str, Any]:
         "created_at": now_iso,
         "updated_at": now_iso,
     }
-    sb.table("kwami_wallets").insert(wallet_payload).execute()
-    sb.table("kwami_wallet_key_refs").insert(
-        {
-            "wallet_id": wallet_id,
-            "user_id": user_id,
-            "kwami_id": kwami_id,
-            "custody_provider": material.provider,
-            "key_ref": material.key_ref,
-            "key_version": 1,
-            "encryption_context": {"kwami_id": kwami_id, "user_id": user_id},
-            "metadata": {"provisioned_at": now_iso},
-        }
-    ).execute()
+    await sb.table("kwami_wallets").insert(wallet_payload).execute()
+    await (
+        sb.table("kwami_wallet_key_refs")
+        .insert(
+            {
+                "wallet_id": wallet_id,
+                "user_id": user_id,
+                "kwami_id": kwami_id,
+                "custody_provider": material.provider,
+                "key_ref": material.key_ref,
+                "key_version": 1,
+                "encryption_context": {"kwami_id": kwami_id, "user_id": user_id},
+                "metadata": {"provisioned_at": now_iso},
+            }
+        )
+        .execute()
+    )
 
     return wallet_payload
 
 
 async def get_kwami_wallet_overview(user_id: str, kwami_id: str) -> dict[str, Any]:
-    _resolve_owned_kwami(user_id, kwami_id)
-    wallet = _fetch_wallet(user_id, kwami_id)
-    allowlist = _fetch_allowlist(user_id)
+    await _resolve_owned_kwami(user_id, kwami_id)
+    wallet = await _fetch_wallet(user_id, kwami_id)
+    allowlist = await _fetch_allowlist(user_id)
     if not wallet:
         return {"wallet": None, "balances": [], "allowlist": allowlist, "transactions": []}
 
     sb = get_supabase_admin()
     balances = (
-        sb.table("wallet_balances_cache")
+        await sb.table("wallet_balances_cache")
         .select("*")
         .eq("user_id", user_id)
         .eq("kwami_id", kwami_id)
@@ -182,7 +186,7 @@ async def get_kwami_wallet_overview(user_id: str, kwami_id: str) -> dict[str, An
         .execute()
     ).data or []
     txs = (
-        sb.table("wallet_transactions")
+        await sb.table("wallet_transactions")
         .select("*")
         .eq("user_id", user_id)
         .eq("kwami_id", kwami_id)
@@ -191,7 +195,7 @@ async def get_kwami_wallet_overview(user_id: str, kwami_id: str) -> dict[str, An
         .execute()
     ).data or []
     intents = (
-        sb.table("wallet_funding_intents")
+        await sb.table("wallet_funding_intents")
         .select("*")
         .eq("user_id", user_id)
         .eq("kwami_id", kwami_id)
@@ -235,7 +239,7 @@ async def add_custom_allowlist_token(
         "created_by_user_id": user_id,
         "created_at": _now_iso(),
     }
-    result = sb.table("wallet_token_allowlist").insert(payload).execute()
+    result = await sb.table("wallet_token_allowlist").insert(payload).execute()
     rows = result.data or []
     return rows[0] if rows else payload
 
@@ -256,10 +260,10 @@ async def create_funding_intent(
         raise ValueError("Unsupported funding provider")
     if amount <= 0:
         raise ValueError("Funding amount must be greater than zero")
-    if not _is_allowed_mint(user_id, asset_mint):
+    if not await _is_allowed_mint(user_id, asset_mint):
         raise ValueError("Token mint is not allowlisted")
 
-    wallet = _fetch_wallet(user_id, kwami_id)
+    wallet = await _fetch_wallet(user_id, kwami_id)
     if not wallet:
         raise ValueError("Create a wallet before funding")
 
@@ -270,7 +274,7 @@ async def create_funding_intent(
         idem_key = hashlib.sha256(idem_input.encode("utf-8")).hexdigest()
 
     existing = (
-        sb.table("wallet_funding_intents")
+        await sb.table("wallet_funding_intents")
         .select("*")
         .eq("idempotency_key", idem_key)
         .limit(1)
@@ -307,19 +311,23 @@ async def create_funding_intent(
         "created_at": _now_iso(),
         "updated_at": _now_iso(),
     }
-    sb.table("wallet_funding_intents").insert(payload).execute()
-    sb.table("wallet_funding_events").insert(
-        {
-            "user_id": user_id,
-            "kwami_id": kwami_id,
-            "wallet_id": wallet["id"],
-            "intent_id": intent_id,
-            "event_type": "intent_created",
-            "provider": provider,
-            "payload": {"sender_wallet_pubkey": sender_wallet_pubkey},
-            "created_at": _now_iso(),
-        }
-    ).execute()
+    await sb.table("wallet_funding_intents").insert(payload).execute()
+    await (
+        sb.table("wallet_funding_events")
+        .insert(
+            {
+                "user_id": user_id,
+                "kwami_id": kwami_id,
+                "wallet_id": wallet["id"],
+                "intent_id": intent_id,
+                "event_type": "intent_created",
+                "provider": provider,
+                "payload": {"sender_wallet_pubkey": sender_wallet_pubkey},
+                "created_at": _now_iso(),
+            }
+        )
+        .execute()
+    )
     return payload
 
 
@@ -346,7 +354,9 @@ async def settle_funding_intent(
     if not intent_id:
         raise ValueError("intent_id is required")
     sb = get_supabase_admin()
-    result = sb.table("wallet_funding_intents").select("*").eq("id", intent_id).limit(1).execute()
+    result = (
+        await sb.table("wallet_funding_intents").select("*").eq("id", intent_id).limit(1).execute()
+    )
     rows = result.data or []
     if not rows:
         raise ValueError("Funding intent not found")
@@ -355,13 +365,13 @@ async def settle_funding_intent(
     # written before crediting, so that check made a confirmed-but-uncredited
     # intent permanently unrecoverable -- which is the state every wallet funding
     # ended up in. Ownership of the answer belongs to the ledger.
-    if _already_credited(intent["user_id"], intent_id):
+    if await _already_credited(intent["user_id"], intent_id):
         return {"status": "already_confirmed", "intent_id": intent_id}
 
     event_id = str(payload.get("event_id") or "")
     if event_id:
         dup = (
-            sb.table("wallet_funding_events")
+            await sb.table("wallet_funding_events")
             .select("id")
             .eq("provider", provider)
             .eq("provider_event_id", event_id)
@@ -378,53 +388,65 @@ async def settle_funding_intent(
     amount_usd_dec = Decimal(str(amount_usd)) if amount_usd is not None else None
     tx_sig = str(payload.get("transaction_signature") or f"{provider}-{uuid.uuid4().hex}")
 
-    sb.table("wallet_funding_events").insert(
-        {
-            "user_id": intent["user_id"],
-            "kwami_id": intent["kwami_id"],
-            "wallet_id": intent["wallet_id"],
-            "intent_id": intent["id"],
-            "event_type": "confirmed",
-            "provider": provider,
-            "provider_event_id": event_id or None,
-            "transaction_signature": tx_sig,
-            "amount_received": str(amount_received),
-            "confirmed_at": _now_iso(),
-            "payload": payload,
-            "created_at": _now_iso(),
-        }
-    ).execute()
+    await (
+        sb.table("wallet_funding_events")
+        .insert(
+            {
+                "user_id": intent["user_id"],
+                "kwami_id": intent["kwami_id"],
+                "wallet_id": intent["wallet_id"],
+                "intent_id": intent["id"],
+                "event_type": "confirmed",
+                "provider": provider,
+                "provider_event_id": event_id or None,
+                "transaction_signature": tx_sig,
+                "amount_received": str(amount_received),
+                "confirmed_at": _now_iso(),
+                "payload": payload,
+                "created_at": _now_iso(),
+            }
+        )
+        .execute()
+    )
 
-    sb.table("wallet_balances_cache").upsert(
-        {
-            "user_id": intent["user_id"],
-            "kwami_id": intent["kwami_id"],
-            "wallet_id": intent["wallet_id"],
-            "mint_address": intent["asset_mint"],
-            "symbol": intent["asset_symbol"],
-            "amount": str(amount_received),
-            "amount_usd": str(amount_usd_dec) if amount_usd_dec is not None else None,
-            "updated_at": _now_iso(),
-        },
-        on_conflict="wallet_id,mint_address",
-    ).execute()
+    await (
+        sb.table("wallet_balances_cache")
+        .upsert(
+            {
+                "user_id": intent["user_id"],
+                "kwami_id": intent["kwami_id"],
+                "wallet_id": intent["wallet_id"],
+                "mint_address": intent["asset_mint"],
+                "symbol": intent["asset_symbol"],
+                "amount": str(amount_received),
+                "amount_usd": str(amount_usd_dec) if amount_usd_dec is not None else None,
+                "updated_at": _now_iso(),
+            },
+            on_conflict="wallet_id,mint_address",
+        )
+        .execute()
+    )
 
-    sb.table("wallet_transactions").insert(
-        {
-            "user_id": intent["user_id"],
-            "kwami_id": intent["kwami_id"],
-            "wallet_id": intent["wallet_id"],
-            "mint_address": intent["asset_mint"],
-            "symbol": intent["asset_symbol"],
-            "direction": "in",
-            "amount": str(amount_received),
-            "amount_usd": str(amount_usd_dec) if amount_usd_dec is not None else None,
-            "transaction_signature": tx_sig,
-            "related_intent_id": intent["id"],
-            "metadata": {"provider": provider},
-            "created_at": _now_iso(),
-        }
-    ).execute()
+    await (
+        sb.table("wallet_transactions")
+        .insert(
+            {
+                "user_id": intent["user_id"],
+                "kwami_id": intent["kwami_id"],
+                "wallet_id": intent["wallet_id"],
+                "mint_address": intent["asset_mint"],
+                "symbol": intent["asset_symbol"],
+                "direction": "in",
+                "amount": str(amount_received),
+                "amount_usd": str(amount_usd_dec) if amount_usd_dec is not None else None,
+                "transaction_signature": tx_sig,
+                "related_intent_id": intent["id"],
+                "metadata": {"provider": provider},
+                "created_at": _now_iso(),
+            }
+        )
+        .execute()
+    )
 
     credits = _compute_credit_amount(
         amount_received, amount_usd_dec, asset_symbol=intent.get("asset_symbol")
@@ -453,13 +475,18 @@ async def settle_funding_intent(
     # Confirmed LAST. If anything above fails the intent stays pending and the
     # provider's retry runs the whole flow again; `_already_credited` makes that
     # retry safe.
-    sb.table("wallet_funding_intents").update(
-        {
-            "status": "confirmed",
-            "provider_intent_id": payload.get("provider_intent_id"),
-            "updated_at": _now_iso(),
-        }
-    ).eq("id", intent_id).execute()
+    await (
+        sb.table("wallet_funding_intents")
+        .update(
+            {
+                "status": "confirmed",
+                "provider_intent_id": payload.get("provider_intent_id"),
+                "updated_at": _now_iso(),
+            }
+        )
+        .eq("id", intent_id)
+        .execute()
+    )
 
     return {
         "status": "confirmed",

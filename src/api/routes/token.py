@@ -7,11 +7,12 @@ Do NOT manually dispatch agents here to avoid duplicate agents in rooms.
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.api.authz import require_kwami_owned
 from src.api.deps import require_auth
+from src.api.ratelimit import TOKEN_LIMIT, limiter
 from src.core.config import settings
 from src.core.security import AuthUser
 from src.services.credits import get_balance
@@ -78,8 +79,10 @@ class TokenResponse(BaseModel):
 
 
 @router.post("", response_model=TokenResponse)
+@limiter.limit(TOKEN_LIMIT)
 async def generate_token(
-    request: TokenRequest,
+    request: Request,
+    body: TokenRequest,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
     """
@@ -95,30 +98,34 @@ async def generate_token(
     """
     # Use Supabase user ID as the identity (for memory persistence)
     identity = user.id
-    participant_name = user.email or request.participant_name or identity
+    # The participant name is embedded in the LiveKit token and is visible to
+    # every other participant in the room. It used to default to the caller's
+    # email address, which published a real identifier to anyone sharing a room
+    # -- including the agent's other callers on a shared room. A caller may still
+    # choose a display name; otherwise it is the opaque user id.
+    participant_name = body.participant_name or identity
 
     # The kwami is dispatched to the agent as metadata and selects that kwami's
     # configuration, memory namespace, channels and wallet. It arrives from the
     # request body, so it must be proven to belong to the caller -- previously it
     # was passed straight through, letting any user run another user's kwami.
-    if request.kwami_id:
-        require_kwami_owned(user.id, request.kwami_id)
+    if body.kwami_id:
+        await require_kwami_owned(user.id, body.kwami_id)
 
     # Derive the room when the client does not name one; otherwise bind the
     # requested name to this user. `claim_room` raises 403 if the room was already
     # issued to somebody else, which is what stops a caller joining another
     # tenant's live session by naming their room.
-    room_name = request.room_name or build_room_name(request.kwami_id)
-    claim_room(room_name, user_id=user.id, kwami_id=request.kwami_id, source="web")
+    room_name = body.room_name or build_room_name(body.kwami_id)
+    await claim_room(room_name, user_id=user.id, kwami_id=body.kwami_id, source="web")
 
-    logger.info(f"📥 Token request: room={room_name}, user={user.id}")
-
+    logger.info("📥 Token request: room=%s, user=%s", room_name, user.id)
     # Check credit balance before allowing connection
     try:
         credit_data = await get_balance(identity)
         if credit_data["balance"] <= 0:
             logger.warning(
-                f"🚫 User {identity} has insufficient credits ({credit_data['balance']})"
+                "🚫 User %s has insufficient credits (%s)", identity, credit_data["balance"]
             )
             raise HTTPException(
                 status_code=402,
@@ -128,9 +135,9 @@ async def generate_token(
         raise
     except Exception as e:
         if settings.credits_fail_open_on_check_error:
-            logger.error(f"Credit check failed, allowing connection: {e}")
+            logger.exception("Credit check failed, allowing connection")
         else:
-            logger.error(f"Credit check failed, blocking connection: {e}")
+            logger.exception("Credit check failed, blocking connection")
             raise HTTPException(
                 status_code=503,
                 detail="Credit verification is temporarily unavailable. Please try again shortly.",
@@ -141,13 +148,13 @@ async def generate_token(
             room_name=room_name,
             participant_name=participant_name,
             participant_identity=identity,
-            can_publish=request.can_publish,
-            can_subscribe=request.can_subscribe,
-            can_publish_data=request.can_publish_data,
-            kwami_id=request.kwami_id,
+            can_publish=body.can_publish,
+            can_subscribe=body.can_subscribe,
+            can_publish_data=body.can_publish_data,
+            kwami_id=body.kwami_id,
         )
 
-        logger.info(f"🎫 Token generated for '{identity}' in room '{room_name}'")
+        logger.info("🎫 Token generated for '%s' in room '%s'", identity, room_name)
 
         return TokenResponse(
             token=token,
@@ -157,12 +164,14 @@ async def generate_token(
         )
 
     except Exception as e:
-        logger.error(f"Failed to generate token: {e}")
-        raise HTTPException(status_code=500, detail="Failed to generate token")
+        logger.exception("Failed to generate token")
+        raise HTTPException(status_code=500, detail="Failed to generate token") from e
 
 
-@router.get("", response_model=TokenResponse)
+@router.get("", response_model=TokenResponse, deprecated=True)
+@limiter.limit(TOKEN_LIMIT)
 async def generate_token_get(
+    request: Request,
     user: Annotated[AuthUser, Depends(require_auth)],
     room_name: Annotated[
         str | None, Query(alias="roomName", min_length=1, max_length=128, description="Room name")
@@ -178,12 +187,20 @@ async def generate_token_get(
     """
     Generate a LiveKit access token (GET method for simple integrations).
 
-    For production use, prefer the POST endpoint with full options.
+    **Deprecated.** A GET is expected to be safe and idempotent; this one claims a
+    room, writes a `livekit_sessions` row and checks a credit balance, so a
+    prefetch, a retry or a crawler is a state change. Everything here is
+    available on the POST endpoint. Kept for existing integrations and marked
+    deprecated in the schema so clients can see it going.
+
     Requires authentication.
     """
-    request = TokenRequest(
+    body = TokenRequest(
         room_name=room_name,
         participant_name=participant_name,
         kwami_id=kwami_id,
     )
-    return await generate_token(request, user)
+    # `generate_token` is wrapped by the limiter, so calling it here would bill
+    # the caller twice for one request. `__wrapped__` is the undecorated handler.
+    inner = getattr(generate_token, "__wrapped__", generate_token)
+    return await inner(request, body, user)

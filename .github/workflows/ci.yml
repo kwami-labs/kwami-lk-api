@@ -7,8 +7,9 @@
 # wall-clock nothing.
 name: ci
 
-# `dev` and `stg` are tested; `main` is what releases and deploys. Release, publish and the
-# deploys all live in cd.yml, which runs only after this workflow goes green on the same commit.
+# `dev`, `stg` and `main` are tested; `main` is what releases. Release, publish and the
+# Cloudflare deploys all live in cd.yml, which runs only after this workflow goes green
+# on the same commit (`main` → production, `stg` → staging, `dev` → development).
 #
 # A push to `dev` runs the FAST LANE only: pr-title is not applicable, and lint, unit and
 # migrations run. `dev` is the branch people push to repeatedly, and the rest — a Postgres
@@ -25,8 +26,8 @@ on:
     branches: [main, stg, dev]
 
 # A force-push should cancel the run it superseded. `main` is excluded: those runs are what CD
-# keys off, so they always finish. `dev` and `stg` gate nothing downstream, so superseding a run
-# on either is free.
+# keys off, so they always finish. `dev` and `stg` still deploy after ci, but a superseded
+# run's deploy is replaced by the newer one, so cancelling the test gate is fine.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -86,6 +87,22 @@ jobs:
 
       - name: ruff format
         run: uv run --extra dev ruff format --check .
+
+  # A wrong type in the credits ledger or the auth path is a money or a security
+  # bug, and the async migration made a whole new class of them possible: a
+  # forgotten `await` leaves a Coroutine where a value belongs. mypy is strict on
+  # those modules and carries a named, shrinking list of the rest.
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: mypy
+        run: uv run --extra dev mypy
 
   # The hermetic lane: no network, no database. Everything outbound is faked at its transport —
   # respx for httpx, responses for requests, aioresponses for aiohttp. If this needs a service
@@ -230,6 +247,56 @@ jobs:
           cache-dependency-glob: uv.lock
       - name: Migrations are ordered and unambiguous
         run: uv run python scripts/migrate.py --dry-run
+
+  # Static analysis for security defects, as opposed to `vuln`, which only reads
+  # the dependency manifest. Kept out of the required set until it has been green
+  # for a few runs -- the same staging `vuln` is going through.
+  codeql:
+    name: codeql
+    # FAST LANE: skipped on a push to `dev` — see the note on `on:` above.
+    if: github.event_name != 'push' || github.ref != 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: python
+          queries: security-extended
+      - uses: github/codeql-action/analyze@v3
+
+  # Committed credentials. `.gitignore` blocks `.env`, but a key pasted into a
+  # test fixture or a migration comment is not covered by that, and history is
+  # what matters once it has landed.
+  #
+  # The gitleaks *CLI* is MIT and free. `gitleaks/gitleaks-action@v2` is not:
+  # it requires a paid `GITLEAKS_LICENSE` for any repo owned by a GitHub
+  # organisation, which is why the first run on kwami-labs failed at plugin
+  # load. The binary is the same scanner without that wrapper.
+  secrets:
+    name: secrets
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # gitleaks scans history, not just the tip.
+          fetch-depth: 0
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+        run: |
+          set -euo pipefail
+          curl -fsSL \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /tmp gitleaks
+          sudo install -m 0755 /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+      - name: gitleaks
+        run: gitleaks git --config .gitleaks.toml --redact --verbose
 
   # ADVISORY, not a gate — and deliberately not in .github/rulesets/main.json.
   #

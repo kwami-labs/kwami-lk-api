@@ -5,7 +5,7 @@ import logging
 from typing import Annotated
 
 import jwt
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from src.core.config import settings
@@ -24,6 +24,7 @@ security_scheme = HTTPBearer(auto_error=False)
 
 
 async def get_current_user(
+    request: Request,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security_scheme)],
 ) -> AuthUser | None:
     """
@@ -48,7 +49,11 @@ async def get_current_user(
     try:
         payload = await verify_token(credentials.credentials)
         user = AuthUser(payload)
-        logger.debug(f"Authenticated user: {user}")
+        # The rate limiter reads this to bill the account rather than the IP, so
+        # one office NAT is not one budget and one account cannot buy headroom
+        # by changing address. See src/api/ratelimit.py.
+        request.state.user = user
+        logger.debug("Authenticated user: %s", user)
         return user
 
     except jwt.ExpiredSignatureError:
@@ -57,21 +62,21 @@ async def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has expired",
             headers={"WWW-Authenticate": "Bearer"},
-        )
+        ) from None
     except jwt.InvalidAudienceError:
         logger.warning("Invalid token audience")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token audience",
             headers={"WWW-Authenticate": "Bearer"},
-        )
+        ) from None
     except jwt.InvalidTokenError as e:
-        logger.warning(f"Invalid token: {e}")
+        logger.warning("Invalid token: %s", e)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication token",
             headers={"WWW-Authenticate": "Bearer"},
-        )
+        ) from e
 
 
 async def require_auth(user: Annotated[AuthUser | None, Depends(get_current_user)]) -> AuthUser:

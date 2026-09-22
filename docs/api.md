@@ -3,8 +3,8 @@
 The live contract is OpenAPI at `/docs` when docs are enabled. This page is
 the map: which prefix exists, who may call it, and what it is for.
 
-Base URL is the Fly app in production (`https://<app>.fly.dev` or the custom
-domain in `APP_PUBLIC_URL`). Local default is `http://127.0.0.1:8080`.
+Base URL is the Cloudflare Worker (`https://kwami-lk-api.nexow.workers.dev`
+in production, or `APP_PUBLIC_URL`). Local default is `http://127.0.0.1:8080`.
 
 ## Auth classes
 
@@ -60,7 +60,7 @@ Upstream exception text is not forwarded.
 
 | Prefix | Auth | Purpose |
 |--------|------|---------|
-| `/` `GET`, `/health` `GET` | public | Liveness. Fly's HTTP check hits `/health`. |
+| `/` `GET`, `/health` `GET` | public | Liveness. The Container ping and Worker health check hit `/health`. |
 | `/token` | user | Mint a LiveKit JWT; claim the room. |
 | `/models` | public | STT / LLM / TTS / realtime catalogs, cost estimate. |
 | `/voices` | public | TTS and realtime voice catalogs. |

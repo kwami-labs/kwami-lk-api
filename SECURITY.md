@@ -23,8 +23,14 @@ before discussing the issue anywhere else.
 
 ## Supported versions
 
-Only `main` is deployed. `dev` and `stg` are tested; `dev` has a deploy job that stays skipped
-until a second Fly app exists. See [Releases](./CONTRIBUTING.md#releases).
+| Version | Supported |
+|---------|-----------|
+| `1.x` (latest release) | yes |
+| `0.1.x` | no — superseded by `1.0.0` |
+
+Only `main` is the supported production deploy, and only the latest `1.x` release is supported.
+There is no backport branch: a fix goes on `main` and ships in the next release. `dev` and `stg`
+each deploy their own Cloudflare Worker. See [Releases](./CONTRIBUTING.md#releases).
 
 Fixes land on `main` and ship on the next green run. Do not assume a vulnerability is patched on
 the deployed service until the matching commit is on `main` and `cd` has gone green.
@@ -49,8 +55,8 @@ the deployed service until the matching commit is on `main` and `cd` has gone gr
   [`.env.sample`](./.env.sample), which holds names and placeholder values only.
 - Runtime configuration is validated at boot by [`src/core/config.py`](./src/core/config.py). The
   process refuses to start when a required variable is missing, rather than starting and 500ing.
-- Deploy credentials live in GitHub (`FLY_API_TOKEN`) and on Fly (`fly secrets`), not in the repo.
-  `GITHUB_TOKEN` covers the GHCR publish.
+- Deploy credentials live in GitHub (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`) and as
+  Wrangler secrets on the Worker, not in the repo. `GITHUB_TOKEN` covers the GHCR publish.
 - `RELEASE_TOKEN` is a fine-grained PAT owned by a repository admin, with **Contents: Read and
   write** on this repository and nothing else. It exists only because the release commit is pushed
   to protected `main` and `github-actions[bot]` cannot bypass the ruleset — see

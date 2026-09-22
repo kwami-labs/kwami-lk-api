@@ -95,9 +95,8 @@ def test_deducting_more_than_the_balance_changes_nothing(db, user_id):
         cur.execute("SELECT add_credits(%s, %s, 'purchase')", (user_id, 1_000))
     before = balance_of(db, user_id)
 
-    with pytest.raises(Exception, match="Insufficient credits"):
-        with db.cursor() as cur:
-            cur.execute("SELECT deduct_credits(%s, %s)", (user_id, 5_000))
+    with pytest.raises(Exception, match="Insufficient credits"), db.cursor() as cur:
+        cur.execute("SELECT deduct_credits(%s, %s)", (user_id, 5_000))
 
     assert balance_of(db, user_id) == before
     assert [r for r in ledger_rows(db, user_id) if r[0] == "usage"] == []
@@ -149,9 +148,8 @@ def test_wallet_funding_is_not_a_valid_transaction_type(db, user_id):
     `credit_transaction_type` is ('purchase','usage','bonus','refund'); the wallet
     settlement passed 'wallet_funding', so the RPC raised every time.
     """
-    with pytest.raises(Exception, match="invalid input value for enum"):
-        with db.cursor() as cur:
-            cur.execute("SELECT add_credits(%s, %s, 'wallet_funding')", (user_id, 100))
+    with pytest.raises(Exception, match="invalid input value for enum"), db.cursor() as cur:
+        cur.execute("SELECT add_credits(%s, %s, 'wallet_funding')", (user_id, 100))
 
 
 def test_crediting_with_the_same_idempotency_key_credits_once(db, user_id):
@@ -208,9 +206,8 @@ def test_balance_after_is_recorded_on_the_idempotent_path(db, user_id):
 
 def test_a_non_positive_credit_is_refused(db, user_id):
     for amount in (0, -100):
-        with pytest.raises(Exception, match="positive amount"):
-            with db.cursor() as cur:
-                cur.execute("SELECT add_credits(%s, %s, 'purchase')", (user_id, amount))
+        with pytest.raises(Exception, match="positive amount"), db.cursor() as cur:
+            cur.execute("SELECT add_credits(%s, %s, 'purchase')", (user_id, amount))
 
 
 def test_new_users_receive_the_welcome_bonus_exactly_once(db):

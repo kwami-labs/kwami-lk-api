@@ -5,19 +5,20 @@
     [
       "@semantic-release/commit-analyzer",
       {
-        "preset": "angular",
+        "preset": "conventionalcommits",
         "releaseRules": [
-          { "breaking": true, "release": "minor" },
+          { "breaking": true, "release": "major" },
+          { "type": "feat", "release": "minor" },
           { "type": "*", "release": "patch" }
         ]
       }
     ],
-    ["@semantic-release/release-notes-generator", { "preset": "angular" }],
+    ["@semantic-release/release-notes-generator", { "preset": "conventionalcommits" }],
     [
       "@semantic-release/changelog",
       {
         "changelogFile": "CHANGELOG.md",
-        "changelogTitle": "# kwami-lk-api — Changelog\n\nAll notable changes to this service are documented here. This file is generated from the commit history by semantic-release — do not edit it by hand.\n\n`v0.1.0` is a baseline tag placed at the commit that introduced this automation. Everything before it lives in the git log rather than here: it shipped before there was a release line to put it on."
+        "changelogTitle": "# kwami-lk-api — Changelog\n\nAll notable changes to this service are documented here. This file is generated from the commit history by semantic-release — do not edit it by hand.\n\nThe service is 1.x: `feat!` or a `BREAKING CHANGE:` footer bumps the major, `feat` the minor, and every other conventional type a patch. `v0.1.0` and `v0.1.1` are the pre-1.0 line; everything before `v0.1.0` lives in the git log rather than here."
       }
     ],
     [

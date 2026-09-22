@@ -3,7 +3,7 @@ environment  = "production"
 worker_name  = "kwami-lk-api"
 zone_id      = "your-zone-id"
 zone_name    = "kwami.io"
-# Do not point this at the live Fly hostname until you are ready to cut over.
+# Leave enable_custom_domain false until you are ready to move off workers.dev.
 api_hostname = "api.kwami.io"
 
 enable_custom_domain = false

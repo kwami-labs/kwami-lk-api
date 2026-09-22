@@ -39,7 +39,7 @@ variable "api_hostname" {
 variable "enable_custom_domain" {
   type        = bool
   default     = false
-  description = "Attach api_hostname to the Worker. Keep false until you are ready to take traffic off Fly."
+  description = "Attach api_hostname to the Worker. Keep false until you are ready to move off workers.dev."
 }
 
 variable "enable_zone_tls" {
