@@ -269,6 +269,11 @@ jobs:
   # Committed credentials. `.gitignore` blocks `.env`, but a key pasted into a
   # test fixture or a migration comment is not covered by that, and history is
   # what matters once it has landed.
+  #
+  # The gitleaks *CLI* is MIT and free. `gitleaks/gitleaks-action@v2` is not:
+  # it requires a paid `GITLEAKS_LICENSE` for any repo owned by a GitHub
+  # organisation, which is why the first run on kwami-labs failed at plugin
+  # load. The binary is the same scanner without that wrapper.
   secrets:
     name: secrets
     runs-on: ubuntu-latest
@@ -279,9 +284,18 @@ jobs:
         with:
           # gitleaks scans history, not just the tip.
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - name: Install gitleaks
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_VERSION: "8.30.1"
+        run: |
+          set -euo pipefail
+          curl -fsSL \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /tmp gitleaks
+          sudo install -m 0755 /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+      - name: gitleaks
+        run: gitleaks git --redact --verbose
 
   # ADVISORY, not a gate — and deliberately not in .github/rulesets/main.json.
   #
