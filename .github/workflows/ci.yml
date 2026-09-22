@@ -295,7 +295,7 @@ jobs:
           sudo install -m 0755 /tmp/gitleaks /usr/local/bin/gitleaks
           gitleaks version
       - name: gitleaks
-        run: gitleaks git --redact --verbose
+        run: gitleaks git --config .gitleaks.toml --redact --verbose
 
   # ADVISORY, not a gate — and deliberately not in .github/rulesets/main.json.
   #
