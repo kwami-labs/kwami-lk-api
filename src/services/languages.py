@@ -158,7 +158,7 @@ def _extract_deepgram_stt_languages() -> list[Language]:
         codes = get_args(DeepgramLanguages)
         return [get_language_info(code) for code in codes]
     except ImportError as e:
-        logger.warning(f"Could not import Deepgram languages: {e}")
+        logger.warning("Could not import Deepgram languages: %s", e)
         return []
 
 
@@ -170,7 +170,7 @@ def _extract_cartesia_stt_languages() -> list[Language]:
         codes = get_args(STTLanguages)
         return [get_language_info(code) for code in codes]
     except ImportError as e:
-        logger.warning(f"Could not import Cartesia STT languages: {e}")
+        logger.warning("Could not import Cartesia STT languages: %s", e)
         return []
 
 
@@ -182,7 +182,7 @@ def _extract_cartesia_tts_languages() -> list[Language]:
         codes = get_args(TTSLanguages)
         return [get_language_info(code) for code in codes]
     except ImportError as e:
-        logger.warning(f"Could not import Cartesia TTS languages: {e}")
+        logger.warning("Could not import Cartesia TTS languages: %s", e)
         return []
 
 
@@ -194,7 +194,7 @@ def _extract_google_stt_languages() -> list[Language]:
         codes = get_args(SpeechLanguages)
         return [get_language_info(code) for code in codes]
     except ImportError as e:
-        logger.warning(f"Could not import Google STT languages: {e}")
+        logger.warning("Could not import Google STT languages: %s", e)
         return []
 
 
@@ -216,14 +216,14 @@ def _load_languages_yaml() -> dict:
     try:
         with open(yaml_path) as f:
             _LANGUAGES_YAML = yaml.safe_load(f) or {}
-            logger.info(f"Loaded languages from {yaml_path}")
+            logger.info("Loaded languages from %s", yaml_path)
             return _LANGUAGES_YAML
     except FileNotFoundError:
-        logger.warning(f"Languages YAML not found at {yaml_path}, using empty config")
+        logger.warning("Languages YAML not found at %s, using empty config", yaml_path)
         _LANGUAGES_YAML = {}
         return _LANGUAGES_YAML
-    except Exception as e:
-        logger.error(f"Failed to load languages YAML: {e}")
+    except Exception:
+        logger.exception("Failed to load languages YAML")
         _LANGUAGES_YAML = {}
         return _LANGUAGES_YAML
 
@@ -348,7 +348,7 @@ def get_realtime_languages_by_provider(provider: str) -> ProviderLanguages | Non
 
 def get_all_languages() -> list[Language]:
     """Get all known languages (for reference/lookup)."""
-    return [get_language_info(code) for code in LANGUAGE_NAMES.keys()]
+    return [get_language_info(code) for code in LANGUAGE_NAMES]
 
 
 def reload_languages_yaml():

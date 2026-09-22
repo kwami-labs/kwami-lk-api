@@ -8,6 +8,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import HTTPException, Request
 from twilio.base.exceptions import TwilioException, TwilioRestException
+from twilio.http.async_http_client import AsyncTwilioHttpClient
 from twilio.request_validator import RequestValidator
 from twilio.rest import Client
 from twilio.twiml.messaging_response import MessagingResponse
@@ -21,12 +22,46 @@ _twilio_client: Client | None = None
 
 
 def get_twilio_client() -> Client:
+    """The shared Twilio client, backed by an async HTTP transport.
+
+    `twilio.rest.Client` defaults to a synchronous `requests` transport, and every
+    call below runs from an `async def` route -- provisioning a number or sending
+    an SMS parked the event loop for the whole round trip. `AsyncTwilioHttpClient`
+    is aiohttp-based, and the resources expose `*_async` counterparts that use it.
+
+    Built lazily, once: the client owns a connection pool, so one per process.
+    Construction needs a running event loop, because `AsyncTwilioHttpClient`
+    reaches for one -- which is satisfied by every caller here being a coroutine.
+    """
     global _twilio_client
     if _twilio_client is None:
         if not settings.twilio_enabled:
             raise RuntimeError("Platform phone provisioning is not configured")
-        _twilio_client = Client(settings.twilio_account_sid, settings.twilio_auth_token)
+        _twilio_client = Client(
+            settings.twilio_account_sid,
+            settings.twilio_auth_token,
+            http_client=AsyncTwilioHttpClient(),
+        )
     return _twilio_client
+
+
+async def close_twilio_client() -> None:
+    """Close the shared client's aiohttp session at shutdown.
+
+    `AsyncTwilioHttpClient` owns a `ClientSession`, and an unclosed one leaks its
+    connector and emits "Unclosed client session" on garbage collection. Same
+    shape as `close_zep_client`.
+    """
+    global _twilio_client
+    client = _twilio_client
+    _twilio_client = None
+    if client is None:
+        return
+    http_client = getattr(client, "http_client", None)
+    session = getattr(http_client, "session", None)
+    close = getattr(session, "close", None)
+    if close is not None:
+        await close()
 
 
 def ensure_twilio_enabled() -> None:
@@ -150,7 +185,7 @@ def _number_search_kw(
     return out
 
 
-def search_available_numbers(
+async def search_available_numbers(
     *,
     country_code: str,
     area_code: str | None,
@@ -178,7 +213,7 @@ def search_available_numbers(
             limit=limit,
         )
         try:
-            items = sub.list(**kwargs)
+            items = await sub.list_async(**kwargs)
         except TwilioException as exc:
             if _twilio_page_is_404(exc):
                 last_404 = exc
@@ -208,7 +243,7 @@ def search_available_numbers(
     return []
 
 
-def purchase_phone_number(
+async def purchase_phone_number(
     *,
     phone_number: str,
     friendly_name: str,
@@ -216,7 +251,7 @@ def purchase_phone_number(
     ensure_twilio_enabled()
     client = get_twilio_client()
     # Current twilio-python IncomingPhoneNumbers.create has no sms_status_callback; voice uses StatusCallback.
-    incoming = client.incoming_phone_numbers.create(
+    incoming = await client.incoming_phone_numbers.create_async(
         phone_number=phone_number,
         friendly_name=friendly_name,
         voice_url=webhook_url("/webhooks/twilio/voice"),
@@ -237,30 +272,32 @@ def purchase_phone_number(
     }
 
 
-def detach_phone_number_from_sip_trunk(trunk_phone_resource_sid: str) -> None:
+async def detach_phone_number_from_sip_trunk(trunk_phone_resource_sid: str) -> None:
     """Remove a phone association from the shared Twilio Elastic SIP trunk."""
     if not settings.twilio_sip_trunk_sid or not trunk_phone_resource_sid:
         return
     ensure_twilio_enabled()
     client = get_twilio_client()
     try:
-        client.trunking.v1.trunks(settings.twilio_sip_trunk_sid).phone_numbers(
-            trunk_phone_resource_sid
-        ).delete()
+        await (
+            client.trunking.v1.trunks(settings.twilio_sip_trunk_sid)
+            .phone_numbers(trunk_phone_resource_sid)
+            .delete_async()
+        )
     except TwilioRestException as exc:
         if getattr(exc, "status", None) != 404:
             raise
         logger.debug("Trunk phone association already gone: %s", trunk_phone_resource_sid)
 
 
-def release_incoming_phone_number(incoming_phone_sid: str) -> None:
+async def release_incoming_phone_number(incoming_phone_sid: str) -> None:
     """Release (delete) a Twilio IncomingPhoneNumber from the account."""
     if not incoming_phone_sid:
         raise ValueError("Missing Twilio incoming phone SID")
     ensure_twilio_enabled()
     client = get_twilio_client()
     try:
-        client.incoming_phone_numbers(incoming_phone_sid).delete()
+        await client.incoming_phone_numbers(incoming_phone_sid).delete_async()
     except TwilioRestException as exc:
         if getattr(exc, "status", None) == 404:
             logger.info("Incoming phone %s already released in Twilio", incoming_phone_sid)
@@ -268,20 +305,20 @@ def release_incoming_phone_number(incoming_phone_sid: str) -> None:
         raise
 
 
-def attach_phone_number_to_sip_trunk(phone_number_sid: str) -> str | None:
+async def attach_phone_number_to_sip_trunk(phone_number_sid: str) -> str | None:
     """Attach a purchased number to the shared Twilio SIP trunk."""
     if not settings.twilio_sip_trunk_sid:
         return None
 
     ensure_twilio_enabled()
     client = get_twilio_client()
-    resource = client.trunking.v1.trunks(settings.twilio_sip_trunk_sid).phone_numbers.create(
-        phone_number_sid=phone_number_sid
-    )
+    resource = await client.trunking.v1.trunks(
+        settings.twilio_sip_trunk_sid
+    ).phone_numbers.create_async(phone_number_sid=phone_number_sid)
     return resource.sid
 
 
-def place_direct_pstn_test_call(*, to_e164: str, from_e164: str) -> dict[str, str | None]:
+async def place_direct_pstn_test_call(*, to_e164: str, from_e164: str) -> dict[str, str | None]:
     """Outbound PSTN call via Twilio REST only (no LiveKit SIP). Used to isolate Twilio vs LiveKit issues."""
     ensure_twilio_enabled()
     client = get_twilio_client()
@@ -291,11 +328,11 @@ def place_direct_pstn_test_call(*, to_e164: str, from_e164: str) -> dict[str, st
         voice="Polly.Joanna",
     )
     response.hangup()
-    call = client.calls.create(to=to_e164, from_=from_e164, twiml=str(response))
+    call = await client.calls.create_async(to=to_e164, from_=from_e164, twiml=str(response))
     return {"sid": call.sid, "status": getattr(call, "status", None)}
 
 
-def send_whatsapp_message(
+async def send_whatsapp_message(
     *,
     from_address: str,
     to_address: str,
@@ -303,7 +340,7 @@ def send_whatsapp_message(
 ) -> dict[str, str | None]:
     ensure_twilio_enabled()
     client = get_twilio_client()
-    message = client.messages.create(
+    message = await client.messages.create_async(
         from_=from_address,
         to=to_address,
         body=body,
@@ -320,7 +357,7 @@ def send_whatsapp_message(
     }
 
 
-def send_sms_message(
+async def send_sms_message(
     *,
     from_number: str,
     to_number: str,
@@ -328,7 +365,7 @@ def send_sms_message(
 ) -> dict[str, str | None]:
     ensure_twilio_enabled()
     client = get_twilio_client()
-    message = client.messages.create(
+    message = await client.messages.create_async(
         from_=from_number,
         to=to_number,
         body=body,

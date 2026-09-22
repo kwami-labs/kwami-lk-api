@@ -75,7 +75,11 @@ def fake_supabase(monkeypatch) -> FakeSupabase:
     database through it, so setting the cached client here covers the whole app
     and ``create_client`` is never called.
     """
-    fake = FakeSupabase()
+    # `async_mode=True` since the services moved to `create_async_client`: the
+    # builder stays synchronous and only `execute()` is awaited, which is exactly
+    # what `_AsyncQuery` models. The two modes are proved equivalent in
+    # tests/integration/contracts/test_fake_supabase_conformance.py.
+    fake = FakeSupabase(async_mode=True)
     monkeypatch.setattr(credits, "_supabase_client", fake, raising=False)
     return fake
 

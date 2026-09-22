@@ -23,8 +23,15 @@ before discussing the issue anywhere else.
 
 ## Supported versions
 
-Only `main` is deployed. `dev` and `stg` are tested; `dev` has a deploy job that stays skipped
-until a second Fly app exists. See [Releases](./CONTRIBUTING.md#releases).
+| Version | Supported |
+|---------|-----------|
+| `1.x` (latest release) | yes |
+| `0.1.x` | no — superseded by `1.0.0` |
+
+Only `main` is deployed, and only the latest `1.x` release is supported. There is no backport
+branch: a fix goes on `main` and ships in the next release. `dev` and `stg` are tested; `dev` has
+a deploy job that stays skipped until a second Fly app exists. See
+[Releases](./CONTRIBUTING.md#releases).
 
 Fixes land on `main` and ship on the next green run. Do not assume a vulnerability is patched on
 the deployed service until the matching commit is on `main` and `cd` has gone green.

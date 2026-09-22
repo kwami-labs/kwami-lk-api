@@ -6,6 +6,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import ROUND_CEILING, ROUND_HALF_EVEN, Decimal
 from typing import Any
 
 from src.core.config import settings
@@ -21,7 +22,7 @@ from src.services.pricing import (
     calculate_realtime_cost,
     calculate_token_cost,
 )
-from supabase import Client, create_client
+from supabase import AsyncClient, create_async_client
 
 logger = logging.getLogger("kwami-api.credits")
 
@@ -31,6 +32,14 @@ logger = logging.getLogger("kwami-api.credits")
 
 MICRO_CREDITS_PER_CREDIT = 1000
 USD_PER_CREDIT = 0.001  # 1 credit = $0.001
+
+# How much precision survives before `usd_to_micro_credits` rounds up: six decimal
+# places of a micro-credit, i.e. 1e-12 USD. Fine enough that no real fraction is lost
+# -- one token of the cheapest model is ~0.15 micro-credits -- and coarse enough to
+# erase the float noise the pricing arithmetic leaves behind, which reaches ~1e-9 of a
+# micro-credit on the largest charges. See that function for why rounding up without
+# this over-bills.
+QUANTIZE_EXPONENT = Decimal("1e-6")
 MARKUP_MULTIPLIER = settings.billing_markup_multiplier
 FIXED_FEE_USD = settings.billing_fixed_fee_usd
 
@@ -63,20 +72,42 @@ CREDIT_PACKS = {
 # Supabase admin client (singleton)
 # ---------------------------------------------------------------------------
 
-_supabase_client: Client | None = None
+_supabase_client: AsyncClient | None = None
 
 
-def get_supabase_admin() -> Client:
-    """Get the Supabase admin client using the secret API key."""
+async def init_supabase_admin() -> AsyncClient:
+    """Build the one shared async client. Called from the application lifespan.
+
+    Construction is a coroutine (`create_async_client` opens the underlying httpx
+    session), which is why it cannot happen lazily inside `get_supabase_admin`.
+    Building it once at startup is also what gives every request a shared
+    connection pool instead of a fresh socket.
+    """
     global _supabase_client
     if _supabase_client is None:
         if not settings.supabase_url or not settings.supabase_secret_key:
             raise RuntimeError(
                 "SUPABASE_URL and SUPABASE_SECRET_KEY must be set for the credits system"
             )
-        _supabase_client = create_client(
+        _supabase_client = await create_async_client(
             settings.supabase_url,
             settings.supabase_secret_key,
+        )
+    return _supabase_client
+
+
+def get_supabase_admin() -> AsyncClient:
+    """The shared admin client.
+
+    Deliberately *not* a coroutine. On the async client `.table()`, `.select()` and
+    the rest of the builder are ordinary synchronous calls; only `.execute()` is
+    awaited. Keeping this synchronous means the 66 call sites stay
+    `sb = get_supabase_admin()` and only the terminal `await ... .execute()` changes.
+    """
+    if _supabase_client is None:
+        raise RuntimeError(
+            "Supabase client is not initialised. The application lifespan calls "
+            "init_supabase_admin(); a script or test reaching the database must too."
         )
     return _supabase_client
 
@@ -87,17 +118,42 @@ def get_supabase_admin() -> Client:
 
 
 def usd_to_micro_credits(cost_usd: float) -> int:
-    """Convert a billed USD amount to micro-credits.
+    """Convert a billed USD amount to micro-credits, rounding up.
+
+    The ledger is integer micro-credits, so this is the one place a real-valued
+    cost becomes money. It has to round the customer's way -- up -- or the
+    platform absorbs the remainder on every usage item.
+
+    ``int()`` truncated. The docstring has always said "rounded up"; the code
+    floored. Measured across 200k realistic usage items, 57% were a micro-credit
+    short.
+
+    Rounding up is not on its own the fix, because ``cost_usd`` arrives carrying
+    float noise from the pricing arithmetic upstream: ``(9128 / 1e6) * 15.0 * 2.0``
+    is ``0.27384000000000003``, not ``0.27384``. Rounding *that* up bills 273841
+    for a charge that is exactly 273840 micro-credits -- the same defect turned
+    against the customer, on about 6% of items. Naive ``math.ceil`` and a naive
+    ``Decimal(str(cost_usd))`` both do this.
+
+    So the noise is quantized away first, on the micro-credit scale where it lands
+    rather than on the USD scale where it started -- multiplying by a million
+    multiplies the absolute error too, which is why quantizing the USD figure does
+    not work. ``QUANTIZE_EXPONENT`` keeps six decimal places of a micro-credit: finer
+    than any real fraction (one token of the cheapest model is ~0.15 micro-credits),
+    coarser than the noise. What survives is the amount the pricing tables meant, and
+    ``ROUND_CEILING`` then rounds the customer's way exactly once.
 
     Args:
         cost_usd: Customer-facing billed cost in USD.
 
     Returns:
-        Amount in micro-credits (rounded up).
+        Amount in micro-credits, rounded up, never below 1.
     """
-    credits = cost_usd / USD_PER_CREDIT
-    micro = int(credits * MICRO_CREDITS_PER_CREDIT)
-    return max(micro, 1)  # minimum 1 micro-credit per operation
+    micro_per_usd = Decimal(MICRO_CREDITS_PER_CREDIT) / Decimal(str(USD_PER_CREDIT))
+    exact = Decimal(str(cost_usd)) * micro_per_usd
+    denoised = exact.quantize(QUANTIZE_EXPONENT, rounding=ROUND_HALF_EVEN)
+    micro = denoised.to_integral_value(rounding=ROUND_CEILING)
+    return max(int(micro), 1)  # minimum 1 micro-credit per operation
 
 
 @dataclass(slots=True)
@@ -224,7 +280,7 @@ async def get_balance(user_id: str) -> dict[str, Any]:
     Creates a row with 0 balance if the user has no record.
     """
     sb = get_supabase_admin()
-    result = sb.table("user_credits").select("*").eq("user_id", user_id).execute()
+    result = await sb.table("user_credits").select("*").eq("user_id", user_id).execute()
 
     if result.data:
         row = result.data[0]
@@ -236,14 +292,18 @@ async def get_balance(user_id: str) -> dict[str, Any]:
         }
 
     # User has no row yet (shouldn't happen with trigger, but handle gracefully)
-    sb.table("user_credits").insert(
-        {
-            "user_id": user_id,
-            "balance": 0,
-            "lifetime_purchased": 0,
-            "lifetime_used": 0,
-        }
-    ).execute()
+    await (
+        sb.table("user_credits")
+        .insert(
+            {
+                "user_id": user_id,
+                "balance": 0,
+                "lifetime_purchased": 0,
+                "lifetime_used": 0,
+            }
+        )
+        .execute()
+    )
 
     return {
         "balance": 0,
@@ -271,7 +331,7 @@ async def add_credits(
     Returns the new balance in micro-credits.
     """
     sb = get_supabase_admin()
-    result = sb.rpc(
+    result = await sb.rpc(
         "add_credits",
         {
             "p_user_id": user_id,
@@ -284,7 +344,9 @@ async def add_credits(
     ).execute()
 
     new_balance = result.data
-    logger.info(f"Added {amount_micro} micro-credits to user {user_id}, new balance: {new_balance}")
+    logger.info(
+        "Added %s micro-credits to user %s, new balance: %s", amount_micro, user_id, new_balance
+    )
     return new_balance
 
 
@@ -300,7 +362,7 @@ async def deduct_credits(
     """
     sb = get_supabase_admin()
     try:
-        result = sb.rpc(
+        result = await sb.rpc(
             "deduct_credits",
             {
                 "p_user_id": user_id,
@@ -312,7 +374,10 @@ async def deduct_credits(
 
         new_balance = result.data
         logger.info(
-            f"Deducted {amount_micro} micro-credits from user {user_id}, new balance: {new_balance}"
+            "Deducted %s micro-credits from user %s, new balance: %s",
+            amount_micro,
+            user_id,
+            new_balance,
         )
         return new_balance
     except Exception as e:
@@ -321,7 +386,7 @@ async def deduct_credits(
         raise
 
 
-def resolve_ledger_user_id(reported_id: str) -> str:
+async def resolve_ledger_user_id(reported_id: str) -> str:
     """Map agent-reported id to Supabase `users.id` for `credit_usage_logs`.
 
     The agent often sends `kwami_id` (from telephony metadata) instead of the auth user id.
@@ -336,7 +401,7 @@ def resolve_ledger_user_id(reported_id: str) -> str:
         return rid
 
     sb = get_supabase_admin()
-    kwami_hit = sb.table("user_kwamis").select("user_id").eq("id", rid).limit(1).execute()
+    kwami_hit = await sb.table("user_kwamis").select("user_id").eq("id", rid).limit(1).execute()
     rows = getattr(kwami_hit, "data", None) or []
     if rows and rows[0].get("user_id"):
         return str(rows[0]["user_id"])
@@ -359,7 +424,7 @@ async def log_usage(
     """Insert a pending usage log row and return its ID."""
     sb = get_supabase_admin()
     result = (
-        sb.table("credit_usage_logs")
+        await sb.table("credit_usage_logs")
         .insert(
             {
                 "user_id": user_id,
@@ -394,12 +459,17 @@ async def update_usage_settlement(
 ) -> None:
     """Update a usage log with the final settlement result."""
     sb = get_supabase_admin()
-    sb.table("credit_usage_logs").update(
-        {
-            "credits_charged": credits_charged,
-            "settlement_status": settlement_status,
-        }
-    ).eq("id", usage_log_id).execute()
+    await (
+        sb.table("credit_usage_logs")
+        .update(
+            {
+                "credits_charged": credits_charged,
+                "settlement_status": settlement_status,
+            }
+        )
+        .eq("id", usage_log_id)
+        .execute()
+    )
 
 
 async def get_transactions(
@@ -410,7 +480,7 @@ async def get_transactions(
     """Get paginated transaction history for a user."""
     sb = get_supabase_admin()
     result = (
-        sb.table("credit_transactions")
+        await sb.table("credit_transactions")
         .select("*")
         .eq("user_id", user_id)
         .order("created_at", desc=True)
@@ -438,7 +508,7 @@ async def get_usage_logs(
     if session_id:
         query = query.eq("session_id", session_id)
 
-    result = query.range(offset, offset + limit - 1).execute()
+    result = await query.range(offset, offset + limit - 1).execute()
     return result.data or []
 
 
@@ -466,7 +536,7 @@ async def get_usage_logs_for_reconciliation(
     if created_before:
         query = query.lte("created_at", created_before.isoformat())
 
-    result = query.limit(limit).execute()
+    result = await query.limit(limit).execute()
     return result.data or []
 
 
@@ -698,10 +768,10 @@ def build_report_key(user_id: str, session_id: str, usage_items: list[dict]) -> 
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
-def _find_usage_report(report_key: str) -> dict[str, Any] | None:
+async def _find_usage_report(report_key: str) -> dict[str, Any] | None:
     sb = get_supabase_admin()
     result = (
-        sb.table("usage_reports")
+        await sb.table("usage_reports")
         .select("id, report_key, status, result")
         .eq("report_key", report_key)
         .limit(1)
@@ -727,7 +797,7 @@ async def process_usage_report(
 
     Returns summary with total_credits_charged and new_balance.
     """
-    ledger_user_id = resolve_ledger_user_id(user_id)
+    ledger_user_id = await resolve_ledger_user_id(user_id)
     if ledger_user_id != user_id:
         logger.info(
             "Usage report user id mapped kwami or alias -> ledger user: %s -> %s",
@@ -736,7 +806,7 @@ async def process_usage_report(
         )
 
     report_key = idempotency_key or build_report_key(user_id, session_id, usage_items)
-    existing = _find_usage_report(report_key)
+    existing = await _find_usage_report(report_key)
     if existing is not None:
         # Return what the original call returned. Recomputing would settle against
         # a balance that has since moved, and would charge again.
@@ -747,19 +817,23 @@ async def process_usage_report(
 
     sb = get_supabase_admin()
     try:
-        sb.table("usage_reports").insert(
-            {
-                "report_key": report_key,
-                "user_id": ledger_user_id,
-                "session_id": session_id,
-                "status": "pending",
-                "items_count": len(usage_items),
-            }
-        ).execute()
+        await (
+            sb.table("usage_reports")
+            .insert(
+                {
+                    "report_key": report_key,
+                    "user_id": ledger_user_id,
+                    "session_id": session_id,
+                    "status": "pending",
+                    "items_count": len(usage_items),
+                }
+            )
+            .execute()
+        )
     except Exception as exc:
         if "23505" in str(exc) or "duplicate key" in str(exc).lower():
             # Lost a race with a concurrent delivery of the same report.
-            concurrent = _find_usage_report(report_key)
+            concurrent = await _find_usage_report(report_key)
             cached = dict((concurrent or {}).get("result") or {})
             cached["idempotent_replay"] = True
             return cached
@@ -893,7 +967,7 @@ async def process_usage_report(
     }
 
     # Cache the outcome so a replay returns this answer instead of re-settling.
-    _finalize_usage_report(
+    await _finalize_usage_report(
         report_key,
         status="settled" if not unpaid_micro_credits else "partially_settled",
         requested_micro=total_requested_micro_credits,
@@ -904,7 +978,7 @@ async def process_usage_report(
     return result
 
 
-def _finalize_usage_report(
+async def _finalize_usage_report(
     report_key: str,
     *,
     status: str,
@@ -916,15 +990,20 @@ def _finalize_usage_report(
     """Record the settled report. Best effort: never mask a completed settlement."""
     sb = get_supabase_admin()
     try:
-        sb.table("usage_reports").update(
-            {
-                "status": status,
-                "requested_micro": requested_micro,
-                "charged_micro": charged_micro,
-                "unpaid_micro": unpaid_micro,
-                "result": result,
-                "settled_at": datetime.now(UTC).isoformat(),
-            }
-        ).eq("report_key", report_key).execute()
+        await (
+            sb.table("usage_reports")
+            .update(
+                {
+                    "status": status,
+                    "requested_micro": requested_micro,
+                    "charged_micro": charged_micro,
+                    "unpaid_micro": unpaid_micro,
+                    "result": result,
+                    "settled_at": datetime.now(UTC).isoformat(),
+                }
+            )
+            .eq("report_key", report_key)
+            .execute()
+        )
     except Exception:
         logger.exception("Could not record the outcome of usage report %s", report_key)

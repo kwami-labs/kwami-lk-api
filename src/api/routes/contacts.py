@@ -42,9 +42,9 @@ async def list_contacts(
     q: Annotated[str | None, Query(alias="q")] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 100,
 ):
-    get_owned_kwami(user.id, kwami_id)
+    await get_owned_kwami(user.id, kwami_id)
     return {
-        "contacts": list_contacts_for_kwami(user.id, kwami_id, query=q, limit=limit),
+        "contacts": await list_contacts_for_kwami(user.id, kwami_id, query=q, limit=limit),
     }
 
 
@@ -53,12 +53,12 @@ async def create_contact_route(
     body: ContactUpsertRequest,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
-    get_owned_kwami(user.id, body.kwami_id)
+    await get_owned_kwami(user.id, body.kwami_id)
     try:
         phone_number = normalize_phone_number(body.phone_number, settings.twilio_phone_country)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    contact = create_contact(
+    contact = await create_contact(
         user_id=user.id,
         kwami_id=body.kwami_id,
         display_name=body.display_name.strip(),
@@ -82,7 +82,7 @@ async def update_contact_route(
     body: ContactUpsertRequest,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
-    existing = get_contact(user.id, contact_id)
+    existing = await get_contact(user.id, contact_id)
     if existing["kwami_id"] != body.kwami_id:
         raise HTTPException(status_code=400, detail="Contact does not belong to this kwami")
     updates: dict[str, Any] = {
@@ -98,7 +98,7 @@ async def update_contact_route(
         "tiktok": body.tiktok.strip() if body.tiktok and body.tiktok.strip() else None,
         "metadata": body.metadata or {},
     }
-    updated = update_contact(user_id=user.id, contact_id=contact_id, updates=updates)
+    updated = await update_contact(user_id=user.id, contact_id=contact_id, updates=updates)
     return {"contact": updated}
 
 
@@ -108,9 +108,9 @@ async def delete_contact_route(
     user: Annotated[AuthUser, Depends(require_auth)],
     kwami_id: Annotated[str, Query(alias="kwamiId")],
 ):
-    get_owned_kwami(user.id, kwami_id)
-    existing = get_contact(user.id, contact_id)
+    await get_owned_kwami(user.id, kwami_id)
+    existing = await get_contact(user.id, contact_id)
     if existing["kwami_id"] != kwami_id:
         raise HTTPException(status_code=400, detail="Contact does not belong to this kwami")
-    delete_contact(user.id, contact_id)
+    await delete_contact(user.id, contact_id)
     return {"ok": True}

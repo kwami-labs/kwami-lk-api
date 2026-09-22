@@ -23,10 +23,17 @@ logger = logging.getLogger("kwami-api.stripe")
 
 
 def _init_stripe() -> None:
-    """Initialize the Stripe SDK with the configured secret key."""
+    """Initialize the Stripe SDK with the configured secret key.
+
+    The async request path needs an async HTTP client as well as the key. Stripe
+    ships `HTTPXClient` for exactly this; without it the `*_async` methods raise
+    at call time rather than falling back to the blocking transport.
+    """
     if not settings.stripe_secret_key:
         raise RuntimeError("STRIPE_SECRET_KEY must be set for payment processing")
     stripe.api_key = settings.stripe_secret_key
+    if stripe.default_http_client is None:
+        stripe.default_http_client = stripe.HTTPXClient()
 
 
 async def create_checkout_session(
@@ -55,7 +62,7 @@ async def create_checkout_session(
     if not pack:
         raise ValueError(f"Invalid pack_id: {pack_id}. Must be one of {list(CREDIT_PACKS.keys())}")
 
-    session = stripe.checkout.Session.create(
+    session = await stripe.checkout.Session.create_async(
         payment_method_types=["card"],
         mode="payment",
         line_items=[
@@ -81,7 +88,9 @@ async def create_checkout_session(
         client_reference_id=user_id,
     )
 
-    logger.info(f"Created Stripe checkout session {session.id} for user {user_id}, pack={pack_id}")
+    logger.info(
+        "Created Stripe checkout session %s for user %s, pack=%s", session.id, user_id, pack_id
+    )
 
     return session.url
 
@@ -105,7 +114,7 @@ async def handle_webhook_event(payload: bytes, sig_header: str) -> dict:
         raise RuntimeError("STRIPE_WEBHOOK_SECRET must be set")
 
     try:
-        event = stripe.Webhook.construct_event(
+        signed_event = stripe.Webhook.construct_event(
             payload,
             sig_header,
             settings.stripe_webhook_secret,
@@ -113,25 +122,36 @@ async def handle_webhook_event(payload: bytes, sig_header: str) -> dict:
     except stripe.SignatureVerificationError as e:
         # `stripe.error` is gone in stripe>=13; only a lazy module alias kept the
         # old path working, and it will not survive the next major.
-        logger.warning(f"Stripe webhook signature verification failed: {e}")
+        logger.warning("Stripe webhook signature verification failed: %s", e)
         raise ValueError("Invalid signature") from e
+
+    # `to_dict()` at the boundary, once, and plain dicts from here down.
+    #
+    # stripe>=15 stopped making StripeObject a subclass of dict, so `.get()`,
+    # iteration and `dict(event)` are all gone. The failure mode was not a clean
+    # break either: `event.get("id")` raised AttributeError, but `dict(event)`
+    # quietly returned `{}` -- an idempotency claim recorded with an empty
+    # payload. Converting here keeps every handler below on the `dict` their
+    # signatures already promise, and keeps this module off the SDK's object
+    # model, which has now changed shape twice.
+    event = signed_event.to_dict()
 
     event_id = event.get("id", "")
     event_type = event["type"]
-    logger.info(f"Received Stripe webhook: {event_type} ({event_id})")
+    logger.info("Received Stripe webhook: %s (%s)", event_type, event_id)
 
     # Claim before processing. Stripe retries on any non-2xx and can redeliver an
     # event it already sent; without this, each retry credited the user again.
-    if not claim_event("stripe", event_id, event_type, payload=dict(event)):
+    if not await claim_event("stripe", event_id, event_type, payload=event):
         return {"status": "duplicate", "event_id": event_id, "event_type": event_type}
 
     try:
         result = await _dispatch_event(event_type, event["data"]["object"])
     except Exception as exc:
-        complete_event("stripe", event_id, status="failed", error=str(exc)[:500])
+        await complete_event("stripe", event_id, status="failed", error=str(exc)[:500])
         raise
 
-    complete_event(
+    await complete_event(
         "stripe",
         event_id,
         status="processed" if result.get("status") != "ignored" else "ignored",
@@ -191,13 +211,15 @@ async def _handle_checkout_completed(session: dict) -> dict:
 
     if not user_id or not pack_id:
         logger.error(
-            f"Checkout session {stripe_session_id} missing metadata: "
-            f"user_id={user_id}, pack_id={pack_id}"
+            "Checkout session %s missing metadata: user_id=%s, pack_id=%s",
+            stripe_session_id,
+            user_id,
+            pack_id,
         )
         return {"status": "error", "reason": "missing metadata"}
 
     if payment_status != "paid":
-        logger.warning(f"Checkout session {stripe_session_id} not paid: {payment_status}")
+        logger.warning("Checkout session %s not paid: %s", stripe_session_id, payment_status)
         return {"status": "skipped", "reason": f"payment_status={payment_status}"}
 
     credits = int(credits_str)
@@ -227,7 +249,10 @@ async def _handle_checkout_completed(session: dict) -> dict:
     )
 
     logger.info(
-        f"Credited {credits:,} credits to user {user_id} (Stripe session: {stripe_session_id})"
+        "Credited %s credits to user %s (Stripe session: %s)",
+        f"{credits:,}",
+        user_id,
+        stripe_session_id,
     )
 
     return {
@@ -255,7 +280,7 @@ async def _handle_refund(charge: dict) -> dict:
 
     sb = get_supabase_admin()
     lookup = (
-        sb.table("credit_transactions")
+        await sb.table("credit_transactions")
         .select("id, user_id, amount, metadata")
         .eq("type", "purchase")
         .eq("metadata->>stripe_payment_intent", str(payment_intent))

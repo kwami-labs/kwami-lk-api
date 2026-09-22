@@ -66,8 +66,7 @@ async def _find_inbound_trunk(lkapi: livekit_api.LiveKitAPI, trunk_id: str) -> o
 
 def _merged_numbers(existing: object, phone_number: str) -> list[str]:
     current = list(getattr(existing, "numbers", None) or [])
-    merged = list(dict.fromkeys([*current, phone_number]))
-    return merged
+    return list(dict.fromkeys([*current, phone_number]))
 
 
 async def sync_shared_livekit_trunks(phone_number: str) -> dict[str, object]:

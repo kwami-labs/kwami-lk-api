@@ -2,11 +2,14 @@
 
 All notable changes to this service are documented here. This file is generated from the commit history by semantic-release — do not edit it by hand.
 
-`v0.1.0` is a baseline tag placed at the commit that introduced this automation. Everything before it lives in the git log rather than here: it shipped before there was a release line to put it on.
+The service is 1.x: `feat!` or a `BREAKING CHANGE:` footer bumps the major, `feat` the minor, and every other conventional type a patch. `v0.1.0` and `v0.1.1` are the pre-1.0 line; everything before `v0.1.0` lives in the git log rather than here.
 
-The versioning rules, and why breaking changes bump minor while the service is pre-1.0, are in [docs/deployment.md](docs/deployment.md#release) and [CONTRIBUTING.md](CONTRIBUTING.md#releases).
+## [0.1.1](https://github.com/kwami-labs/kwami-lk-api/compare/v0.1.0...v0.1.1) (2026-09-16)
 
-## [0.1.0] — 2026-09-17
+Dependency and tooling bumps only; no `feat`, `fix`, `perf` or `revert` commit, so
+semantic-release cut the patch without a heading under it.
+
+## [0.1.0](https://github.com/kwami-labs/kwami-lk-api/releases/tag/v0.1.0) (2026-09-16)
 
 Baseline release. The service already included, at the tag:
 
@@ -19,5 +22,3 @@ Baseline release. The service already included, at the tag:
 - Twilio and SendGrid webhooks, signature-verified, replay-guarded
 - Admin provider-invoice reconciliation
 - CI / CD: Conventional Commits, coverage floors, semantic-release, GHCR, Fly.io
-
-Subsequent versions are appended below this heading by semantic-release.
