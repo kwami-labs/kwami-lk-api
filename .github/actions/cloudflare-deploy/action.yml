@@ -6,12 +6,12 @@ description: >-
 # Two rules:
 #   1. A tier with a token but no account id is an error, not a skip.
 #   2. Only a tier with neither token nor account id is skipped, and only when skip-if-unconfigured.
-# Production / staging / development all pass skip-if-unconfigured=false: Cloudflare is the
+# Production / development both pass skip-if-unconfigured=false: Cloudflare is the
 # live origin, so a missing credential is a red deploy, not a quiet success.
 
 inputs:
   wrangler-env:
-    description: Wrangler environment name (development, staging, production). Empty uses the top-level config.
+    description: Wrangler environment name (development, production). Empty uses the top-level config.
     default: ''
   cloudflare-api-token:
     description: Cloudflare API token with Workers Scripts Write and Containers Write.

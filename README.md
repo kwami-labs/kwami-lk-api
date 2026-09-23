@@ -145,13 +145,14 @@ tests/
 
 Deploys are automatic. A green `ci` run triggers [`cd.yml`](.github/workflows/cd.yml): `main`
 cuts the version and the changelog with semantic-release, publishes the image to GHCR, and
-deploys the production Worker + Container; `stg` and `dev` deploy their channel Workers.
+deploys the production Worker + Container at `https://api.kwami.io`; `dev` deploys
+`kwami-lk-api-dev` at `https://dev.api.kwami.io`.
 Nothing is released or shipped from a commit whose tests did not pass, and no version is ever
 bumped in a pull request.
 
 - **Cloudflare** — the live origin, on Admin@nexow.ai's account. [`infra/`](infra) holds
-  `wrangler.jsonc` and the Worker that proxies into the FastAPI Container. Channel URLs:
-  `https://kwami-lk-api.nexow.workers.dev` (production), `-stg` and `-dev`. Needs
+  `wrangler.jsonc` and the Worker that proxies into the FastAPI Container. Public URLs:
+  `https://api.kwami.io` (production) and `https://dev.api.kwami.io` (development). Needs
   `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`; a missing credential fails the deploy.
 - **GHCR** — `ghcr.io/kwami-labs/kwami-lk-api`, tagged with the version, the minor, `main` and the
   full commit SHA.

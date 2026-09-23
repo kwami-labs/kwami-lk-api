@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Prompt for Worker secrets via wrangler (interactive — values are never echoed
-# as argv). Usage: ./infra/scripts/put-secrets.sh [development|staging|production]
+# as argv). Usage: ./infra/scripts/put-secrets.sh [development|production]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -30,7 +30,7 @@ optional=(
 env_args=()
 if [ -n "$ENV_NAME" ]; then
   env_args=(--env "$ENV_NAME")
-  if [ "$ENV_NAME" = production ] || [ "$ENV_NAME" = staging ]; then
+  if [ "$ENV_NAME" = production ]; then
     required+=(SUPABASE_URL SUPABASE_SECRET_KEY KWAMI_API_KEY)
   fi
 fi
