@@ -1,0 +1,147 @@
+# One-shot Cloudflare cutover: drop kwami-lk-api-stg, deploy main+dev Workers,
+# and attach api.kwami.io / dev.api.kwami.io as custom domains.
+#
+# Run: gh workflow run cf-cutover.yml --ref chore/drop-stg-api-domains
+# Safe to re-run: delete is idempotent; domain attach ignores "already exists".
+name: cf-cutover
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cutover:
+    name: drop stg · deploy · attach domains
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: production
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: infra/pnpm-lock.yaml
+
+      - name: Install Worker toolchain
+        working-directory: infra
+        run: pnpm install --frozen-lockfile
+
+      - name: Require Cloudflare credentials
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID || '132a7551ad4a90e979a18f7c4cfd364e' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] || [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID required on the production Environment."
+            exit 1
+          fi
+          echo "account=${CLOUDFLARE_ACCOUNT_ID}" >> "$GITHUB_ENV"
+
+      - name: Delete staging Worker kwami-lk-api-stg
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ env.account }}
+        run: |
+          set -euo pipefail
+          code="$(curl -sS -o /tmp/del.json -w '%{http_code}' -X DELETE \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts/kwami-lk-api-stg" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")"
+          echo "API DELETE kwami-lk-api-stg status=${code}"
+          cat /tmp/del.json
+          echo
+          # 200 = deleted, 404 = already gone
+          if [ "$code" != "200" ] && [ "$code" != "404" ]; then
+            echo "::error::Failed to delete kwami-lk-api-stg"
+            exit 1
+          fi
+
+      - name: Deploy production Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ env.account }}
+        working-directory: infra
+        run: pnpm exec wrangler deploy --env production
+
+      - name: Deploy development Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ env.account }}
+        working-directory: infra
+        run: pnpm exec wrangler deploy --env development
+
+      - name: Attach custom domains
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ env.account }}
+        run: |
+          set -euo pipefail
+
+          zone_json="$(curl -sS \
+            "https://api.cloudflare.com/client/v4/zones?name=kwami.io" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")"
+          zone_id="$(printf '%s' "$zone_json" | python3 -c 'import json,sys; r=json.load(sys.stdin); print(r["result"][0]["id"] if r.get("success") and r.get("result") else "")')"
+          if [ -z "$zone_id" ]; then
+            echo "::error::Could not resolve zone id for kwami.io"
+            printf '%s\n' "$zone_json"
+            exit 1
+          fi
+          echo "zone_id=${zone_id}"
+
+          attach() {
+            local hostname="$1" service="$2"
+            echo "Attaching ${hostname} → ${service}"
+            code="$(curl -sS -o /tmp/domain.json -w '%{http_code}' -X PUT \
+              "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/domains" \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data "{\"hostname\":\"${hostname}\",\"service\":\"${service}\",\"zone_id\":\"${zone_id}\"}")"
+            echo "status=${code}"
+            cat /tmp/domain.json
+            echo
+            # 200 OK; also accept conflicts that mean already attached to this service
+            if [ "$code" != "200" ]; then
+              if python3 -c 'import json; d=json.load(open("/tmp/domain.json")); raise SystemExit(0 if any("already" in str(e).lower() for e in d.get("errors",[])) else 1)'; then
+                echo "Already attached (ok)."
+              else
+                echo "::error::Failed to attach ${hostname}"
+                exit 1
+              fi
+            fi
+          }
+
+          attach api.kwami.io kwami-lk-api
+          attach dev.api.kwami.io kwami-lk-api-dev
+
+      - name: Verify /health
+        run: |
+          set -euo pipefail
+          for url in https://api.kwami.io/health https://dev.api.kwami.io/health; do
+            echo "GET ${url}"
+            # DNS/cert can lag a minute after attach
+            ok=false
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              code="$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 20 "$url" || echo err)"
+              body="$(head -c 200 /tmp/health.json 2>/dev/null || true)"
+              echo "  attempt ${i}: ${code} ${body}"
+              if [ "$code" = "200" ] && echo "$body" | grep -q healthy; then
+                ok=true
+                break
+              fi
+              sleep 15
+            done
+            if [ "$ok" != true ]; then
+              echo "::error::${url} did not become healthy"
+              exit 1
+            fi
+          done
