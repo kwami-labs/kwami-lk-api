@@ -6,7 +6,6 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "deploy:development": "wrangler deploy --env development",
-    "deploy:staging": "wrangler deploy --env staging",
     "deploy:production": "wrangler deploy --env production",
     "types": "wrangler types",
     "secret:list": "wrangler secret list",

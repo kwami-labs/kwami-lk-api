@@ -29,8 +29,8 @@ before discussing the issue anywhere else.
 | `0.1.x` | no — superseded by `1.0.0` |
 
 Only `main` is the supported production deploy, and only the latest `1.x` release is supported.
-There is no backport branch: a fix goes on `main` and ships in the next release. `dev` and `stg`
-each deploy their own Cloudflare Worker. See [Releases](./CONTRIBUTING.md#releases).
+There is no backport branch: a fix goes on `main` and ships in the next release. `dev`
+deploys its own Cloudflare Worker at `dev.api.kwami.io`. See [Releases](./CONTRIBUTING.md#releases).
 
 Fixes land on `main` and ship on the next green run. Do not assume a vulnerability is patched on
 the deployed service until the matching commit is on `main` and `cd` has gone green.
