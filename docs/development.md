@@ -119,7 +119,6 @@ src/                    application
   services/             integrations and ledger
 config/                 LiveKit plugin YAML
 migrations/             numbered SQL, applied by scripts/migrate.py
-supabase/migrations/    hosted-project mirror
 tests/
   unit/ api/ core/      hermetic
   integration/          Postgres
