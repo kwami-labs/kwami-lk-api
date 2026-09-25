@@ -28,7 +28,7 @@
     "API_PORT": "8080",
     "DEBUG": "false",
     "ENABLE_DOCS": "false",
-    "CONTAINER_INSTANCES": "2",
+    "CONTAINER_INSTANCES": "3",
     "WEB_CONCURRENCY": "2",
     "APP_PUBLIC_URL": "https://api.kwami.io",
     "CORS_ORIGINS": "https://kwami.io,https://kwami-app.nexow.workers.dev"
@@ -43,7 +43,7 @@
       // Build context is the repo root (parent of this config).
       "image": "../Dockerfile",
       "instance_type": "standard-1",
-      "max_instances": 2
+      "max_instances": 3
     }
   ],
   "durable_objects": {
