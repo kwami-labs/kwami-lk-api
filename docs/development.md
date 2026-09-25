@@ -37,7 +37,7 @@ OpenAPI is at `/docs`, `/redoc` and `/openapi.json` outside production.
 Set `ENABLE_DOCS=true` if you need them with `APP_ENV=production`; the flag
 opens and closes all three together.
 
-`APP_ENV` is `development` | `staging` | `production`. Outside
+`APP_ENV` is `development` | `production`. Outside
 production, credits fail-open on a check error and wallets default on.
 Neither is true in production unless you set the flags explicitly.
 
@@ -119,7 +119,6 @@ src/                    application
   services/             integrations and ledger
 config/                 LiveKit plugin YAML
 migrations/             numbered SQL, applied by scripts/migrate.py
-supabase/migrations/    hosted-project mirror
 tests/
   unit/ api/ core/      hermetic
   integration/          Postgres

@@ -28,10 +28,14 @@
     "API_PORT": "8080",
     "DEBUG": "false",
     "ENABLE_DOCS": "false",
-    "CONTAINER_INSTANCES": "2",
+    "CONTAINER_INSTANCES": "3",
     "WEB_CONCURRENCY": "2",
     "APP_PUBLIC_URL": "https://api.kwami.io",
     "CORS_ORIGINS": "https://kwami.io,https://kwami-app.nexow.workers.dev"
+  },
+  // Names only. Values come from `wrangler secret put`. Non-inheritable, so each env repeats this.
+  "secrets": {
+    "required": ["LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"]
   },
   "containers": [
     {
@@ -39,7 +43,7 @@
       // Build context is the repo root (parent of this config).
       "image": "../Dockerfile",
       "instance_type": "standard-1",
-      "max_instances": 2
+      "max_instances": 3
     }
   ],
   "durable_objects": {
@@ -78,6 +82,9 @@
         "APP_PUBLIC_URL": "https://dev.api.kwami.io",
         "CORS_ORIGINS": "https://dev.kwami.io,https://kwami-app-dev.nexow.workers.dev,http://localhost:5173"
       },
+      "secrets": {
+        "required": ["LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"]
+      },
       "containers": [
         {
           "class_name": "KwamiApiContainer",
@@ -107,6 +114,9 @@
         "WEB_CONCURRENCY": "2",
         "APP_PUBLIC_URL": "https://api.kwami.io",
         "CORS_ORIGINS": "https://kwami.io,https://kwami-app.nexow.workers.dev"
+      },
+      "secrets": {
+        "required": ["LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"]
       },
       "containers": [
         {

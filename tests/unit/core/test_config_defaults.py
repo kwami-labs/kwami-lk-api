@@ -66,9 +66,8 @@ class TestCreditsFailOpen:
         monkeypatch.delenv("CREDITS_FAIL_OPEN_ON_CHECK_ERROR", raising=False)
         assert _default_credits_fail_open() is False
 
-    @pytest.mark.parametrize("env", ["development", "staging"])
-    def test_everywhere_else_fails_open_when_unset(self, monkeypatch, env):
-        monkeypatch.setenv("APP_ENV", env)
+    def test_development_fails_open_when_unset(self, monkeypatch):
+        monkeypatch.setenv("APP_ENV", "development")
         monkeypatch.delenv("CREDITS_FAIL_OPEN_ON_CHECK_ERROR", raising=False)
         assert _default_credits_fail_open() is True
 
@@ -156,7 +155,6 @@ class TestCorsOrigins:
     def test_a_wildcard_outside_production_is_allowed(self):
         """Local development is the reason the default is '*' at all."""
         assert _settings(CORS_ORIGINS="*", APP_ENV="development").cors_origins == ["*"]
-        assert _settings(CORS_ORIGINS="*", APP_ENV="staging").cors_origins == ["*"]
 
     def test_explicit_origins_in_production_are_accepted(self):
         assert _prod_settings().cors_origins == ["https://app.kwami.io"]
@@ -172,12 +170,10 @@ class TestCorsOrigins:
 class TestDerivedProperties:
     def test_is_production_tracks_app_env(self):
         assert _prod_settings().is_production is True
-        assert _settings(APP_ENV="staging").is_production is False
         assert _settings(APP_ENV="development").is_production is False
 
     def test_show_docs_is_open_outside_production_whatever_the_flag(self):
         assert _settings(APP_ENV="development", ENABLE_DOCS="false").show_docs is True
-        assert _settings(APP_ENV="staging", ENABLE_DOCS="false").show_docs is True
 
     def test_show_docs_needs_the_flag_in_production(self):
         assert _prod_settings(ENABLE_DOCS="false").show_docs is False
@@ -242,10 +238,13 @@ class TestProductionFailsClosed:
     def test_a_complete_production_config_boots(self):
         assert _prod_settings().is_production is True
 
-    @pytest.mark.parametrize("app_env", ["development", "staging"])
-    def test_nothing_is_required_outside_production(self, app_env):
+    def test_nothing_is_required_outside_production(self):
         """A laptop with an empty .env has to keep working."""
-        assert _settings(APP_ENV=app_env, CORS_ORIGINS="*").app_env == app_env
+        assert _settings(APP_ENV="development", CORS_ORIGINS="*").app_env == "development"
+
+    def test_staging_is_not_an_environment(self):
+        with pytest.raises(ValidationError):
+            _settings(APP_ENV="staging")
 
     def test_a_cors_wildcard_is_refused(self):
         assert "CORS_ORIGINS is '*'" in _refusal(CORS_ORIGINS="*")
