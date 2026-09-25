@@ -89,7 +89,7 @@ The **token** endpoint expects a POST body with optional `roomName`, `participan
 | `KWAMI_API_KEY` | For agent | Shared secret for agent usage reporting (X-API-Key) |
 | `CORS_ORIGINS` | No | Comma-separated origins (default `*` in dev) |
 | `API_HOST` / `API_PORT` | No | Bind address and port (default `0.0.0.0:8080`) |
-| `APP_ENV` | No | `development` \| `staging` \| `production` |
+| `APP_ENV` | No | `development` \| `production` |
 | `ENABLE_DOCS` | No | Set to `true` to expose `/docs`, `/redoc` and `/openapi.json` in production |
 | `RATE_LIMIT_ENABLED` | No | Per-caller rate limits (default on) |
 | `RATE_LIMIT_STORAGE_URI` | No | `memory://` (per worker) or a `redis://` URL for exact limits across machines |
