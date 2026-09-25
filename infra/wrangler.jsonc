@@ -30,8 +30,12 @@
     "ENABLE_DOCS": "false",
     "CONTAINER_INSTANCES": "2",
     "WEB_CONCURRENCY": "2",
-    "APP_PUBLIC_URL": "https://kwami-lk-api.nexow.workers.dev",
+    "APP_PUBLIC_URL": "https://api.kwami.io",
     "CORS_ORIGINS": "https://kwami.io,https://kwami-app.nexow.workers.dev"
+  },
+  // Names only. Values come from `wrangler secret put`. Non-inheritable, so each env repeats this.
+  "secrets": {
+    "required": ["LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"]
   },
   "containers": [
     {
@@ -75,8 +79,11 @@
         "ENABLE_DOCS": "true",
         "CONTAINER_INSTANCES": "1",
         "WEB_CONCURRENCY": "1",
-        "APP_PUBLIC_URL": "https://kwami-lk-api-dev.nexow.workers.dev",
-        "CORS_ORIGINS": "https://kwami-app-dev.nexow.workers.dev,http://localhost:5173"
+        "APP_PUBLIC_URL": "https://dev.api.kwami.io",
+        "CORS_ORIGINS": "https://dev.kwami.io,https://kwami-app-dev.nexow.workers.dev,http://localhost:5173"
+      },
+      "secrets": {
+        "required": ["LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"]
       },
       "containers": [
         {
@@ -84,36 +91,6 @@
           "image": "../Dockerfile",
           "instance_type": "standard-1",
           "max_instances": 1
-        }
-      ]
-    },
-    "staging": {
-      "name": "kwami-lk-api-stg",
-      "durable_objects": {
-        "bindings": [
-          {
-            "name": "KWAMI_API",
-            "class_name": "KwamiApiContainer"
-          }
-        ]
-      },
-      "vars": {
-        "APP_ENV": "staging",
-        "API_HOST": "0.0.0.0",
-        "API_PORT": "8080",
-        "DEBUG": "false",
-        "ENABLE_DOCS": "false",
-        "CONTAINER_INSTANCES": "2",
-        "WEB_CONCURRENCY": "1",
-        "APP_PUBLIC_URL": "https://kwami-lk-api-stg.nexow.workers.dev",
-        "CORS_ORIGINS": "https://kwami-app-stg.nexow.workers.dev"
-      },
-      "containers": [
-        {
-          "class_name": "KwamiApiContainer",
-          "image": "../Dockerfile",
-          "instance_type": "standard-1",
-          "max_instances": 2
         }
       ]
     },
@@ -135,8 +112,11 @@
         "ENABLE_DOCS": "false",
         "CONTAINER_INSTANCES": "3",
         "WEB_CONCURRENCY": "2",
-        "APP_PUBLIC_URL": "https://kwami-lk-api.nexow.workers.dev",
+        "APP_PUBLIC_URL": "https://api.kwami.io",
         "CORS_ORIGINS": "https://kwami.io,https://kwami-app.nexow.workers.dev"
+      },
+      "secrets": {
+        "required": ["LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"]
       },
       "containers": [
         {

@@ -234,7 +234,6 @@ Python prices a usage item (`src/services/pricing.py`) and applies markup
 | `APP_ENV` | Docs | Credits fail-open | Wallets |
 |-----------|------|-------------------|---------|
 | `development` | on | on (unless set) | on (unless set) |
-| `staging` | on | on (unless set) | on (unless set) |
 | `production` | off unless `ENABLE_DOCS=true` (UIs *and* `/openapi.json`) | off | off unless `WALLET_ENABLED=true` |
 
 The Cloudflare Worker terminates TLS and proxies into the Container. Uvicorn

@@ -17,11 +17,10 @@ on:
   workflow_run:
     workflows: [ci]
     types: [completed]
-    # Three branches, three different sets of jobs:
+    # Two branches, two different sets of jobs:
     #   main — release, publish, deploy production Worker + Container.
-    #   stg  — deploy staging Worker + Container. No release, no image.
     #   dev  — deploy development Worker + Container. No release, no image.
-    branches: [main, stg, dev]
+    branches: [main, dev]
 
 # Keyed on the branch that triggered ci, NOT github.ref: a workflow_run event always runs in the
 # context of the default branch, so every run — a `main` release and a `dev` deploy alike — would
@@ -320,29 +319,6 @@ jobs:
       - uses: ./.github/actions/cloudflare-deploy
         with:
           wrangler-env: production
-          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID }}
-          skip-if-unconfigured: 'false'
-
-  # Staging. Deliberately NOT `needs: [release, publish]`: those jobs are gated to `main`,
-  # and a job that needs a skipped job is itself skipped.
-  deploy-staging:
-    name: deploy · staging
-    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'stg'
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    environment: stg
-    concurrency:
-      group: deploy-staging
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-
-      - uses: ./.github/actions/cloudflare-deploy
-        with:
-          wrangler-env: staging
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID }}
           skip-if-unconfigured: 'false'

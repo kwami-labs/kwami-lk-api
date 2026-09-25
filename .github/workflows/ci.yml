@@ -7,9 +7,9 @@
 # wall-clock nothing.
 name: ci
 
-# `dev`, `stg` and `main` are tested; `main` is what releases. Release, publish and the
+# `dev` and `main` are tested; `main` is what releases. Release, publish and the
 # Cloudflare deploys all live in cd.yml, which runs only after this workflow goes green
-# on the same commit (`main` → production, `stg` → staging, `dev` → development).
+# on the same commit (`main` → production, `dev` → development).
 #
 # A push to `dev` runs the FAST LANE only: pr-title is not applicable, and lint, unit and
 # migrations run. `dev` is the branch people push to repeatedly, and the rest — a Postgres
@@ -23,10 +23,10 @@ name: ci
 on:
   pull_request:
   push:
-    branches: [main, stg, dev]
+    branches: [main, dev]
 
 # A force-push should cancel the run it superseded. `main` is excluded: those runs are what CD
-# keys off, so they always finish. `dev` and `stg` still deploy after ci, but a superseded
+# keys off, so they always finish. `dev` still deploys after ci, but a superseded
 # run's deploy is replaced by the newer one, so cancelling the test gate is fine.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}

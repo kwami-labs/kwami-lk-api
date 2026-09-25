@@ -256,16 +256,12 @@ cf-deploy: ## wrangler deploy (top-level / default Worker)
 cf-deploy-development: ## wrangler deploy --env development
 	pnpm --dir infra deploy:development
 
-.PHONY: cf-deploy-staging
-cf-deploy-staging: ## wrangler deploy --env staging
-	pnpm --dir infra deploy:staging
-
 .PHONY: cf-deploy-production
 cf-deploy-production: ## wrangler deploy --env production
 	pnpm --dir infra deploy:production
 
 .PHONY: cf-secrets
-cf-secrets: ## Interactive wrangler secret put (ENV=development|staging|production)
+cf-secrets: ## Interactive wrangler secret put (ENV=development|production)
 	./infra/scripts/put-secrets.sh $(ENV)
 
 .PHONY: tf-init

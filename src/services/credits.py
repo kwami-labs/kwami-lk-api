@@ -9,6 +9,8 @@ from datetime import UTC, datetime
 from decimal import ROUND_CEILING, ROUND_HALF_EVEN, Decimal
 from typing import Any
 
+from supabase import AsyncClient, create_async_client
+
 from src.core.config import settings
 from src.services.pricing import (
     ALL_PRICING,
@@ -22,7 +24,6 @@ from src.services.pricing import (
     calculate_realtime_cost,
     calculate_token_cost,
 )
-from supabase import AsyncClient, create_async_client
 
 logger = logging.getLogger("kwami-api.credits")
 
