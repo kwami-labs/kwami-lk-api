@@ -43,7 +43,7 @@ class Settings(BaseSettings):
 
     # App
     app_name: str = "kwami-lk-api"
-    app_env: Literal["development", "staging", "production"] = "development"
+    app_env: Literal["development", "production"] = "development"
     debug: bool = False
 
     # API Server - must listen on 0.0.0.0 and port from Fly.io (PORT) or API_PORT

@@ -9,12 +9,10 @@ Nothing is released or shipped from a commit whose tests did not pass.
 flowchart TD
   PR["pull request"] --> CI["ci.yml"]
   DEV["push to dev"] --> FAST["ci fast lane: lint, unit, migrations"]
-  STG["push to stg"] --> CI
   MAIN["push to main"] --> CI
 
   CI -->|red| STOP[nothing]
   CI -->|green on main| CD["cd.yml"]
-  CI -->|green on stg| STGDEP["wrangler deploy --env staging"]
   FAST -->|green on dev| DEVDEP["wrangler deploy --env development"]
 
   CD --> REL["semantic-release: tag + CHANGELOG + GitHub Release"]
@@ -24,21 +22,20 @@ flowchart TD
 
 Cloudflare is the live origin. The same `Dockerfile` is built twice on a
 `main` run: once into GHCR (the archive) and once as the Container
-behind the Worker. `stg` and `dev` skip the archive and deploy their
-channel Workers only.
+behind the Worker. `dev` skips the archive and deploys its channel Worker
+only.
 
 | Event | lint / unit / migrations | integration / coverage / build | vuln | cd |
 |-------|--------------------------|--------------------------------|------|----|
 | pull request | yes | yes | advisory | no |
-| push `dev` | yes | no | no | deploy `kwami-lk-api-dev` |
-| push `stg` | yes | yes | advisory | deploy `kwami-lk-api-stg` |
-| push `main` | yes | yes | advisory | **release, publish, deploy `kwami-lk-api`** |
+| push `dev` | yes | no | no | deploy `kwami-lk-api-dev` → `dev.api.kwami.io` |
+| push `main` | yes | yes | advisory | **release, publish, deploy `kwami-lk-api` → `api.kwami.io`** |
 
 The fast lane on `dev` is a shorter feedback loop, not a lower bar. Every
 pull request still runs the full suite, so nothing reaches `main` without
 it.
 
-`main` CI runs are never cancelled. A force-push on `dev` or `stg`
+`main` CI runs are never cancelled. A force-push on `dev`
 cancels the run it superseded.
 
 ## Release
@@ -152,11 +149,11 @@ Admin@nexow.ai's account (`132a7551ad4a90e979a18f7c4cfd364e`).
 
 | GitHub Environment | Wrangler env | Worker | URL |
 |---|---|---|---|
-| `production` | `production` | `kwami-lk-api` | `https://kwami-lk-api.nexow.workers.dev` |
-| `stg` | `staging` | `kwami-lk-api-stg` | `https://kwami-lk-api-stg.nexow.workers.dev` |
-| `development` | `development` | `kwami-lk-api-dev` | `https://kwami-lk-api-dev.nexow.workers.dev` |
+| `production` | `production` | `kwami-lk-api` | `https://api.kwami.io` |
+| `development` | `development` | `kwami-lk-api-dev` | `https://dev.api.kwami.io` |
 
-`kwami-app` bakes `VITE_API_URL` to the matching URL at build time.
+`kwami-app` bakes `VITE_API_URL` to the matching URL at build time
+(`https://api.kwami.io` on `main`, `https://dev.api.kwami.io` on `dev`).
 
 Run it by hand from `infra/` with `pnpm install && pnpm exec wrangler deploy --env <env>`.
 

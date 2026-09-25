@@ -5,11 +5,11 @@ variable "account_id" {
 
 variable "environment" {
   type        = string
-  description = "Tier this stack configures: development, staging, or production."
+  description = "Tier this stack configures: development or production."
 
   validation {
-    condition     = contains(["development", "staging", "production"], var.environment)
-    error_message = "environment must be development, staging, or production."
+    condition     = contains(["development", "production"], var.environment)
+    error_message = "environment must be development or production."
   }
 }
 
@@ -33,7 +33,7 @@ variable "zone_name" {
 variable "api_hostname" {
   type        = string
   default     = ""
-  description = "Public hostname, e.g. api-dev.kwami.io. Leave empty until cutover."
+  description = "Public hostname, e.g. api.kwami.io or dev.api.kwami.io. Leave empty until cutover."
 }
 
 variable "enable_custom_domain" {

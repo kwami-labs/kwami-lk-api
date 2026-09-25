@@ -1,9 +1,8 @@
 # Data model
 
 Postgres is the system of record. The schema lives in `migrations/` as
-numbered SQL files. A parallel history exists under `supabase/migrations/`
-for the hosted project; `scripts/migrate.py` applies `migrations/` and is
-what CI and `make migrate` run.
+numbered SQL files. `scripts/migrate.py` applies them; that is what CI
+and `make migrate` run.
 
 Connection comes from `DATABASE_URL`. Files run in numeric-prefix order
 inside a transaction. A file whose first line is `-- +no-transaction`
@@ -128,22 +127,15 @@ enabled. Policies are `auth.uid() = user_id` (or a join through
 protect direct PostgREST access and anything that forgets the service
 role.
 
-## Dual migration trees
-
-`supabase/migrations/` is what `supabase db push` / hosted previews
-apply. `migrations/` is what this service's runner applies. They must
-describe the same schema. When you add a table:
+## Adding a migration
 
 1. Add `migrations/NNN_name.sql` with the table, indexes, RLS, grants.
-2. Mirror it under `supabase/migrations/YYYYMMDDHHMMSS_name.sql` if the
-   hosted project is the one production reads.
-3. Add or raise a coverage floor if you added Python that talks to it.
-4. Add an integration test if the file contains an RPC, a unique
+2. Add or raise a coverage floor if you added Python that talks to it.
+3. Add an integration test if the file contains an RPC, a unique
    index, or a policy.
 
 CI's `migrations` job refuses duplicate numeric prefixes and an
-unorderable set. It does not diff the two trees — that is a review
-check.
+unorderable set.
 
 ## Applying locally
 

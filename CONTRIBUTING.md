@@ -28,13 +28,13 @@ chore/bump-livekit
 
 The type prefix matches the Conventional Commit types below. Branches are deleted on merge.
 
-### `dev`, `stg` and `main`
+### `dev` and `main`
 
 **`main` is the branch that ships.** A green `ci` run on it cuts the version, publishes the image
-and deploys the production Cloudflare Worker + Container. `stg` and `dev` each deploy their own
-channel Worker (`kwami-lk-api-stg`, `kwami-lk-api-dev`).
+and deploys the production Cloudflare Worker + Container. `dev` deploys its own channel Worker
+(`kwami-lk-api-dev`) at `https://dev.api.kwami.io`.
 
-They are not tested the same way. A push to `stg` or a pull request runs everything; a push to
+They are not tested the same way. A pull request runs everything; a push to
 `dev` runs the **fast lane** — `lint`, `unit` and `migrations` — and skips `integration`,
 `coverage`, `vuln` and `build`. `dev` is the branch you push to repeatedly, and those cost minutes
 each: a Postgres service container, a network fetch against the advisory database, a full image
@@ -45,10 +45,9 @@ fast lane is a shorter feedback loop, not a lower bar.
 |---|---|---|---|---|
 | pull request | yes | yes | advisory | no |
 | push `dev` | yes | **no** | **no** | deploy `kwami-lk-api-dev` |
-| push `stg` | yes | yes | advisory | deploy `kwami-lk-api-stg` |
 | push `main` | yes | yes | advisory | **release, publish, deploy `kwami-lk-api`** |
 
-`cd.yml` listens to `main`, `stg` and `dev`. Release and publish are gated to `main`. Each
+`cd.yml` listens to `main` and `dev`. Release and publish are gated to `main`. Each
 branch deploys its Wrangler environment on Admin@nexow.ai's account. The deploy fails if
 `CLOUDFLARE_API_TOKEN` or `CLOUDFLARE_ACCOUNT_ID` is missing.
 
