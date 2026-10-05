@@ -51,8 +51,10 @@ the deployed service until the matching commit is on `main` and `cd` has gone gr
 
 ## Handling secrets
 
-- Never commit `.env` files, tokens, or keys. `.gitignore` blocks `.env` and `.env.*` except
-  [`.env.sample`](./.env.sample), which holds names and placeholder values only.
+- `.env` is tracked with git-crypt (ciphertext in git, plaintext after unlock). Do not
+  commit the key file, tokens, or a plaintext `.env`. `.env.*` overrides stay gitignored.
+  [`.env.sample`](./.env.sample) holds names and placeholder values only and stays plaintext.
+  On a new machine: `git-crypt unlock ~/.config/git-crypt/kwami.io/kwami-lk-api.key`.
 - Runtime configuration is validated at boot by [`src/core/config.py`](./src/core/config.py). The
   process refuses to start when a required variable is missing, rather than starting and 500ing.
 - Deploy credentials live in GitHub (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`) and as

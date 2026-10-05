@@ -11,14 +11,14 @@ install, run, test, and what the gate actually checks.
   between interpreters, so an unpinned runtime makes the floors flaky.
 - [uv](https://docs.astral.sh/uv/)
 - Docker, for the throwaway Postgres and for image builds
-- A filled-in `.env` from [`.env.sample`](../.env.sample) to run the
-  server (tests use `tests/.env.test` via `KWAMI_ENV_FILE`)
+- The shared `.env`, unlocked with git-crypt, to run the server
+  (tests use `tests/.env.test` via `KWAMI_ENV_FILE`)
 
 ## Setup
 
 ```bash
 uv sync --extra dev
-cp .env.sample .env          # then fill keys
+git-crypt unlock ~/.config/git-crypt/kwami.io/kwami-lk-api.key
 make hooks                   # refuse a direct push to main
 make test-db-up              # Postgres on 55433
 make check                   # the whole gate
