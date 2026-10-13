@@ -11,7 +11,7 @@
 # previously resolve different base layers -- exactly what a version number is supposed to rule
 # out, and the reason `uv` below was already pinned. Refresh deliberately, with the tag alongside
 # so a human can read which release it is.
-FROM python:3.11-slim@sha256:da047cb8f9d1d98e5c070f5300ba9f7274e33b8fc0e5be5ed88740aed1b95ba9 AS builder
+FROM python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170 AS builder
 
 # Pinned, not `:latest`, for the same reason as the base image.
 COPY --from=ghcr.io/astral-sh/uv:0.12.16 /uv /usr/local/bin/uv
@@ -25,7 +25,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 
-FROM python:3.11-slim@sha256:da047cb8f9d1d98e5c070f5300ba9f7274e33b8fc0e5be5ed88740aed1b95ba9 AS runtime
+FROM python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170 AS runtime
 
 # curl is here for HEALTHCHECK below. It was previously installed and never used.
 RUN apt-get update && apt-get install -y --no-install-recommends \
