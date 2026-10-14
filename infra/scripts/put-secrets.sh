@@ -23,6 +23,9 @@ optional=(
   SENDGRID_API_KEY
   SENDGRID_INBOUND_WEBHOOK_SECRET
   ADMIN_API_KEY
+  ADMIN_EMAILS
+  WALLET_ENABLED
+  WALLET_CUSTODY_PROVIDER
   APP_PUBLIC_URL
   CORS_ORIGINS
 )
@@ -31,7 +34,14 @@ env_args=()
 if [ -n "$ENV_NAME" ]; then
   env_args=(--env "$ENV_NAME")
   if [ "$ENV_NAME" = production ]; then
-    required+=(SUPABASE_URL SUPABASE_SECRET_KEY KWAMI_API_KEY)
+    # Mirrored from Settings._production_fails_closed — missing any of these
+    # makes the FastAPI process exit before :8080 binds.
+    required+=(
+      SUPABASE_URL
+      SUPABASE_SECRET_KEY
+      KWAMI_API_KEY
+      ADMIN_API_KEY
+    )
   fi
 fi
 
