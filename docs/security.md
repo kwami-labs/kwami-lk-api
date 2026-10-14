@@ -155,8 +155,12 @@ production. Do not turn it on there.
 
 ## Secrets
 
-Never commit `.env`. `.gitignore` blocks `.env` and `.env.*` except
-[`.env.sample`](../.env.sample), which holds names and placeholders.
+`.env` is tracked with git-crypt. The committed blob is ciphertext; the
+working tree stays plaintext after `git-crypt unlock`. `.env.*` overrides
+stay gitignored. [`.env.sample`](../.env.sample) holds names and placeholders
+and stays plaintext. The key file is not in git. On a new machine, install
+git-crypt and run
+`git-crypt unlock ~/.config/git-crypt/kwami.io/kwami-lk-api.key` once.
 
 Runtime configuration is validated at boot: `Settings._production_fails_closed`
 in [`src/core/config.py`](../src/core/config.py) refuses to start a

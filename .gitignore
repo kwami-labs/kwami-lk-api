@@ -135,11 +135,11 @@ celerybeat.pid
 *.sage.py
 
 # Environments
-# `.env.*` catches .env.local, .env.production and every other variant someone creates in a
-# hurry; .env.sample is the one that is meant to be committed, and holds names only.
-.env
+# `.env` is tracked and encrypted with git-crypt. `.env.*` still catches .env.local,
+# .env.production and every other variant; .env.sample stays plaintext and holds names only.
 .env.*
 !.env.sample
+!.env.example
 .envrc
 .venv
 env/

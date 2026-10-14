@@ -35,9 +35,8 @@ uv sync
 # Or with pip
 pip install -e .
 
-# Configure environment
-cp .env.sample .env
-# Edit .env with your keys (see Environment variables)
+# Unlock the shared .env (git-crypt). The key file is not in the repo.
+git-crypt unlock ~/.config/git-crypt/kwami.io/kwami-lk-api.key
 ```
 
 ## Running
@@ -97,7 +96,7 @@ The **token** endpoint expects a POST body with optional `roomName`, `participan
 | `WEB_CONCURRENCY` | No | uvicorn worker processes (default 2) |
 | `LOG_JSON` | No | JSON log records (default true); set false for readable local output |
 
-See `.env.sample` for a full list and comments.
+`.env` is committed with git-crypt (ciphertext in git, plaintext after unlock). See `.env.sample` for a full list and comments. Plaintext `.env.*` overrides stay gitignored.
 
 ## Commands
 
