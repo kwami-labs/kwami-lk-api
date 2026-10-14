@@ -222,3 +222,6 @@ htmlcov/
 .dev.vars
 *.tfstate
 *.tfstate.*
+
+# Local Supabase CLI metadata (migrations live elsewhere / not used here)
+supabase/
