@@ -20,6 +20,7 @@ shape for abuse control but not for quota. `RATE_LIMIT_STORAGE_URI` accepts a
 from __future__ import annotations
 
 import logging
+import os
 
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
@@ -27,7 +28,7 @@ from slowapi.util import get_remote_address
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from src.core.config import settings
+from src.core.config import resolve_env_file, settings
 from src.core.errors import error_body
 
 logger = logging.getLogger("kwami-api.ratelimit")
@@ -61,11 +62,17 @@ def rate_limit_key(request: Request) -> str:
     return f"ip:{get_remote_address(request)}"
 
 
+# slowapi reads `.env` itself, ignoring KWAMI_ENV_FILE. A git-crypt locked
+# `.env` is not UTF-8, so point it at the same file Settings uses, or at
+# /dev/null when that file cannot be decoded.
+_limiter_env_file = resolve_env_file() or os.devnull
+
 limiter = Limiter(
     key_func=rate_limit_key,
     default_limits=[DEFAULT_LIMIT],
     storage_uri=settings.rate_limit_storage_uri,
     enabled=settings.rate_limit_enabled,
+    config_filename=_limiter_env_file,
     # `headers_enabled=True` would add X-RateLimit-* to successful responses, but
     # slowapi injects them through a `response: Response` parameter it requires on
     # every decorated handler -- signature churn on each route for a header most
