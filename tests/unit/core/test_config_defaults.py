@@ -38,6 +38,10 @@ class TestResolveEnvFile:
         monkeypatch.setenv("KWAMI_ENV_FILE", str(locked))
         assert resolve_env_file() is None
 
+    def test_a_missing_env_file_is_ignored(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KWAMI_ENV_FILE", str(tmp_path / "absent.env"))
+        assert resolve_env_file() is None
+
 
 class TestDefaultPort:
     def test_port_wins_over_api_port(self, monkeypatch):
