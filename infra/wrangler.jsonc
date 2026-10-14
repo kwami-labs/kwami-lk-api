@@ -109,14 +109,24 @@
         "API_HOST": "0.0.0.0",
         "API_PORT": "8080",
         "DEBUG": "false",
-        "ENABLE_DOCS": "false",
+        "ENABLE_DOCS": "true",
         "CONTAINER_INSTANCES": "3",
-        "WEB_CONCURRENCY": "2",
+        // standard-1 has headroom for two workers; keep 1 until the container
+        // stays healthy under load (see a3cca1d — two workers can miss :8080).
+        "WEB_CONCURRENCY": "1",
         "APP_PUBLIC_URL": "https://api.kwami.io",
         "CORS_ORIGINS": "https://kwami.io,https://kwami-app.nexow.workers.dev"
       },
       "secrets": {
-        "required": ["LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"]
+        "required": [
+          "LIVEKIT_URL",
+          "LIVEKIT_API_KEY",
+          "LIVEKIT_API_SECRET",
+          "SUPABASE_URL",
+          "SUPABASE_SECRET_KEY",
+          "KWAMI_API_KEY",
+          "ADMIN_API_KEY"
+        ]
       },
       "containers": [
         {
