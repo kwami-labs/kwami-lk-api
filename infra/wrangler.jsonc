@@ -109,7 +109,7 @@
         "API_HOST": "0.0.0.0",
         "API_PORT": "8080",
         "DEBUG": "false",
-        "ENABLE_DOCS": "true",
+        "ENABLE_DOCS": "false",
         "CONTAINER_INSTANCES": "3",
         // standard-1 has headroom for two workers; keep 1 until the container
         // stays healthy under load (see a3cca1d — two workers can miss :8080).
