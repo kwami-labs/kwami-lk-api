@@ -1,10 +1,14 @@
 import { Container, getRandom } from "@cloudflare/containers";
-import { env } from "cloudflare:workers";
+import type { DurableObject } from "cloudflare:workers";
 import { containerEnvVars, containerInstanceCount } from "./container-env";
 
 /**
  * Durable Object that owns one FastAPI container instance.
  * `envVars` are applied on every start from Worker vars + secrets.
+ *
+ * Read secrets from the DO constructor/`this.env`, not module-level
+ * `cloudflare:workers` `env`: class-field init can miss secret bindings, so
+ * the FastAPI process boots without LIVEKIT_* / admin secrets and exits.
  */
 export class KwamiApiContainer extends Container<Env> {
   defaultPort = 8080;
@@ -12,7 +16,17 @@ export class KwamiApiContainer extends Container<Env> {
   sleepAfter = "10m";
   enableInternet = true;
   pingEndpoint = "/health";
-  envVars = containerEnvVars(env);
+
+  constructor(ctx: DurableObject["ctx"], env: Env) {
+    super(ctx, env);
+    this.envVars = containerEnvVars(env);
+  }
+
+  override async fetch(request: Request): Promise<Response> {
+    // Refresh on every request so secret rotations apply on the next start.
+    this.envVars = containerEnvVars(this.env);
+    return super.fetch(request);
+  }
 
   override onStart(): void {
     console.log(
