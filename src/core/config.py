@@ -4,10 +4,29 @@ from __future__ import annotations
 
 import os
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def resolve_env_file() -> str | None:
+    """UTF-8 env file to load, or None when it is missing or git-crypt locked.
+
+    A locked ``.env`` is binary. Starlette and pydantic both refuse to decode it,
+    which took CI down the moment the ciphertext was committed. Secrets then come
+    from the process environment, which is what production and CI already use.
+    """
+    candidate = os.environ.get("KWAMI_ENV_FILE", ".env")
+    path = Path(candidate)
+    if not path.is_file():
+        return None
+    try:
+        path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return None
+    return candidate
 
 
 def _default_port() -> int:
@@ -36,7 +55,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         # Tests point KWAMI_ENV_FILE at tests/.env.test so the live .env is never read.
-        env_file=os.environ.get("KWAMI_ENV_FILE", ".env"),
+        env_file=resolve_env_file(),
         env_file_encoding="utf-8",
         extra="ignore",
     )

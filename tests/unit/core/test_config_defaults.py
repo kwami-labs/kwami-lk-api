@@ -17,10 +17,30 @@ from src.core.config import (
     _default_port,
     _default_wallet_enabled,
     get_settings,
+    resolve_env_file,
 )
 
 TRUTHY = ["1", "true", "TRUE", "yes", "On", "  true  "]
 FALSEY = ["0", "false", "no", "off", "", "anything-else"]
+
+
+class TestResolveEnvFile:
+    def test_a_plaintext_env_file_is_used(self, tmp_path, monkeypatch):
+        env = tmp_path / ".env"
+        env.write_text("APP_ENV=development\n", encoding="utf-8")
+        monkeypatch.setenv("KWAMI_ENV_FILE", str(env))
+        assert resolve_env_file() == str(env)
+
+    def test_a_git_crypt_locked_env_file_is_ignored(self, tmp_path, monkeypatch):
+        """CI checks out the ciphertext. Decoding it as UTF-8 must not crash boot."""
+        locked = tmp_path / ".env"
+        locked.write_bytes(b"\x00GITCRYPT\xf8not-utf8")
+        monkeypatch.setenv("KWAMI_ENV_FILE", str(locked))
+        assert resolve_env_file() is None
+
+    def test_a_missing_env_file_is_ignored(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("KWAMI_ENV_FILE", str(tmp_path / "absent.env"))
+        assert resolve_env_file() is None
 
 
 class TestDefaultPort:
