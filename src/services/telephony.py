@@ -260,6 +260,7 @@ async def create_outbound_call(
                     agent_name=settings.livekit_agent_name,
                     room=room_name,
                     metadata=dispatch_metadata,
+                    deployment=settings.livekit_agent_deployment,
                 )
             )
         except TwirpError as exc:

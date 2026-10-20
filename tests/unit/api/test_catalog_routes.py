@@ -31,21 +31,24 @@ class TestVoiceConversion:
                 gender="female",
                 language="en",
                 description="warm",
+                preview_url="https://example.test/v1.mp3",
             )
         )
-        assert (r.id, r.name, r.category, r.gender, r.language, r.description) == (
-            "v1",
-            "One",
-            "Female",
-            "female",
-            "en",
-            "warm",
-        )
+        assert (
+            r.id,
+            r.name,
+            r.category,
+            r.gender,
+            r.language,
+            r.description,
+            r.preview_url,
+        ) == ("v1", "One", "Female", "female", "en", "warm", "https://example.test/v1.mp3")
 
     def test_absent_optionals_stay_absent(self):
         r = voices_route._convert_voice(Voice(id="v", name="V"))
         assert r.category is None and r.gender is None
         assert r.language is None and r.description is None
+        assert r.preview_url is None
 
     def test_a_provider_carries_its_source_and_a_derived_count(self):
         r = voices_route._convert_provider(
@@ -94,7 +97,7 @@ class TestTtsVoiceRoutes:
         monkeypatch.setattr(
             voices_route,
             "get_tts_voices",
-            lambda: {
+            lambda *_: {
                 "openai": VoiceProvider(
                     provider="openai",
                     source="sdk",
@@ -114,7 +117,7 @@ class TestTtsVoiceRoutes:
         assert body["providers"]["cartesia"]["count"] == 1
 
     async def test_an_empty_catalog_is_an_empty_response_not_an_error(self, client, monkeypatch):
-        monkeypatch.setattr(voices_route, "get_tts_voices", dict)
+        monkeypatch.setattr(voices_route, "get_tts_voices", lambda *_: {})
         r = await client.get("/voices/tts")
         assert r.status_code == 200
         assert r.json() == {"providers": {}, "total_voices": 0, "total_providers": 0}
@@ -123,6 +126,32 @@ class TestTtsVoiceRoutes:
         r = await client.get("/voices/tts")
         assert r.status_code == 200
         assert r.json()["total_voices"] > 0
+
+    async def test_the_accounts_elevenlabs_voices_replace_the_yaml_list(self, client, monkeypatch):
+        async def live():
+            return [Voice(id="own1", name="Mine", category="Custom", preview_url="https://x/1.mp3")]
+
+        monkeypatch.setattr(voices_route.elevenlabs_voices, "account_voices", live)
+        body = (await client.get("/voices/tts")).json()
+        eleven = body["providers"]["elevenlabs"]
+        assert eleven["source"] == "live"
+        assert [v["id"] for v in eleven["voices"]] == ["own1"]
+        assert eleven["voices"][0]["preview_url"] == "https://x/1.mp3"
+        single = (await client.get("/voices/tts/elevenlabs")).json()
+        assert single["source"] == "live" and single["count"] == 1
+
+    async def test_without_the_account_list_elevenlabs_comes_from_yaml(self, client, monkeypatch):
+        async def none():
+            return None
+
+        monkeypatch.setattr(voices_route.elevenlabs_voices, "account_voices", none)
+        r = await client.get("/voices/tts/elevenlabs")
+        assert r.json()["source"] == "yaml" and r.json()["count"] > 0
+
+    async def test_gemini_tts_lists_the_gemini_voices(self, client):
+        r = await client.get("/voices/tts/gemini")
+        assert r.status_code == 200
+        assert "Charon" in {v["id"] for v in r.json()["voices"]}
 
     async def test_a_known_provider(self, client):
         r = await client.get("/voices/tts/openai")

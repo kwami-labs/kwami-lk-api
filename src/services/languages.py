@@ -343,7 +343,8 @@ def get_realtime_languages() -> dict[str, ProviderLanguages]:
 def get_realtime_languages_by_provider(provider: str) -> ProviderLanguages | None:
     """Get Realtime languages for a specific provider."""
     all_langs = get_realtime_languages()
-    return all_langs.get(provider)
+    # The agent calls Gemini "google"; this catalogue calls it "gemini".
+    return all_langs.get({"google": "gemini"}.get(provider, provider))
 
 
 def get_all_languages() -> list[Language]:

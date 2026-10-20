@@ -114,6 +114,19 @@ class TestAgentDispatch:
         cfg = decode(create_token("room", "alice", agent_name="special"))["roomConfig"]
         assert cfg["agents"][0]["agentName"] == "special"
 
+    def test_a_configured_deployment_rides_along(self, monkeypatch):
+        """Lets a non-production build (`lk agent deploy -d pruebas`) take web sessions."""
+        monkeypatch.setattr(settings, "livekit_agent_name", "kwami-agent", raising=False)
+        monkeypatch.setattr(settings, "livekit_agent_deployment", "pruebas", raising=False)
+        cfg = decode(create_token("room", "alice"))["roomConfig"]
+        assert cfg["agents"] == [{"agentName": "kwami-agent", "deployment": "pruebas"}]
+
+    def test_no_deployment_means_production(self, monkeypatch):
+        monkeypatch.setattr(settings, "livekit_agent_name", "kwami-agent", raising=False)
+        monkeypatch.setattr(settings, "livekit_agent_deployment", "", raising=False)
+        cfg = decode(create_token("room", "alice"))["roomConfig"]
+        assert "deployment" not in cfg["agents"][0]
+
     def test_dispatch_can_be_turned_off(self):
         """The branch that was never covered: a token with no room config at all."""
         assert "roomConfig" not in decode(create_token("room", "alice", dispatch_agent=False))
