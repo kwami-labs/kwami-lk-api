@@ -170,6 +170,7 @@ class TestPluginExtraction:
 
     def test_an_stt_provider_with_no_models_is_omitted(self, monkeypatch):
         monkeypatch.setattr(mod, "_safe_import_and_extract", lambda m, t: [])
+        monkeypatch.setattr(mod, "_gemini_stt_models", list)
         assert mod._get_stt_models()["plugins"] == {}
 
     def test_a_tts_provider_with_no_models_is_omitted(self, monkeypatch):
@@ -507,3 +508,21 @@ class TestEstimateCost:
             params=self._params(prompt_tokens=0, completion_tokens=0),
         )
         assert r.json()["total_cost_usd"] == 0.0
+
+
+class TestProviderNamesMatchTheAgent:
+    """The agent's "gemini" is Gemini on the API key; its "google" is Google Cloud."""
+
+    def test_gemini_tts_models_are_listed_under_gemini(self):
+        plugins = mod._get_tts_models()["plugins"]
+        assert "gemini-3.1-flash-tts-preview" in plugins["gemini"]
+        assert "google" not in plugins
+
+    def test_gemini_live_transcription_is_listed_under_gemini(self):
+        plugins = mod._get_stt_models()["plugins"]
+        assert plugins["gemini"] == ["gemini-3.5-transcribe-live"]
+        assert "chirp" in plugins["google"], "google stays Google Cloud Speech"
+
+    def test_gemini_stt_degrades_without_the_plugin(self, monkeypatch):
+        _block_import(monkeypatch, "livekit.plugins.google.beta")
+        assert mod._gemini_stt_models() == []

@@ -132,6 +132,7 @@ src/services/channels.py                     100
 # tests/integration/db/ -- but the settlement arithmetic above it is Python and is covered here.
 src/services/credits.py                      100
 src/services/custody_service.py              100
+src/services/elevenlabs_voices.py            100
 src/services/email_classifier.py             100
 src/services/email_service.py                100
 
