@@ -319,6 +319,18 @@ class TestCreateOutboundCall:
         assert result["provider_call_sid"] == "SCL_123"
         assert result["agent_dispatch_id"] == "AD_1"
 
+    async def test_the_call_goes_to_the_configured_deployment(self, lkapi, trunks, monkeypatch):
+        monkeypatch.setattr(
+            telephony.settings, "livekit_agent_deployment", "pruebas", raising=False
+        )
+        await create_outbound_call(
+            kwami_id="k1",
+            phone_number="+14155552671",
+            caller_id="+14155552672",
+            participant_name="Ada",
+        )
+        assert lkapi.agent_dispatch.request.deployment == "pruebas"
+
     async def test_the_request_carries_the_kwami_attributes(self, lkapi, trunks, monkeypatch):
         """The agent reads kwami_id off the participant attributes."""
         monkeypatch.setattr(

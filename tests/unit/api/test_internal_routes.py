@@ -315,3 +315,92 @@ class TestBrowserContextRoutes:
         r = await keyed_client.delete("/internal/browser-contexts/nobody")
         assert r.status_code == 200
         assert r.json()["removed"] == 0
+
+
+def test_the_bootstrap_carries_language_emotion_and_charter():
+    """A phone call must get the same soul the app sends, charter included."""
+    charter = {"enabled": True, "addressAs": "señor", "userProfile": "- Estudia el CQF"}
+    payload = build_agent_bootstrap_payload(
+        {
+            "id": "k1",
+            "name": "Friday",
+            "config": {
+                "voice": {
+                    "soulConfig": {
+                        "language": "es-ES",
+                        "emotionalTraits": {"calmness": 60},
+                        "charter": charter,
+                    }
+                }
+            },
+        }
+    )
+
+    assert payload["soul"]["language"] == "es-ES"
+    assert payload["soul"]["emotionalTraits"] == {"calmness": 60}
+    assert payload["soul"]["charter"] == charter
+
+
+def test_malformed_optional_soul_fields_are_left_out():
+    payload = build_agent_bootstrap_payload(
+        {
+            "id": "k1",
+            "name": "Friday",
+            "config": {"voice": {"soulConfig": {"language": 5, "charter": "on"}}},
+        }
+    )
+
+    assert "language" not in payload["soul"]
+    assert "charter" not in payload["soul"]
+
+
+def _jarvis_on_live():
+    return {
+        "id": "k1",
+        "name": "Jarvis",
+        "config": {
+            "voice": {
+                "pipelineMode": "realtime",
+                "stt": {
+                    "provider": "gemini",
+                    "model": "gemini-3.5-transcribe-live",
+                    "language": "es",
+                },
+                "tts": {"provider": "gemini", "voice": "Charon", "style": "Habla como JARVIS"},
+                "realtime": {
+                    "provider": "google",
+                    "model": "gemini-3.1-flash-live-preview",
+                    "voice": "Charon",
+                    "style": "Habla como JARVIS",
+                    "modalities": ["text", "audio"],
+                },
+            }
+        },
+    }
+
+
+def test_a_call_keeps_the_engine_the_voice_and_its_direction():
+    """A kwami on Gemini Live answered calls on the standard pipeline, without its direction."""
+    voice = build_agent_bootstrap_payload(_jarvis_on_live())["voice"]
+    assert voice["type"] == "realtime"
+    assert voice["realtime"] == {
+        "provider": "google",
+        "model": "gemini-3.1-flash-live-preview",
+        "voice": "Charon",
+        "style": "Habla como JARVIS",
+    }
+    assert voice["tts"]["style"] == "Habla como JARVIS"
+
+
+def test_a_call_moves_the_old_default_ear_to_the_fast_one():
+    stt = build_agent_bootstrap_payload(_jarvis_on_live())["voice"]["stt"]
+    assert stt == {"provider": "deepgram", "model": "nova-3", "language": "es"}
+
+
+def test_without_an_engine_or_direction_nothing_is_invented():
+    voice = build_agent_bootstrap_payload(
+        {"id": "k1", "name": "K", "config": {"voice": {"realtime": {}}}}
+    )["voice"]
+    assert "type" not in voice
+    assert "realtime" not in voice
+    assert "style" not in voice["tts"]

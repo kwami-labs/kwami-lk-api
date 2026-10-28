@@ -127,6 +127,22 @@ def _safe_import_and_extract(module_path: str, type_name: str) -> list[str]:
     return []
 
 
+def _gemini_stt_models() -> list[str]:
+    """Gemini live transcription models (the agent's "gemini" STT provider).
+
+    The plugin ships no Literal for them, only its default model, and "google"
+    in this catalogue is Google Cloud Speech (chirp and friends), which needs a
+    service account rather than the Gemini API key.
+    """
+    try:
+        from livekit.plugins.google.beta import gemini_stt
+    except ImportError as e:
+        logger.debug("Could not import the Gemini STT plugin: %s", e)
+        return []
+    default = getattr(gemini_stt, "DEFAULT_MODEL", None)
+    return [default] if isinstance(default, str) else []
+
+
 # =============================================================================
 # Plugin extraction functions
 # =============================================================================
@@ -188,6 +204,10 @@ def _get_stt_models() -> dict[str, Any]:
         if models:
             plugins[provider] = models
 
+    gemini = _gemini_stt_models()
+    if gemini:
+        plugins["gemini"] = gemini
+
     return {"inference": inference, "plugins": plugins, "source": source}
 
 
@@ -210,7 +230,9 @@ def _get_tts_models() -> dict[str, Any]:
         ("deepgram", "livekit.plugins.deepgram.models", "TTSModels"),
         ("elevenlabs", "livekit.plugins.elevenlabs.models", "TTSModels"),
         ("cartesia", "livekit.plugins.cartesia.models", "TTSModels"),
-        ("google", "livekit.plugins.google.models", "GeminiTTSModels"),
+        # "gemini" as the agent names it: Gemini TTS on the Gemini API key. The
+        # agent's "google" TTS is Google Cloud TTS, which would refuse these.
+        ("gemini", "livekit.plugins.google.models", "GeminiTTSModels"),
         ("groq", "livekit.plugins.groq.models", "TTSModels"),
         ("rime", "livekit.plugins.rime.models", "TTSModels"),
     ]
@@ -735,6 +757,7 @@ async def get_stt_plugin_models():
             "features": ["streaming", "punctuation", "smart_format"],
         },
         "google": {"languages": ["en", "multilingual"], "features": ["streaming", "punctuation"]},
+        "gemini": {"languages": ["multilingual"], "features": ["streaming", "punctuation"]},
         "groq": {"languages": ["en", "multilingual"], "features": ["streaming"]},
         "elevenlabs": {"languages": ["en", "multilingual"], "features": ["streaming"]},
         "cartesia": {"languages": ["en", "multilingual"], "features": ["streaming"]},
@@ -831,7 +854,7 @@ async def get_tts_plugin_models():
             "features": ["streaming", "low_latency", "voice_cloning"],
         },
         "deepgram": {"languages": ["en"], "features": ["streaming", "low_latency"]},
-        "google": {"languages": ["en", "multilingual"], "features": ["streaming"]},
+        "gemini": {"languages": ["multilingual"], "features": ["streaming", "expressive"]},
         "groq": {"languages": ["en", "multilingual"], "features": ["streaming"]},
         "rime": {
             "languages": ["en", "es", "fr", "de"],

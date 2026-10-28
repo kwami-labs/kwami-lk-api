@@ -640,6 +640,39 @@ async def recent_events_for_kwami(user_id: str, kwami_id: str) -> dict[str, list
     }
 
 
+#: The ear the app shipped with before Deepgram Nova 3, upgraded the way the
+#: app upgrades it on load: it finalised 1.24 s after the end of speech.
+LEGACY_DEFAULT_STT = ("gemini", "gemini-3.5-transcribe-live")
+FAST_STT = {"provider": "deepgram", "model": "nova-3"}
+
+
+def _engine_fields(voice_state: dict[str, Any], voice: dict[str, Any]) -> dict[str, Any]:
+    """Add what makes a call sound like the app: engine, realtime voice, direction.
+
+    The payload carried only STT, LLM and TTS, so a kwami on Gemini Live
+    answered calls on the standard pipeline, and every call lost the
+    character's voice direction (`style`) -- Jarvis on the phone was not Jarvis.
+    """
+    tts_state = voice_state.get("tts") or {}
+    style = tts_state.get("style")
+    if isinstance(style, str) and style.strip():
+        voice["tts"]["style"] = style
+    stt = voice["stt"]
+    if (stt.get("provider"), stt.get("model")) == LEGACY_DEFAULT_STT:
+        stt.update(FAST_STT)
+    pipeline = voice_state.get("pipelineMode")
+    if isinstance(pipeline, str) and pipeline:
+        voice["type"] = pipeline
+    realtime = voice_state.get("realtime")
+    if isinstance(realtime, dict) and realtime.get("provider"):
+        voice["realtime"] = {
+            key: realtime[key]
+            for key in ("provider", "model", "voice", "style")
+            if isinstance(realtime.get(key), str) and realtime.get(key)
+        }
+    return voice
+
+
 def build_agent_bootstrap_payload(kwami_row: dict[str, Any]) -> dict[str, Any]:
     """Map saved frontend workspace config to the agent 'config' message format."""
     config = kwami_row.get("config") or {}
@@ -650,25 +683,28 @@ def build_agent_bootstrap_payload(kwami_row: dict[str, Any]) -> dict[str, Any]:
         "type": "config",
         "kwamiId": kwami_row["id"],
         "kwamiName": kwami_row.get("name") or "Kwami",
-        "voice": {
-            "stt": {
-                "provider": ((voice_state.get("stt") or {}).get("provider") or "deepgram"),
-                "model": ((voice_state.get("stt") or {}).get("model") or "nova-2-phonecall"),
-                "language": ((voice_state.get("stt") or {}).get("language") or "en"),
+        "voice": _engine_fields(
+            voice_state,
+            {
+                "stt": {
+                    "provider": ((voice_state.get("stt") or {}).get("provider") or "deepgram"),
+                    "model": ((voice_state.get("stt") or {}).get("model") or "nova-2-phonecall"),
+                    "language": ((voice_state.get("stt") or {}).get("language") or "en"),
+                },
+                "llm": {
+                    "provider": ((voice_state.get("llm") or {}).get("provider") or "openai"),
+                    "model": ((voice_state.get("llm") or {}).get("model") or "gpt-4o-mini"),
+                    "temperature": ((voice_state.get("llm") or {}).get("temperature") or 0.7),
+                    "maxTokens": ((voice_state.get("llm") or {}).get("maxTokens") or 1024),
+                },
+                "tts": {
+                    "provider": ((voice_state.get("tts") or {}).get("provider") or "openai"),
+                    "model": ((voice_state.get("tts") or {}).get("model") or "tts-1"),
+                    "voice": ((voice_state.get("tts") or {}).get("voice") or "nova"),
+                    "speed": ((voice_state.get("tts") or {}).get("speed") or 1.0),
+                },
             },
-            "llm": {
-                "provider": ((voice_state.get("llm") or {}).get("provider") or "openai"),
-                "model": ((voice_state.get("llm") or {}).get("model") or "gpt-4o-mini"),
-                "temperature": ((voice_state.get("llm") or {}).get("temperature") or 0.7),
-                "maxTokens": ((voice_state.get("llm") or {}).get("maxTokens") or 1024),
-            },
-            "tts": {
-                "provider": ((voice_state.get("tts") or {}).get("provider") or "openai"),
-                "model": ((voice_state.get("tts") or {}).get("model") or "tts-1"),
-                "voice": ((voice_state.get("tts") or {}).get("voice") or "nova"),
-                "speed": ((voice_state.get("tts") or {}).get("speed") or 1.0),
-            },
-        },
+        ),
         "soul": {
             "name": soul_state.get("name") or kwami_row.get("name") or "Kwami",
             "personality": soul_state.get("personality") or "",
@@ -677,6 +713,19 @@ def build_agent_bootstrap_payload(kwami_row: dict[str, Any]) -> dict[str, Any]:
             "conversationStyle": soul_state.get("conversationStyle") or "friendly",
             "responseLength": soul_state.get("responseLength") or "medium",
             "emotionalTone": soul_state.get("emotionalTone") or "warm",
+            # A phone call must sound like the app: without these the agent
+            # answered calls in its default language, with no emotion profile,
+            # and without the charter (form of address, pushback rules, user
+            # profile) the user configured.
+            **{
+                key: soul_state[key]
+                for key, kind in (
+                    ("language", str),
+                    ("emotionalTraits", dict),
+                    ("charter", dict),
+                )
+                if isinstance(soul_state.get(key), kind) and soul_state.get(key)
+            },
         },
         "memory": {"enabled": True},
     }

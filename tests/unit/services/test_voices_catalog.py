@@ -118,9 +118,28 @@ class TestSdkExtraction:
     def test_gemini_voices_are_labelled_multilingual(self):
         vs = _extract_gemini_realtime_voices()
         assert vs
-        assert all(v.category == "Gemini Live" for v in vs)
         assert all(v.language == "multilingual" for v in vs)
         assert all(v.name == v.id for v in vs)
+
+    def test_every_gemini_voice_has_a_gender_and_a_character(self):
+        """A voice the SDK adds without an entry would show up ungendered and
+        undescribed in the Voice panel; this names it instead."""
+        vs = _extract_gemini_realtime_voices()
+        missing = [v.id for v in vs if v.gender is None or not v.description]
+        assert missing == []
+        charon = next(v for v in vs if v.id == "Charon")
+        assert (charon.gender, charon.category, charon.description) == (
+            "male",
+            "Male",
+            "Informative",
+        )
+
+    def test_google_is_an_alias_for_gemini(self):
+        from src.services.voices import get_realtime_voices_by_provider
+
+        assert get_realtime_voices_by_provider("google") == get_realtime_voices_by_provider(
+            "gemini"
+        )
 
     def test_a_missing_google_plugin_degrades_to_empty(self, monkeypatch, caplog):
         _block_import(monkeypatch, "livekit.plugins.google")
@@ -282,6 +301,7 @@ class TestPublicTtsApi:
     def test_an_empty_sdk_provider_is_omitted(self, monkeypatch):
         monkeypatch.setattr(voices_mod, "_extract_openai_tts_voices", list)
         monkeypatch.setattr(voices_mod, "_extract_rime_voices", list)
+        monkeypatch.setattr(voices_mod, "_extract_gemini_realtime_voices", list)
         monkeypatch.setattr(voices_mod, "_get_yaml_voices", lambda p, k: [])
         assert get_tts_voices() == {}
 

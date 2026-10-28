@@ -4,6 +4,9 @@ version = "0.1.1"
 description = "LiveKit token endpoint API for Kwami AI"
 requires-python = ">=3.11"
 dependencies = [
+    # Pulled in by livekit-agents[images]. 13.0 fixes CVE-2026-112393, -112396,
+    # -112399 and -112892; pinned because it is a major bump.
+    "pillow>=13.0.0",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     "pydantic>=2.10.0",

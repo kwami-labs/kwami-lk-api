@@ -89,7 +89,13 @@ def create_token(
         metadata = kwami_id or ""
         token = token.with_room_config(
             RoomConfiguration(
-                agents=[RoomAgentDispatch(agent_name=target_agent, metadata=metadata)],
+                agents=[
+                    RoomAgentDispatch(
+                        agent_name=target_agent,
+                        metadata=metadata,
+                        deployment=settings.livekit_agent_deployment,
+                    )
+                ],
             ),
         )
 

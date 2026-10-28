@@ -4,6 +4,8 @@ This module provides voice data for TTS and Realtime models.
 It uses a hybrid approach:
 - Extracts voices from LiveKit SDK where available (OpenAI, Google Gemini, Rime)
 - Falls back to YAML configuration for providers without SDK types (Cartesia, Deepgram, ElevenLabs, Google Cloud TTS)
+- Lists ElevenLabs from the account itself when the API has its key (see
+  `src.services.elevenlabs_voices`), the YAML list being the fallback
 
 Last updated: 2026-02-04
 """
@@ -32,6 +34,8 @@ class Voice(BaseModel):
     gender: Literal["male", "female", "neutral"] | None = None
     language: str | None = None
     description: str | None = None
+    #: A sample to listen to, when the provider publishes one.
+    preview_url: str | None = None
 
 
 class VoiceProvider(BaseModel):
@@ -39,7 +43,7 @@ class VoiceProvider(BaseModel):
 
     provider: str
     voices: list[Voice]
-    source: Literal["sdk", "yaml"] = "yaml"
+    source: Literal["sdk", "yaml", "live"] = "yaml"
 
 
 # =============================================================================
@@ -92,6 +96,48 @@ def _extract_openai_realtime_voices() -> list[Voice]:
     return _extract_openai_tts_voices()
 
 
+#: Character of each Gemini Live voice, as Google describes it, and the
+#: register it is usually heard in. The SDK ships only the names, which made the
+#: Voice panel a list of thirty star names with no way to tell a deep voice from
+#: a bright one or filter by gender.
+GEMINI_VOICE_META: dict[str, tuple[Literal["male", "female"], str]] = {
+    "Achernar": ("female", "Soft"),
+    "Achird": ("male", "Friendly"),
+    "Algenib": ("male", "Gravelly"),
+    "Algieba": ("male", "Smooth"),
+    "Alnilam": ("male", "Firm"),
+    "Aoede": ("female", "Breezy"),
+    "Autonoe": ("female", "Bright"),
+    "Callirrhoe": ("female", "Easy-going"),
+    "Charon": ("male", "Informative"),
+    "Despina": ("female", "Smooth"),
+    "Enceladus": ("male", "Breathy"),
+    "Erinome": ("female", "Clear"),
+    "Fenrir": ("male", "Excitable"),
+    "Gacrux": ("female", "Mature"),
+    "Iapetus": ("male", "Clear"),
+    "Kore": ("female", "Firm"),
+    "Laomedeia": ("female", "Upbeat"),
+    "Leda": ("female", "Youthful"),
+    "Orus": ("male", "Firm"),
+    "Puck": ("male", "Upbeat"),
+    "Pulcherrima": ("female", "Forward"),
+    "Rasalgethi": ("male", "Informative"),
+    "Sadachbia": ("male", "Lively"),
+    "Sadaltager": ("male", "Knowledgeable"),
+    "Schedar": ("male", "Even"),
+    "Sulafat": ("female", "Warm"),
+    "Umbriel": ("male", "Easy-going"),
+    "Vindemiatrix": ("female", "Gentle"),
+    "Zephyr": ("female", "Bright"),
+    "Zubenelgenubi": ("male", "Casual"),
+}
+
+#: The agent and the models catalogue call Gemini "google"; this catalogue
+#: grew up calling it "gemini". Both are accepted.
+REALTIME_PROVIDER_ALIASES = {"google": "gemini"}
+
+
 def _extract_gemini_realtime_voices() -> list[Voice]:
     """Extract Google Gemini Live voices from SDK."""
     try:
@@ -101,12 +147,15 @@ def _extract_gemini_realtime_voices() -> list[Voice]:
 
         voices = []
         for vid in voice_ids:
+            gender, character = GEMINI_VOICE_META.get(vid, (None, None))
             voices.append(
                 Voice(
                     id=vid,
                     name=vid,
-                    category="Gemini Live",
+                    category={"male": "Male", "female": "Female"}.get(gender or "", "Gemini Live"),
+                    gender=gender,
                     language="multilingual",
+                    description=character,
                 )
             )
         return voices
@@ -182,6 +231,7 @@ def _get_yaml_voices(provider: str, voice_type: Literal["tts", "realtime"]) -> l
                 gender=v.get("gender"),
                 language=v.get("language"),
                 description=v.get("description"),
+                preview_url=v.get("preview_url"),
             )
         )
     return voices
@@ -192,8 +242,12 @@ def _get_yaml_voices(provider: str, voice_type: Literal["tts", "realtime"]) -> l
 # =============================================================================
 
 
-def get_tts_voices() -> dict[str, VoiceProvider]:
-    """Get all TTS voices grouped by provider."""
+def get_tts_voices(elevenlabs: list[Voice] | None = None) -> dict[str, VoiceProvider]:
+    """Get all TTS voices grouped by provider.
+
+    `elevenlabs` is the account's own list (`elevenlabs_voices.account_voices`);
+    without it the YAML list stands in.
+    """
     providers = {}
 
     # SDK-extracted voices
@@ -213,9 +267,22 @@ def get_tts_voices() -> dict[str, VoiceProvider]:
             source="sdk",
         )
 
+    # Gemini TTS ("gemini", on the Gemini API key) speaks with the same 30
+    # prebuilt voices as Gemini Live; "google" below is Google Cloud TTS.
+    gemini_voices = _extract_gemini_realtime_voices()
+    if gemini_voices:
+        providers["gemini"] = VoiceProvider(provider="gemini", voices=gemini_voices, source="sdk")
+
+    if elevenlabs:
+        providers["elevenlabs"] = VoiceProvider(
+            provider="elevenlabs", voices=elevenlabs, source="live"
+        )
+
     # YAML voices
     yaml_providers = ["cartesia", "elevenlabs", "deepgram", "google"]
     for provider in yaml_providers:
+        if provider in providers:
+            continue
         voices = _get_yaml_voices(provider, "tts")
         if voices:
             providers[provider] = VoiceProvider(
@@ -227,9 +294,11 @@ def get_tts_voices() -> dict[str, VoiceProvider]:
     return providers
 
 
-def get_tts_voices_by_provider(provider: str) -> VoiceProvider | None:
+def get_tts_voices_by_provider(
+    provider: str, elevenlabs: list[Voice] | None = None
+) -> VoiceProvider | None:
     """Get TTS voices for a specific provider."""
-    all_voices = get_tts_voices()
+    all_voices = get_tts_voices(elevenlabs)
     return all_voices.get(provider)
 
 
@@ -271,7 +340,7 @@ def get_realtime_voices() -> dict[str, VoiceProvider]:
 def get_realtime_voices_by_provider(provider: str) -> VoiceProvider | None:
     """Get Realtime voices for a specific provider."""
     all_voices = get_realtime_voices()
-    return all_voices.get(provider)
+    return all_voices.get(REALTIME_PROVIDER_ALIASES.get(provider, provider))
 
 
 def reload_voices_yaml():

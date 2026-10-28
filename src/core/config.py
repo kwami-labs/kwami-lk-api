@@ -7,7 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, computed_field, model_validator
+from pydantic import AliasChoices, Field, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -113,6 +113,13 @@ class Settings(BaseSettings):
     livekit_agent_name: str = Field(
         default="kwami-agent",
         alias="LIVEKIT_AGENT_NAME",
+    )
+    # Empty dispatches to the agent's production deployment. Naming another one
+    # (`lk agent deploy -d <name>`) sends web sessions and phone calls to that
+    # build, so it can be tried end to end without promoting it.
+    livekit_agent_deployment: str = Field(
+        default="",
+        alias="LIVEKIT_AGENT_DEPLOYMENT",
     )
     # Tokens are redeemed at connect time, so they do not need a long life. The
     # previous 6 hours meant a leaked token stayed usable for a working day.
@@ -259,6 +266,11 @@ class Settings(BaseSettings):
         alias="OPENAI_API_BASE",
     )
     tavily_api_key: str | None = Field(default=None, alias="TAVILY_API_KEY")
+    #: Lists the account's own ElevenLabs voices for the voice picker (the
+    #: agent reads the same key under either spelling).
+    elevenlabs_api_key: str | None = Field(
+        default=None, validation_alias=AliasChoices("ELEVEN_API_KEY", "ELEVENLABS_API_KEY")
+    )
     tavily_project_id: str | None = Field(default=None, alias="TAVILY_PROJECT_ID")
     reconciliation_tavily_cost_per_credit_usd: float = Field(
         default=0.008,

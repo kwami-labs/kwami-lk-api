@@ -4,6 +4,7 @@ Provides endpoints for retrieving available TTS and Realtime voices
 grouped by provider. Uses a hybrid approach:
 - SDK-extracted voices for OpenAI, Google Gemini, Rime
 - YAML-defined voices for Cartesia, Deepgram, ElevenLabs, Google Cloud TTS
+- ElevenLabs from the account itself when the API has its key
 """
 
 import logging
@@ -12,6 +13,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from src.services import elevenlabs_voices
 from src.services.voices import (
     Voice,
     VoiceProvider,
@@ -43,6 +45,7 @@ class VoiceResponse(BaseModel):
     )
     language: str | None = Field(default=None, description="Primary language code")
     description: str | None = Field(default=None, description="Additional description")
+    preview_url: str | None = Field(default=None, description="A sample to listen to")
 
 
 class ProviderVoicesResponse(BaseModel):
@@ -50,8 +53,8 @@ class ProviderVoicesResponse(BaseModel):
 
     provider: str = Field(description="Provider identifier")
     voices: list[VoiceResponse] = Field(description="List of available voices")
-    source: Literal["sdk", "yaml"] = Field(
-        description="Data source (sdk = extracted from LiveKit SDK)"
+    source: Literal["sdk", "yaml", "live"] = Field(
+        description="Data source (sdk = LiveKit SDK, live = the provider's own account)"
     )
     count: int = Field(description="Number of voices")
 
@@ -78,6 +81,7 @@ def _convert_voice(voice: Voice) -> VoiceResponse:
         gender=voice.gender,
         language=voice.language,
         description=voice.description,
+        preview_url=voice.preview_url,
     )
 
 
@@ -105,13 +109,14 @@ async def get_all_tts_voices():
     - **openai**: Extracted from LiveKit SDK (10 voices)
     - **rime**: Extracted from LiveKit SDK (8 voices)
     - **cartesia**: From YAML config (24 voices)
-    - **elevenlabs**: From YAML config (20 voices)
+    - **gemini**: Gemini TTS, the 30 Gemini Live voices (SDK)
+    - **elevenlabs**: The account's own voices with a key, else YAML config
     - **deepgram**: From YAML config (12 voices)
-    - **google**: From YAML config (11 voices)
+    - **google**: Google Cloud TTS, from YAML config (11 voices)
 
     Each voice includes id, name, category, gender, and language information.
     """
-    providers_data = get_tts_voices()
+    providers_data = get_tts_voices(await elevenlabs_voices.account_voices())
 
     providers = {}
     total_voices = 0
@@ -134,10 +139,12 @@ async def get_tts_voices_for_provider(provider: str):
     Get TTS voices for a specific provider.
 
     Valid providers:
-    - openai, rime (SDK-extracted)
-    - cartesia, elevenlabs, deepgram, google (YAML-defined)
+    - openai, rime, gemini (SDK-extracted)
+    - elevenlabs (the account's own voices with a key, else YAML)
+    - cartesia, deepgram, google (YAML-defined)
     """
-    provider_data = get_tts_voices_by_provider(provider)
+    live = await elevenlabs_voices.account_voices() if provider == "elevenlabs" else None
+    provider_data = get_tts_voices_by_provider(provider, live)
 
     if not provider_data:
         available = list(get_tts_voices().keys())
