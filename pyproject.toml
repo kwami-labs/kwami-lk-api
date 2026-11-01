@@ -76,6 +76,11 @@ integration = [
 [project.scripts]
 kwami-api = "src.main:run"
 
+[tool.uv]
+# 0.6.4 has four high DoS CVEs in the BER/CER/DER decoders. Transitive via
+# google-auth; no parent release pins 0.6.5 yet.
+override-dependencies = ["pyasn1>=0.6.5"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
