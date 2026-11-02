@@ -4222,16 +4222,15 @@ wheels = [
 
 [[package]]
 name = "zep-cloud"
-version = "3.30.0"
+version = "4.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
     { name = "pydantic-core" },
-    { name = "python-dateutil" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/77/e2/c8a6b8e4eca1c039adc38d03499119656ece70091aed45c2a1a89405e535/zep_cloud-3.30.0.tar.gz", hash = "sha256:e33ddcba11250ee8322410acacdfcc18e228b57313bed910b3c3c6d0f74d7f26", size = 112278, upload-time = "2026-09-24T18:04:22.896Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d9/f2/9a249c73f198d863bfa2bf6bfe53d3e39f96eafd25624b74e47ceb75dd45/zep_cloud-4.0.1.tar.gz", hash = "sha256:0c3cccfc7e1fe9868d8fecfded0c8a3a491827cbf72c947119ae6dd35f5a4ae0", size = 304831, upload-time = "2026-10-20T18:42:39.907Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e3/f5/8a876c25179249bf6f8e26696954463ac1269fe1bd0334d1f912cf6c94dd/zep_cloud-3.30.0-py3-none-any.whl", hash = "sha256:c3b68ca75f8628cc803f74baa351a1fc3c8c34bf3142828a61f40945951d6ea9", size = 198458, upload-time = "2026-09-24T18:04:21.334Z" },
+    { url = "https://files.pythonhosted.org/packages/15/12/83eecea93e0514e0183d01243e40ca24a035067ed693c7f5dd753b64ba2d/zep_cloud-4.0.1-py3-none-any.whl", hash = "sha256:53c1375569baef598309f2a3d96af2e4bb7ff1a3b4dc2506d5cbc5fe6269c309", size = 619185, upload-time = "2026-10-20T18:42:38.189Z" },
 ]
