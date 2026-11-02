@@ -172,7 +172,7 @@ async def key_of(user_id: str, provider: str) -> str | None:
         return fernet.decrypt(str(rows[0]["encrypted_key"]).encode()).decode()
     except InvalidToken:
         # Stored under another secret: as good as not connected.
-        logger.warning("A connected %s key cannot be opened with this secret", provider)
+        logger.warning("A connected key cannot be opened with this secret")
         return None
 
 

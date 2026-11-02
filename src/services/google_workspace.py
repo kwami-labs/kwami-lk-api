@@ -17,6 +17,7 @@ from urllib.parse import quote
 from src.services.google_service import (
     MAX_ATTACHMENT_BYTES,
     Attachment,
+    GoogleRequestError,
     attachment_bytes,
     google_bytes,
     google_json,
@@ -63,6 +64,14 @@ PERSON_FIELDS = "names,emailAddresses,phoneNumbers,organizations"
 MAX_RESULTS = 50
 SHARE_ROLES = ("reader", "commenter", "writer")
 _CONTACT_ID = re.compile(r"people/[A-Za-z0-9_-]{1,256}")
+#: A range is one path segment: A1 notation and a sheet's name, with nothing that ends it.
+_CELL_RANGE = re.compile(r"[^/\?#%]{1,256}")
+
+
+def _range_part(cell_range: str) -> str:
+    if not _CELL_RANGE.fullmatch(cell_range):
+        raise GoogleRequestError("Not a range")
+    return quote(cell_range, safe="")
 
 
 def _file(item: dict[str, Any]) -> dict[str, Any]:
@@ -461,7 +470,7 @@ async def read_range(
     result = await google_json(
         user_id,
         "GET",
-        f"{SHEETS_URL}/{path_id(spreadsheet_id)}/values/{quote(cell_range, safe='')}",
+        f"{SHEETS_URL}/{path_id(spreadsheet_id)}/values/{_range_part(cell_range)}",
         account=account,
     )
     return list(result.get("values", []))
@@ -479,7 +488,7 @@ async def write_range(
     result = await google_json(
         user_id,
         "PUT",
-        f"{SHEETS_URL}/{path_id(spreadsheet_id)}/values/{quote(cell_range, safe='')}",
+        f"{SHEETS_URL}/{path_id(spreadsheet_id)}/values/{_range_part(cell_range)}",
         params={"valueInputOption": "USER_ENTERED"},
         body={"values": values},
         account=account,
@@ -498,7 +507,7 @@ async def append_rows(
     await google_json(
         user_id,
         "POST",
-        f"{SHEETS_URL}/{path_id(spreadsheet_id)}/values/{quote(cell_range, safe='')}:append",
+        f"{SHEETS_URL}/{path_id(spreadsheet_id)}/values/{_range_part(cell_range)}:append",
         params={"valueInputOption": "USER_ENTERED"},
         body={"values": values},
         account=account,

@@ -266,7 +266,7 @@ async def preview(user_id: str, provider: str, voice_id: str, wanted_language: s
         try:
             sample = await _speak(user_id, provider, voice, language)
         except (aiohttp.ClientError, httpx.HTTPError, TimeoutError, ValueError) as exc:
-            logger.warning("No sample from %s: %s", provider, type(exc).__name__)
+            logger.warning("No sample: %s", type(exc).__name__)
             raise PreviewFailedError(provider) from exc
         if not sample.audio:
             raise PreviewFailedError(provider)

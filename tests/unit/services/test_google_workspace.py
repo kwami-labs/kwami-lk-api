@@ -416,7 +416,9 @@ class TestIdsInThePath:
             await w.update_contact(USER, bad, name="x")
 
     @respx.mock
-    async def test_a_range_cannot_add_to_the_path(self):
+    @pytest.mark.parametrize("bad", ["../../x", "a?b", "a#b", "a%2Fb", "a\b", "", "x" * 257])
+    async def test_a_range_cannot_add_to_the_path(self, bad):
         route = respx.get(url__regex=r".*/s1/values/.*").respond(json={"values": []})
-        await w.read_range(USER, "s1", "../../x?y")
-        assert "..%2F..%2Fx%3Fy" in str(route.calls.last.request.url)
+        with pytest.raises(g.GoogleRequestError):
+            await w.read_range(USER, "s1", bad)
+        assert not route.called
