@@ -101,6 +101,17 @@ class TestSeveralAccounts:
         with pytest.raises(g.GoogleNotConnectedError, match="whose"):
             await g.complete_connection(USER, "code")
 
+    async def test_the_name_google_gives_email_is_not_a_missing_permission(self, monkeypatch):
+        granted = [s for s in g.SCOPES if s != "email"]
+        granted.append("https://www.googleapis.com/auth/userinfo.email")
+
+        async def accounts(_user):
+            return [{"email": FIRST, "scopes": " ".join(granted)}]
+
+        monkeypatch.setattr(g, "_accounts", accounts)
+        status = await g.connection_status(USER)
+        assert status["accounts"][0]["missing_scopes"] == []
+
     async def test_status_lists_each_one_and_what_it_still_lacks(self, two_linked):
         status = await g.connection_status(USER)
         assert status["email"] == FIRST

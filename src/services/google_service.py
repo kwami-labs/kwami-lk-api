@@ -52,6 +52,9 @@ SCOPES = (
     "https://www.googleapis.com/auth/contacts",
     "https://www.googleapis.com/auth/tasks",
 )
+#: Only to learn whose account it is. Google answers "email" with another name for it,
+#: so they say nothing about what a link can do.
+IDENTITY_SCOPES = frozenset({"openid", "email"})
 STATE_TTL_SECONDS = 600
 TIMEOUT_SECONDS = 60.0
 MAX_BODY_CHARS = 20_000
@@ -214,7 +217,9 @@ async def connection_status(user_id: str) -> dict[str, Any]:
                 "email": row["email"],
                 "needs_reconnect": bool(row.get("needs_reconnect_at")),
                 # Linked before a permission was added: it works, but not for that.
-                "missing_scopes": sorted(set(SCOPES) - set(str(row.get("scopes", "")).split())),
+                "missing_scopes": sorted(
+                    (set(SCOPES) - IDENTITY_SCOPES) - set(str(row.get("scopes", "")).split())
+                ),
             }
             for row in rows
         ],

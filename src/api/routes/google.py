@@ -28,7 +28,8 @@ Account = Annotated[str | None, Query(max_length=320)]
 
 _PAGE = (
     "<!doctype html><html lang=es><meta charset=utf-8><title>Kwami</title>"
-    "<body style='font-family:system-ui;text-align:center;padding:4rem'>"
+    "<body style='font-family:system-ui;text-align:center;padding:4rem;"
+    "background:#0b0d12;color:#e8eaf0'>"
     "<h1>{heading}</h1><p>{text}</p></body></html>"
 )
 
@@ -128,7 +129,9 @@ async def callback(
             status_code=400,
         )
     return HTMLResponse(
-        _PAGE.format(heading="Cuenta conectada", text="Ya puede cerrar esta ventana.")
+        _PAGE.format(
+            heading="Cuenta conectada", text="Ya puede cerrar esta pestaña y volver a Jarvis."
+        )
     )
 
 
