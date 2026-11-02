@@ -151,48 +151,6 @@ GEMINI_VOICE_META: dict[str, tuple[Literal["male", "female"], str]] = {
 REALTIME_PROVIDER_ALIASES = {"google": "gemini"}
 
 
-#: Character of each Gemini Live voice, as Google describes it, and the
-#: register it is usually heard in. The SDK ships only the names, which made the
-#: Voice panel a list of thirty star names with no way to tell a deep voice from
-#: a bright one or filter by gender.
-GEMINI_VOICE_META: dict[str, tuple[Literal["male", "female"], str]] = {
-    "Achernar": ("female", "Soft"),
-    "Achird": ("male", "Friendly"),
-    "Algenib": ("male", "Gravelly"),
-    "Algieba": ("male", "Smooth"),
-    "Alnilam": ("male", "Firm"),
-    "Aoede": ("female", "Breezy"),
-    "Autonoe": ("female", "Bright"),
-    "Callirrhoe": ("female", "Easy-going"),
-    "Charon": ("male", "Informative"),
-    "Despina": ("female", "Smooth"),
-    "Enceladus": ("male", "Breathy"),
-    "Erinome": ("female", "Clear"),
-    "Fenrir": ("male", "Excitable"),
-    "Gacrux": ("female", "Mature"),
-    "Iapetus": ("male", "Clear"),
-    "Kore": ("female", "Firm"),
-    "Laomedeia": ("female", "Upbeat"),
-    "Leda": ("female", "Youthful"),
-    "Orus": ("male", "Firm"),
-    "Puck": ("male", "Upbeat"),
-    "Pulcherrima": ("female", "Forward"),
-    "Rasalgethi": ("male", "Informative"),
-    "Sadachbia": ("male", "Lively"),
-    "Sadaltager": ("male", "Knowledgeable"),
-    "Schedar": ("male", "Even"),
-    "Sulafat": ("female", "Warm"),
-    "Umbriel": ("male", "Easy-going"),
-    "Vindemiatrix": ("female", "Gentle"),
-    "Zephyr": ("female", "Bright"),
-    "Zubenelgenubi": ("male", "Casual"),
-}
-
-#: The agent and the models catalogue call Gemini "google"; this catalogue
-#: grew up calling it "gemini". Both are accepted.
-REALTIME_PROVIDER_ALIASES = {"google": "gemini"}
-
-
 def _extract_gemini_realtime_voices() -> list[Voice]:
     """Extract Google Gemini Live voices from SDK."""
     try:
@@ -289,17 +247,6 @@ def get_tts_voices(elevenlabs: list[Voice] | None = None) -> dict[str, VoiceProv
             provider="openai",
             voices=openai_voices,
             source="sdk",
-        )
-
-    # Gemini TTS ("gemini", on the Gemini API key) speaks with the same 30
-    # prebuilt voices as Gemini Live; "google" below is Google Cloud TTS.
-    gemini_voices = _extract_gemini_realtime_voices()
-    if gemini_voices:
-        providers["gemini"] = VoiceProvider(provider="gemini", voices=gemini_voices, source="sdk")
-
-    if elevenlabs:
-        providers["elevenlabs"] = VoiceProvider(
-            provider="elevenlabs", voices=elevenlabs, source="live"
         )
 
     # Gemini TTS ("gemini", on the Gemini API key) speaks with the same 30
