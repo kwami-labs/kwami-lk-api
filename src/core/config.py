@@ -292,6 +292,10 @@ class Settings(BaseSettings):
     elevenlabs_api_key: str | None = Field(
         default=None, validation_alias=AliasChoices("ELEVEN_API_KEY", "ELEVENLABS_API_KEY")
     )
+    #: Speak a sample of an OpenAI or Gemini voice for the picker. Without them, the
+    #: key the user connected is used, and without that there is no sample.
+    openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
+    google_api_key: str | None = Field(default=None, alias="GOOGLE_API_KEY")
     tavily_project_id: str | None = Field(default=None, alias="TAVILY_PROJECT_ID")
     reconciliation_tavily_cost_per_credit_usd: float = Field(
         default=0.008,

@@ -57,6 +57,23 @@ async def connect_key(
         raise HTTPException(status_code=502, detail="The provider did not answer") from exc
 
 
+@router.post("/{provider}/check")
+@limiter.limit(PROVISIONING_LIMIT)
+async def check_key(
+    request: Request,
+    provider: str,
+    user: Annotated[AuthUser, Depends(require_auth)],
+) -> dict[str, bool]:
+    try:
+        return {"ok": await provider_keys_service.check_key(user.id, provider)}
+    except ProviderKeysNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail="Keys cannot be stored here") from exc
+    except UnknownProviderError as exc:
+        raise HTTPException(status_code=404, detail="Not connected") from exc
+    except ProviderUnavailableError as exc:
+        raise HTTPException(status_code=502, detail="The provider did not answer") from exc
+
+
 @router.delete("/{provider}")
 async def disconnect(
     provider: str, user: Annotated[AuthUser, Depends(require_auth)]

@@ -153,6 +153,41 @@ async def _store(user_id: str, provider: str, key: str) -> None:
     )
 
 
+async def key_of(user_id: str, provider: str) -> str | None:
+    """The key this user connected for a provider, for a call made on their behalf."""
+    fernet = _fernet()
+    result = await (
+        get_supabase_admin()
+        .table(TABLE)
+        .select("encrypted_key")
+        .eq("user_id", user_id)
+        .eq("provider", provider)
+        .limit(1)
+        .execute()
+    )
+    rows: list[Any] = result.data or []
+    if not rows:
+        return None
+    try:
+        return fernet.decrypt(str(rows[0]["encrypted_key"]).encode()).decode()
+    except InvalidToken:
+        # Stored under another secret: as good as not connected.
+        logger.warning("A connected %s key cannot be opened with this secret", provider)
+        return None
+
+
+async def check_key(user_id: str, provider: str) -> bool:
+    """Whether the provider still takes the key connected for it."""
+    key = await key_of(user_id, provider)
+    if key is None:
+        raise UnknownProviderError(provider)
+    try:
+        await _verify(provider, key)
+    except InvalidKeyError:
+        return False
+    return True
+
+
 async def connect_key(user_id: str, provider: str, key: str) -> dict[str, str]:
     """Check a pasted key and keep it. Returns what the app may show."""
     _fernet()  # before anything goes out: no point checking what cannot be kept

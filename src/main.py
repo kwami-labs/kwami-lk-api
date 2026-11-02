@@ -1,5 +1,6 @@
 """FastAPI application entry point."""
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -43,6 +44,7 @@ from src.core.logging import configure_logging
 from src.services.assistant_scheduler import start_scheduler, stop_scheduler
 from src.services.credits import init_supabase_admin
 from src.services.twilio_service import close_twilio_client
+from src.services.voices import get_tts_voices
 
 # JSON records carrying the request id, so a reported error can be found.
 configure_logging(debug=settings.debug, json_output=settings.log_json)
@@ -76,8 +78,13 @@ async def lifespan(app: FastAPI):
 
     start_scheduler()
 
+    # The catalogue imports a heavy plugin: seconds with every request waiting, on whoever
+    # opened the voice panel first. Off the event loop, and before anybody asks.
+    app.state.voices_warm = asyncio.create_task(asyncio.to_thread(get_tts_voices))
+
     yield
 
+    await app.state.voices_warm
     await stop_scheduler()
     await close_zep_client()
     await close_twilio_client()

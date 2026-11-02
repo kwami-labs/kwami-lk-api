@@ -177,3 +177,4 @@ src/services/google_service.py               100
 src/services/google_worker.py                100
 src/services/google_workspace.py             100
 src/services/provider_keys_service.py        100
+src/services/voice_preview.py                100
