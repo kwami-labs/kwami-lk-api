@@ -42,7 +42,7 @@ def linked(fake_supabase):
             "refresh_token_encrypted": Fernet(KEY.encode()).encrypt(b"refresh").decode(),
         },
     )
-    g._access_tokens[USER] = ("access", float("inf"))
+    g._access_tokens[(USER, "")] = ("access", float("inf"))
     return fake_supabase
 
 
@@ -102,6 +102,7 @@ class TestLink:
             "configured": True,
             "connected": False,
             "email": None,
+            "accounts": [],
         }
 
     async def test_status_when_linked_never_shows_the_token(self, linked):
@@ -115,7 +116,7 @@ class TestLink:
         assert await g.disconnect(USER) is True
         assert revoke.called
         assert not linked.db.rows("kwami_google_accounts")
-        assert USER not in g._access_tokens
+        assert (USER, "") not in g._access_tokens
 
     @respx.mock
     async def test_disconnect_forgets_even_if_google_fails(self, linked):
@@ -155,7 +156,7 @@ class TestErrors:
         respx.get(f"{g.GMAIL_URL}/messages").respond(401)
         with pytest.raises(g.GoogleNotConnectedError):
             await g.list_messages(USER)
-        assert USER not in g._access_tokens
+        assert (USER, "") not in g._access_tokens
 
     @respx.mock
     async def test_other_errors_carry_no_upstream_text(self, linked):

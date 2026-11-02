@@ -24,6 +24,7 @@ from src.api.routes import (
     credits,
     email,
     google,
+    google_workspace,
     health,
     internal,
     languages,
@@ -142,6 +143,7 @@ app.include_router(email.router, prefix="/email", tags=["Email"])
 app.include_router(calendar.router, prefix="/calendar", tags=["Calendar"])
 app.include_router(assistant.router, prefix="/assistant", tags=["Assistant"])
 app.include_router(google.router, prefix="/google", tags=["Google"])
+app.include_router(google_workspace.router, prefix="/google", tags=["Google"])
 app.include_router(providers.router, prefix="/providers", tags=["Providers"])
 app.include_router(internal.router, prefix="/internal", tags=["Internal"])
 app.include_router(webhooks.router, prefix="/webhooks", tags=["Webhooks"])

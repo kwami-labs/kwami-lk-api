@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from cryptography.fernet import Fernet
 
-from src.services import google_service
+from src.services import google_service, google_workspace
 
 pytestmark = pytest.mark.anyio
 
@@ -125,7 +125,7 @@ class TestGoogleLink:
 
     async def test_status(self, tenant_client, google_on):
         r = await tenant_client.get("/google/status")
-        assert r.json() == {"configured": True, "connected": False, "email": None}
+        assert r.json() == {"configured": True, "connected": False, "email": None, "accounts": []}
 
     async def test_connect(self, tenant_client, google_on):
         r = await tenant_client.post("/google/connect")
@@ -161,7 +161,7 @@ class TestGoogleLink:
     async def test_disconnect(self, tenant_client, google_on, monkeypatch):
         assert (await tenant_client.delete("/google/account")).status_code == 404
 
-        async def done(_user):
+        async def done(_user, _account=None):
             return True
 
         monkeypatch.setattr(google_service, "disconnect", done)
@@ -179,7 +179,7 @@ class TestGoogleData:
         ],
     )
     async def test_errors_map_to_status_codes(self, tenant_client, monkeypatch, error, status):
-        async def fail(*_args):
+        async def fail(*_args, **_kwargs):
             raise error
 
         monkeypatch.setattr(google_service, "list_messages", fail)
@@ -198,6 +198,18 @@ class TestGoogleData:
             "create_event",
             "update_event",
             "delete_event",
+            "create_draft",
+            "list_drafts",
+            "send_draft",
+            "read_attachment",
+            "list_labels",
+            "create_label",
+            "modify_labels",
+            "trash_message",
+            "untrash_message",
+            "list_filters",
+            "create_filter",
+            "delete_filter",
         ):
             monkeypatch.setattr(google_service, name, answer)
         event = {"title": "R", "starts_at": "a", "ends_at": "b"}
@@ -210,7 +222,137 @@ class TestGoogleData:
             ("POST", "/google/calendar/events", event, None),
             ("PATCH", "/google/calendar/events/e1", {"title": "N"}, None),
             ("DELETE", "/google/calendar/events/e1", None, None),
+            ("POST", "/google/gmail/drafts", {"to": ["a@b.c"], "body": "x"}, None),
+            ("GET", "/google/gmail/drafts", None, None),
+            ("POST", "/google/gmail/drafts/d1/send", None, None),
+            ("GET", "/google/gmail/messages/m1/attachments/a1", None, None),
+            ("GET", "/google/gmail/labels", None, None),
+            ("POST", "/google/gmail/labels", {"name": "n"}, None),
+            ("POST", "/google/gmail/messages/m1/labels", {"add": ["L"]}, None),
+            ("POST", "/google/gmail/messages/m1/trash", None, None),
+            ("POST", "/google/gmail/messages/m1/untrash", None, None),
+            ("GET", "/google/gmail/filters", None, None),
+            ("POST", "/google/gmail/filters", {"criteria": {}, "action": {}}, None),
+            ("DELETE", "/google/gmail/filters/f1", None, None),
         ]
         for method, url, body, params in calls:
             r = await tenant_client.request(method, url, json=body, params=params)
             assert r.status_code == 200, url
+
+    async def test_every_workspace_route_reaches_its_service(self, tenant_client, monkeypatch):
+        async def answer(*_args, **_kwargs):
+            return {"id": "x"}
+
+        async def count(*_args, **_kwargs):
+            return 1
+
+        async def nothing(*_args, **_kwargs):
+            return None
+
+        async def text(*_args, **_kwargs):
+            return "x"
+
+        for name, fake in (
+            ("search_files", answer),
+            ("read_file", answer),
+            ("create_file", answer),
+            ("write_file", answer),
+            ("create_folder", answer),
+            ("update_file", answer),
+            ("copy_file", answer),
+            ("set_trashed", answer),
+            ("list_permissions", answer),
+            ("share_file", answer),
+            ("unshare_file", nothing),
+            ("create_document", answer),
+            ("append_to_document", nothing),
+            ("replace_in_document", count),
+            ("create_spreadsheet", answer),
+            ("read_range", answer),
+            ("write_range", count),
+            ("append_rows", nothing),
+            ("create_presentation", answer),
+            ("add_slide", text),
+            ("search_contacts", answer),
+            ("create_contact", answer),
+            ("update_contact", answer),
+            ("list_task_lists", answer),
+            ("list_tasks", answer),
+            ("create_task", answer),
+            ("update_task", answer),
+        ):
+            monkeypatch.setattr(google_workspace, name, fake)
+        cells = {"range": "A1", "values": [[1]]}
+        calls = [
+            ("GET", "/google/drive/files", None, {"q": "x"}),
+            ("GET", "/google/drive/files/f1", None, None),
+            ("POST", "/google/drive/files", {"name": "n"}, None),
+            ("PUT", "/google/drive/files/f1/content", {"content": "c"}, None),
+            ("POST", "/google/drive/folders", {"name": "n"}, None),
+            ("PATCH", "/google/drive/files/f1", {"name": "n"}, None),
+            ("POST", "/google/drive/files/f1/copy", {}, None),
+            ("POST", "/google/drive/files/f1/trash", None, None),
+            ("POST", "/google/drive/files/f1/untrash", None, None),
+            ("GET", "/google/drive/files/f1/permissions", None, None),
+            ("POST", "/google/drive/files/f1/permissions", {"email": "a@b.c"}, None),
+            ("DELETE", "/google/drive/files/f1/permissions/p1", None, None),
+            ("POST", "/google/docs", {"title": "t"}, None),
+            ("POST", "/google/docs/d1/append", {"text": "t"}, None),
+            ("POST", "/google/docs/d1/replace", {"find": "a", "replace": "b"}, None),
+            ("POST", "/google/sheets", {"title": "t"}, None),
+            ("GET", "/google/sheets/s1/values", None, {"range": "A1"}),
+            ("PUT", "/google/sheets/s1/values", cells, None),
+            ("POST", "/google/sheets/s1/values", cells, None),
+            ("POST", "/google/slides", {"title": "t"}, None),
+            ("POST", "/google/slides/p1/slides", {"title": "t"}, None),
+            ("GET", "/google/contacts", None, None),
+            ("POST", "/google/contacts", {"name": "n"}, None),
+            ("PATCH", "/google/contacts/people/c1", {"name": "n"}, None),
+            ("GET", "/google/tasks/lists", None, None),
+            ("GET", "/google/tasks", None, None),
+            ("POST", "/google/tasks", {"title": "t"}, None),
+            ("PATCH", "/google/tasks/t1", {"done": True}, None),
+        ]
+        for method, url, body, params in calls:
+            r = await tenant_client.request(method, url, json=body, params=params)
+            assert r.status_code == 200, url
+
+    async def test_a_message_takes_its_attachments_from_drive(self, tenant_client, monkeypatch):
+        seen = {}
+
+        async def attach(_user, ids, **_kwargs):
+            return [google_service.Attachment(ids[0], "text/plain", b"x")]
+
+        async def send(*_args, **kwargs):
+            seen.update(kwargs)
+            return {"id": "m"}
+
+        monkeypatch.setattr(google_workspace, "drive_attachments", attach)
+        monkeypatch.setattr(google_service, "send_message", send)
+        r = await tenant_client.post(
+            "/google/gmail/send",
+            json={"to": ["a@b.c"], "body": "x", "attachment_file_ids": ["f1"]},
+        )
+        assert r.status_code == 200
+        assert seen["attachments"][0].filename == "f1"
+
+    async def test_saving_an_attachment(self, tenant_client, monkeypatch):
+        async def save(*_args, **_kwargs):
+            return {"id": "f"}
+
+        monkeypatch.setattr(google_workspace, "save_attachment", save)
+        r = await tenant_client.post(
+            "/google/gmail/messages/m/attachments/a/save", json={"filename": "a.pdf"}
+        )
+        assert r.json() == {"file": {"id": "f"}}
+
+    async def test_a_route_passes_the_account_it_was_given(self, tenant_client, monkeypatch):
+        seen = {}
+
+        async def answer(*_args, **kwargs):
+            seen.update(kwargs)
+            return []
+
+        monkeypatch.setattr(google_workspace, "search_files", answer)
+        await tenant_client.get("/google/drive/files", params={"account": "a@b.c"})
+        assert seen["account"] == "a@b.c"

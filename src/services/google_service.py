@@ -1,4 +1,7 @@
-"""The user's own Google account: Gmail and Calendar.
+"""The user's own Google accounts: the link, Gmail and Calendar.
+
+A user can link several, and a call names the address it means; with none named it
+goes to the oldest link. Drive, Docs, Contacts and Tasks are in `google_workspace`.
 
 Separate from the kwami's mailbox (`email_service`) and calendar
 (`calendar_service`), which keep working without any of this.
@@ -15,6 +18,7 @@ import base64
 import logging
 import re
 import time
+from dataclasses import dataclass
 from email.message import EmailMessage
 from typing import Any
 
@@ -36,13 +40,24 @@ CALENDAR_URL = "https://www.googleapis.com/calendar/v3/calendars/primary"
 SCOPES = (
     "openid",
     "email",
+    # Not the full `mail.google.com` scope: gmail.modify cannot delete a message for
+    # good, so the mailbox has no irreversible path even if a call asks for one.
     "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.settings.basic",
     "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/documents",
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/presentations",
+    "https://www.googleapis.com/auth/contacts",
+    "https://www.googleapis.com/auth/tasks",
 )
 STATE_TTL_SECONDS = 600
-TIMEOUT_SECONDS = 20.0
+TIMEOUT_SECONDS = 60.0
 MAX_BODY_CHARS = 20_000
 MAX_LIST_RESULTS = 25
+#: What Gmail accepts in one message.
+MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 #: Refreshed this long before it expires, so one never dies in the middle of a call.
 EXPIRY_MARGIN_SECONDS = 60
 
@@ -50,7 +65,15 @@ EXPIRY_MARGIN_SECONDS = 60
 #: path, where "../" would reach another Google endpoint with the user's own token.
 _GOOGLE_ID = re.compile(r"[A-Za-z0-9_-]{1,1024}")
 
-_access_tokens: dict[str, tuple[str, float]] = {}
+#: Keyed by user and the address asked for, "" for the default link.
+_access_tokens: dict[tuple[str, str], tuple[str, float]] = {}
+
+
+@dataclass(frozen=True)
+class Attachment:
+    filename: str
+    mime_type: str
+    data: bytes
 
 
 class GoogleNotConfiguredError(RuntimeError):
@@ -72,7 +95,8 @@ def _fernet() -> Fernet:
 
 
 def redirect_uri() -> str:
-    return f"{str(settings.app_public_url).rstrip('/')}/google/callback"
+    base = settings.google_redirect_base_url or settings.app_public_url
+    return f"{str(base).rstrip('/')}/google/callback"
 
 
 def read_state(state: str) -> str:
@@ -94,7 +118,9 @@ def authorization_url(user_id: str) -> str:
             "scope": " ".join(SCOPES),
             # Both are needed for Google to hand out a refresh token every time.
             "access_type": "offline",
-            "prompt": "consent",
+            # select_account: without it Google reuses the signed-in account, and a
+            # second one could never be linked.
+            "prompt": "select_account consent",
         }
     )
     return f"{AUTH_URL}?{query}"
@@ -130,6 +156,8 @@ async def complete_connection(user_id: str, code: str) -> str:
     if info.status_code >= 400:
         raise GoogleNotConnectedError("Google did not say whose account this is")
     email = str(info.json().get("email") or "")
+    if not email:
+        raise GoogleNotConnectedError("Google did not say whose account this is")
     await (
         get_supabase_admin()
         .table("kwami_google_accounts")
@@ -139,46 +167,68 @@ async def complete_connection(user_id: str, code: str) -> str:
                 "email": email,
                 "refresh_token_encrypted": _fernet().encrypt(refresh_token.encode()).decode(),
                 "scopes": str(tokens.get("scope") or ""),
+                "needs_reconnect_at": None,
                 "updated_at": now_iso(),
             },
-            on_conflict="user_id",
+            on_conflict="user_id,email",
         )
         .execute()
     )
-    _access_tokens.pop(user_id, None)
+    _forget_tokens(user_id)
     return email
 
 
-async def _account(user_id: str) -> dict[str, Any] | None:
+def _forget_tokens(user_id: str) -> None:
+    for key in [key for key in _access_tokens if key[0] == user_id]:
+        del _access_tokens[key]
+
+
+async def _accounts(user_id: str) -> list[dict[str, Any]]:
     result = await (
         get_supabase_admin()
         .table("kwami_google_accounts")
         .select("*")
         .eq("user_id", user_id)
-        .limit(1)
+        .order("created_at")
         .execute()
     )
-    rows = getattr(result, "data", None) or []
+    return getattr(result, "data", None) or []
+
+
+async def _account(user_id: str, account: str | None = None) -> dict[str, Any] | None:
+    rows = await _accounts(user_id)
+    if account:
+        wanted = account.strip().lower()
+        return next((row for row in rows if str(row["email"]).lower() == wanted), None)
     return rows[0] if rows else None
 
 
 async def connection_status(user_id: str) -> dict[str, Any]:
-    account = await _account(user_id)
+    rows = await _accounts(user_id)
     return {
         "configured": settings.google_enabled,
-        "connected": bool(account),
-        "email": account["email"] if account else None,
+        "connected": bool(rows),
+        "email": rows[0]["email"] if rows else None,
+        "accounts": [
+            {
+                "email": row["email"],
+                "needs_reconnect": bool(row.get("needs_reconnect_at")),
+                # Linked before a permission was added: it works, but not for that.
+                "missing_scopes": sorted(set(SCOPES) - set(str(row.get("scopes", "")).split())),
+            }
+            for row in rows
+        ],
     }
 
 
-async def disconnect(user_id: str) -> bool:
-    account = await _account(user_id)
-    if not account:
+async def disconnect(user_id: str, account: str | None = None) -> bool:
+    row = await _account(user_id, account)
+    if not row:
         return False
     # Deleted whatever Google says: the user asked for the link to go away, and a
     # revocation that fails is still something they can finish from their account.
     try:
-        token = _fernet().decrypt(account["refresh_token_encrypted"].encode()).decode()
+        token = _fernet().decrypt(row["refresh_token_encrypted"].encode()).decode()
         async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
             await client.post(REVOKE_URL, data={"token": token})
     except (InvalidToken, httpx.HTTPError, GoogleNotConfiguredError):
@@ -188,56 +238,93 @@ async def disconnect(user_id: str) -> bool:
         .table("kwami_google_accounts")
         .delete()
         .eq("user_id", user_id)
+        .eq("email", row["email"])
         .execute()
     )
-    _access_tokens.pop(user_id, None)
+    _forget_tokens(user_id)
     return True
 
 
-async def _access_token(user_id: str) -> str:
-    cached = _access_tokens.get(user_id)
+async def _access_token(user_id: str, account: str | None = None) -> str:
+    key = (user_id, (account or "").strip().lower())
+    cached = _access_tokens.get(key)
     if cached and cached[1] > time.monotonic():
         return cached[0]
-    account = await _account(user_id)
-    if not account:
+    row = await _account(user_id, account)
+    if not row:
         raise GoogleNotConnectedError("No Google account is linked")
     try:
-        refresh_token = _fernet().decrypt(account["refresh_token_encrypted"].encode()).decode()
+        refresh_token = _fernet().decrypt(row["refresh_token_encrypted"].encode()).decode()
     except InvalidToken as exc:
         raise GoogleNotConnectedError("The stored Google link cannot be read") from exc
-    tokens = await _post_token({"refresh_token": refresh_token, "grant_type": "refresh_token"})
+    try:
+        tokens = await _post_token({"refresh_token": refresh_token, "grant_type": "refresh_token"})
+    except GoogleNotConnectedError:
+        await (
+            get_supabase_admin()
+            .table("kwami_google_accounts")
+            .update({"needs_reconnect_at": now_iso()})
+            .eq("user_id", user_id)
+            .eq("email", row["email"])
+            .execute()
+        )
+        raise
     expires_in = int(tokens.get("expires_in") or 0)
     token = str(tokens["access_token"])
-    _access_tokens[user_id] = (token, time.monotonic() + expires_in - EXPIRY_MARGIN_SECONDS)
+    _access_tokens[key] = (token, time.monotonic() + expires_in - EXPIRY_MARGIN_SECONDS)
     return token
 
 
-def _path_id(value: str) -> str:
+def path_id(value: str) -> str:
     if not _GOOGLE_ID.fullmatch(value):
         raise GoogleRequestError("Not a Google id")
     return value
 
 
-async def _google(
+async def _send(
     user_id: str,
     method: str,
     url: str,
     *,
+    account: str | None = None,
     params: dict[str, Any] | None = None,
     body: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    token = await _access_token(user_id)
+    content: bytes | None = None,
+    content_type: str | None = None,
+) -> httpx.Response:
+    token = await _access_token(user_id, account)
+    headers = {"Authorization": f"Bearer {token}"}
+    if content_type:
+        headers["Content-Type"] = content_type
     async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
         response = await client.request(
-            method, url, params=params, json=body, headers={"Authorization": f"Bearer {token}"}
+            method, url, params=params, json=body, content=content, headers=headers
         )
     if response.status_code == 401:
-        _access_tokens.pop(user_id, None)
+        _forget_tokens(user_id)
         raise GoogleNotConnectedError("Google no longer accepts this link")
     if response.status_code >= 400:
         logger.warning("Google answered %s to a %s", response.status_code, method)
         raise GoogleRequestError(f"Google answered {response.status_code}")
+    return response
+
+
+async def google_json(user_id: str, method: str, url: str, **kwargs: Any) -> dict[str, Any]:
+    """One call to a Google API. `account` picks the link."""
+    response = await _send(user_id, method, url, **kwargs)
     return response.json() if response.content else {}
+
+
+async def google_bytes(user_id: str, url: str, **kwargs: Any) -> bytes:
+    """A file as it is stored."""
+    response = await _send(user_id, "GET", url, **kwargs)
+    return response.content
+
+
+async def google_text(user_id: str, url: str, **kwargs: Any) -> str:
+    """A body that is a document rather than JSON, cut to what a model can read."""
+    response = await _send(user_id, "GET", url, **kwargs)
+    return response.text[:MAX_BODY_CHARS]
 
 
 def _headers(message: dict[str, Any]) -> dict[str, str]:
@@ -261,6 +348,22 @@ def _plain_text(part: dict[str, Any]) -> str:
     return ""
 
 
+def _attachments(part: dict[str, Any]) -> list[dict[str, Any]]:
+    found = []
+    if part.get("filename") and part.get("body", {}).get("attachmentId"):
+        found.append(
+            {
+                "id": part["body"]["attachmentId"],
+                "filename": part["filename"],
+                "mime_type": part.get("mimeType", ""),
+                "size": part["body"].get("size", 0),
+            }
+        )
+    for child in part.get("parts", []):
+        found.extend(_attachments(child))
+    return found
+
+
 def _summary(message: dict[str, Any]) -> dict[str, Any]:
     headers = _headers(message)
     return {
@@ -272,55 +375,73 @@ def _summary(message: dict[str, Any]) -> dict[str, Any]:
         "date": headers.get("date", ""),
         "snippet": message.get("snippet", ""),
         "unread": "UNREAD" in message.get("labelIds", []),
+        "labels": message.get("labelIds", []),
     }
 
 
 async def list_messages(
-    user_id: str, query: str = "", max_results: int = 10
+    user_id: str, query: str = "", max_results: int = 10, *, account: str | None = None
 ) -> list[dict[str, Any]]:
-    listing = await _google(
+    listing = await google_json(
         user_id,
         "GET",
         f"{GMAIL_URL}/messages",
         params={"q": query, "maxResults": min(max_results, MAX_LIST_RESULTS)},
+        account=account,
     )
     messages = []
     for item in listing.get("messages", []):
-        message = await _google(
+        message = await google_json(
             user_id,
             "GET",
-            f"{GMAIL_URL}/messages/{item['id']}",
+            f"{GMAIL_URL}/messages/{path_id(item['id'])}",
             params={"format": "metadata", "metadataHeaders": ["From", "To", "Subject", "Date"]},
+            account=account,
         )
         messages.append(_summary(message))
     return messages
 
 
-async def read_message(user_id: str, message_id: str) -> dict[str, Any]:
-    message = await _google(
-        user_id, "GET", f"{GMAIL_URL}/messages/{_path_id(message_id)}", params={"format": "full"}
+async def read_message(
+    user_id: str, message_id: str, *, account: str | None = None
+) -> dict[str, Any]:
+    message = await google_json(
+        user_id,
+        "GET",
+        f"{GMAIL_URL}/messages/{path_id(message_id)}",
+        params={"format": "full"},
+        account=account,
     )
-    return {**_summary(message), "body": _plain_text(message.get("payload", {}))[:MAX_BODY_CHARS]}
+    payload = message.get("payload", {})
+    return {
+        **_summary(message),
+        "body": _plain_text(payload)[:MAX_BODY_CHARS],
+        "attachments": _attachments(payload),
+    }
 
 
-async def send_message(
+async def _compose(
     user_id: str,
     *,
     to: list[str],
     subject: str,
     body: str,
-    cc: list[str] | None = None,
-    reply_to_message_id: str | None = None,
+    cc: list[str] | None,
+    reply_to_message_id: str | None,
+    account: str | None,
+    attachments: list[Attachment] | None = None,
 ) -> dict[str, Any]:
+    """The Gmail `raw` payload shared by a sent message and a draft."""
     message = EmailMessage()
     payload: dict[str, Any] = {}
     final_subject = subject
     if reply_to_message_id:
-        original = await _google(
+        original = await google_json(
             user_id,
             "GET",
-            f"{GMAIL_URL}/messages/{_path_id(reply_to_message_id)}",
+            f"{GMAIL_URL}/messages/{path_id(reply_to_message_id)}",
             params={"format": "metadata", "metadataHeaders": ["Message-ID", "Subject"]},
+            account=account,
         )
         headers = _headers(original)
         payload["threadId"] = original.get("threadId")
@@ -342,17 +463,212 @@ async def send_message(
         message["Cc"] = ", ".join(cc)
     message["Subject"] = final_subject
     message.set_content(body)
+    for attachment in attachments or []:
+        maintype, _, subtype = attachment.mime_type.partition("/")
+        message.add_attachment(
+            attachment.data,
+            maintype=maintype or "application",
+            subtype=subtype or "octet-stream",
+            filename=attachment.filename,
+        )
     payload["raw"] = base64.urlsafe_b64encode(message.as_bytes()).decode()
-    sent = await _google(user_id, "POST", f"{GMAIL_URL}/messages/send", body=payload)
+    return payload
+
+
+async def send_message(
+    user_id: str,
+    *,
+    to: list[str],
+    subject: str,
+    body: str,
+    cc: list[str] | None = None,
+    reply_to_message_id: str | None = None,
+    account: str | None = None,
+    attachments: list[Attachment] | None = None,
+) -> dict[str, Any]:
+    payload = await _compose(
+        user_id,
+        to=to,
+        subject=subject,
+        body=body,
+        cc=cc,
+        reply_to_message_id=reply_to_message_id,
+        account=account,
+        attachments=attachments,
+    )
+    sent = await google_json(
+        user_id, "POST", f"{GMAIL_URL}/messages/send", body=payload, account=account
+    )
     return {"id": sent.get("id"), "thread_id": sent.get("threadId")}
 
 
-async def archive_message(user_id: str, message_id: str) -> None:
-    await _google(
+async def create_draft(
+    user_id: str,
+    *,
+    to: list[str],
+    subject: str,
+    body: str,
+    cc: list[str] | None = None,
+    reply_to_message_id: str | None = None,
+    account: str | None = None,
+    attachments: list[Attachment] | None = None,
+) -> dict[str, Any]:
+    payload = await _compose(
+        user_id,
+        to=to,
+        subject=subject,
+        body=body,
+        cc=cc,
+        reply_to_message_id=reply_to_message_id,
+        account=account,
+        attachments=attachments,
+    )
+    draft = await google_json(
+        user_id, "POST", f"{GMAIL_URL}/drafts", body={"message": payload}, account=account
+    )
+    return {"id": draft.get("id")}
+
+
+async def list_drafts(user_id: str, *, account: str | None = None) -> list[dict[str, Any]]:
+    listing = await google_json(
+        user_id,
+        "GET",
+        f"{GMAIL_URL}/drafts",
+        params={"maxResults": MAX_LIST_RESULTS},
+        account=account,
+    )
+    drafts = []
+    for item in listing.get("drafts", []):
+        draft = await google_json(
+            user_id,
+            "GET",
+            f"{GMAIL_URL}/drafts/{path_id(item['id'])}",
+            params={"format": "metadata"},
+            account=account,
+        )
+        drafts.append({**_summary(draft.get("message", {})), "id": item["id"]})
+    return drafts
+
+
+async def send_draft(user_id: str, draft_id: str, *, account: str | None = None) -> dict[str, Any]:
+    sent = await google_json(
+        user_id, "POST", f"{GMAIL_URL}/drafts/send", body={"id": draft_id}, account=account
+    )
+    return {"id": sent.get("id"), "thread_id": sent.get("threadId")}
+
+
+async def attachment_bytes(
+    user_id: str, message_id: str, attachment_id: str, *, account: str | None = None
+) -> bytes:
+    found = await google_json(
+        user_id,
+        "GET",
+        f"{GMAIL_URL}/messages/{path_id(message_id)}/attachments/{path_id(attachment_id)}",
+        account=account,
+    )
+    data = str(found.get("data", ""))
+    return base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
+
+
+async def read_attachment(
+    user_id: str, message_id: str, attachment_id: str, *, account: str | None = None
+) -> dict[str, Any]:
+    """The text of an attachment, or only its size when it is not text.
+
+    A PDF or an image: save it to Drive with `google_workspace.save_attachment`, and
+    reading it there gives its text.
+    """
+    raw = await attachment_bytes(user_id, message_id, attachment_id, account=account)
+    try:
+        text: str | None = raw.decode("utf-8")[:MAX_BODY_CHARS]
+    except UnicodeDecodeError:
+        text = None
+    return {"size": len(raw), "text": text}
+
+
+async def list_labels(user_id: str, *, account: str | None = None) -> list[dict[str, Any]]:
+    listing = await google_json(user_id, "GET", f"{GMAIL_URL}/labels", account=account)
+    return [
+        {"id": label.get("id"), "name": label.get("name"), "type": label.get("type")}
+        for label in listing.get("labels", [])
+    ]
+
+
+async def create_label(user_id: str, name: str, *, account: str | None = None) -> dict[str, Any]:
+    label = await google_json(
+        user_id, "POST", f"{GMAIL_URL}/labels", body={"name": name}, account=account
+    )
+    return {"id": label.get("id"), "name": label.get("name")}
+
+
+async def modify_labels(
+    user_id: str,
+    message_id: str,
+    *,
+    add: list[str] | None = None,
+    remove: list[str] | None = None,
+    account: str | None = None,
+) -> None:
+    await google_json(
         user_id,
         "POST",
-        f"{GMAIL_URL}/messages/{_path_id(message_id)}/modify",
+        f"{GMAIL_URL}/messages/{path_id(message_id)}/modify",
+        body={"addLabelIds": add or [], "removeLabelIds": remove or []},
+        account=account,
+    )
+
+
+async def trash_message(user_id: str, message_id: str, *, account: str | None = None) -> None:
+    """To the bin, where Gmail keeps it for 30 days. There is no deleting for good here."""
+    await google_json(
+        user_id, "POST", f"{GMAIL_URL}/messages/{path_id(message_id)}/trash", account=account
+    )
+
+
+async def untrash_message(user_id: str, message_id: str, *, account: str | None = None) -> None:
+    await google_json(
+        user_id, "POST", f"{GMAIL_URL}/messages/{path_id(message_id)}/untrash", account=account
+    )
+
+
+async def list_filters(user_id: str, *, account: str | None = None) -> list[dict[str, Any]]:
+    listing = await google_json(user_id, "GET", f"{GMAIL_URL}/settings/filters", account=account)
+    return list(listing.get("filter", []))
+
+
+async def create_filter(
+    user_id: str,
+    *,
+    criteria: dict[str, Any],
+    action: dict[str, Any],
+    account: str | None = None,
+) -> dict[str, Any]:
+    # A filter that forwards would keep sending the user's mail somewhere for good,
+    # and one line in a message could be what asked for it.
+    if action.get("forward"):
+        raise ValueError("A filter cannot forward mail")
+    return await google_json(
+        user_id,
+        "POST",
+        f"{GMAIL_URL}/settings/filters",
+        body={"criteria": criteria, "action": action},
+        account=account,
+    )
+
+
+async def delete_filter(user_id: str, filter_id: str, *, account: str | None = None) -> None:
+    await google_json(
+        user_id, "DELETE", f"{GMAIL_URL}/settings/filters/{path_id(filter_id)}", account=account
+    )
+
+
+async def archive_message(user_id: str, message_id: str, *, account: str | None = None) -> None:
+    await google_json(
+        user_id,
+        "POST",
+        f"{GMAIL_URL}/messages/{path_id(message_id)}/modify",
         body={"removeLabelIds": ["INBOX"]},
+        account=account,
     )
 
 
@@ -372,8 +688,10 @@ def _event(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def list_events(user_id: str, range_start: str, range_end: str) -> list[dict[str, Any]]:
-    listing = await _google(
+async def list_events(
+    user_id: str, range_start: str, range_end: str, *, account: str | None = None
+) -> list[dict[str, Any]]:
+    listing = await google_json(
         user_id,
         "GET",
         f"{CALENDAR_URL}/events",
@@ -384,6 +702,7 @@ async def list_events(user_id: str, range_start: str, range_end: str) -> list[di
             "orderBy": "startTime",
             "maxResults": 250,
         },
+        account=account,
     )
     return [_event(item) for item in listing.get("items", [])]
 
@@ -404,27 +723,35 @@ def _event_body(fields: dict[str, Any]) -> dict[str, Any]:
     return body
 
 
-async def create_event(user_id: str, **fields: Any) -> dict[str, Any]:
-    created = await _google(
+async def create_event(
+    user_id: str, *, account: str | None = None, **fields: Any
+) -> dict[str, Any]:
+    created = await google_json(
         user_id,
         "POST",
         f"{CALENDAR_URL}/events",
         params={"sendUpdates": "all" if fields.get("attendees") else "none"},
         body=_event_body(fields),
+        account=account,
     )
     return _event(created)
 
 
-async def update_event(user_id: str, event_id: str, **fields: Any) -> dict[str, Any]:
-    updated = await _google(
+async def update_event(
+    user_id: str, event_id: str, *, account: str | None = None, **fields: Any
+) -> dict[str, Any]:
+    updated = await google_json(
         user_id,
         "PATCH",
-        f"{CALENDAR_URL}/events/{_path_id(event_id)}",
+        f"{CALENDAR_URL}/events/{path_id(event_id)}",
         params={"sendUpdates": "all" if fields.get("attendees") else "none"},
         body=_event_body(fields),
+        account=account,
     )
     return _event(updated)
 
 
-async def delete_event(user_id: str, event_id: str) -> None:
-    await _google(user_id, "DELETE", f"{CALENDAR_URL}/events/{_path_id(event_id)}")
+async def delete_event(user_id: str, event_id: str, *, account: str | None = None) -> None:
+    await google_json(
+        user_id, "DELETE", f"{CALENDAR_URL}/events/{path_id(event_id)}", account=account
+    )

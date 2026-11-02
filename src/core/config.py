@@ -139,6 +139,9 @@ class Settings(BaseSettings):
     google_oauth_client_secret: str | None = Field(default=None, alias="GOOGLE_OAUTH_CLIENT_SECRET")
     # A Fernet key: encrypts refresh tokens at rest and signs the OAuth state.
     google_token_key: str | None = Field(default=None, alias="GOOGLE_TOKEN_KEY")
+    # Where Google sends the browser back, when that is not APP_PUBLIC_URL: a local API
+    # keeps the public address for its webhooks, and Google must return to the PC.
+    google_redirect_base_url: str | None = Field(default=None, alias="GOOGLE_REDIRECT_BASE_URL")
 
     # A Fernet key: encrypts the model keys users connect. The agent holds the same one.
     provider_keys_secret: str | None = Field(default=None, alias="PROVIDER_KEYS_SECRET")
