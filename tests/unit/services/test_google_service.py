@@ -352,3 +352,35 @@ class TestCalendar:
         route = respx.patch(f"{g.CALENDAR_URL}/events/e1").respond(json={"id": "e1"})
         await g.update_event(USER, "e1", description="d")
         assert json.loads(route.calls[0].request.content) == {"description": "d"}
+
+
+class TestIdsInThePath:
+    @pytest.mark.parametrize("bad", ["../../other", "a/b", "a?x=1", "a%2Fb", "", "x" * 1025])
+    async def test_what_is_not_a_google_id_never_goes_out(self, linked, bad):
+        with respx.mock(assert_all_called=False) as router:
+            route = router.route()
+            for call in (
+                g.read_message(USER, bad),
+                g.archive_message(USER, bad),
+                g.update_event(USER, bad, title="x"),
+                g.delete_event(USER, bad),
+            ):
+                with pytest.raises(g.GoogleRequestError):
+                    await call
+            assert not route.called
+
+    @respx.mock
+    async def test_a_recurring_event_id_is_one(self, linked):
+        event = "abc123_20261102T100000Z"
+        route = respx.delete(f"{g.CALENDAR_URL}/events/{event}").mock(
+            return_value=httpx.Response(204)
+        )
+        await g.delete_event(USER, event)
+        assert route.called
+
+    @respx.mock
+    async def test_the_log_does_not_carry_the_address(self, linked, caplog):
+        respx.get(f"{g.GMAIL_URL}/messages/abc").mock(return_value=httpx.Response(500))
+        with caplog.at_level("WARNING", logger="kwami-api"), pytest.raises(g.GoogleRequestError):
+            await g.read_message(USER, "abc")
+        assert "Google answered 500" in caplog.text and "messages/abc" not in caplog.text

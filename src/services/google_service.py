@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
 import time
 from email.message import EmailMessage
 from typing import Any
@@ -44,6 +45,10 @@ MAX_BODY_CHARS = 20_000
 MAX_LIST_RESULTS = 25
 #: Refreshed this long before it expires, so one never dies in the middle of a call.
 EXPIRY_MARGIN_SECONDS = 60
+
+#: What Gmail and Calendar ids are made of. One comes from the caller and goes into the
+#: path, where "../" would reach another Google endpoint with the user's own token.
+_GOOGLE_ID = re.compile(r"[A-Za-z0-9_-]{1,1024}")
 
 _access_tokens: dict[str, tuple[str, float]] = {}
 
@@ -207,6 +212,12 @@ async def _access_token(user_id: str) -> str:
     return token
 
 
+def _path_id(value: str) -> str:
+    if not _GOOGLE_ID.fullmatch(value):
+        raise GoogleRequestError("Not a Google id")
+    return value
+
+
 async def _google(
     user_id: str,
     method: str,
@@ -224,7 +235,7 @@ async def _google(
         _access_tokens.pop(user_id, None)
         raise GoogleNotConnectedError("Google no longer accepts this link")
     if response.status_code >= 400:
-        logger.warning("Google answered %s to %s %s", response.status_code, method, url)
+        logger.warning("Google answered %s to a %s", response.status_code, method)
         raise GoogleRequestError(f"Google answered {response.status_code}")
     return response.json() if response.content else {}
 
@@ -287,7 +298,7 @@ async def list_messages(
 
 async def read_message(user_id: str, message_id: str) -> dict[str, Any]:
     message = await _google(
-        user_id, "GET", f"{GMAIL_URL}/messages/{message_id}", params={"format": "full"}
+        user_id, "GET", f"{GMAIL_URL}/messages/{_path_id(message_id)}", params={"format": "full"}
     )
     return {**_summary(message), "body": _plain_text(message.get("payload", {}))[:MAX_BODY_CHARS]}
 
@@ -308,7 +319,7 @@ async def send_message(
         original = await _google(
             user_id,
             "GET",
-            f"{GMAIL_URL}/messages/{reply_to_message_id}",
+            f"{GMAIL_URL}/messages/{_path_id(reply_to_message_id)}",
             params={"format": "metadata", "metadataHeaders": ["Message-ID", "Subject"]},
         )
         headers = _headers(original)
@@ -340,7 +351,7 @@ async def archive_message(user_id: str, message_id: str) -> None:
     await _google(
         user_id,
         "POST",
-        f"{GMAIL_URL}/messages/{message_id}/modify",
+        f"{GMAIL_URL}/messages/{_path_id(message_id)}/modify",
         body={"removeLabelIds": ["INBOX"]},
     )
 
@@ -408,7 +419,7 @@ async def update_event(user_id: str, event_id: str, **fields: Any) -> dict[str, 
     updated = await _google(
         user_id,
         "PATCH",
-        f"{CALENDAR_URL}/events/{event_id}",
+        f"{CALENDAR_URL}/events/{_path_id(event_id)}",
         params={"sendUpdates": "all" if fields.get("attendees") else "none"},
         body=_event_body(fields),
     )
@@ -416,4 +427,4 @@ async def update_event(user_id: str, event_id: str, **fields: Any) -> dict[str, 
 
 
 async def delete_event(user_id: str, event_id: str) -> None:
-    await _google(user_id, "DELETE", f"{CALENDAR_URL}/events/{event_id}")
+    await _google(user_id, "DELETE", f"{CALENDAR_URL}/events/{_path_id(event_id)}")
