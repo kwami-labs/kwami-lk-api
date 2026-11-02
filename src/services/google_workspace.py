@@ -65,7 +65,7 @@ MAX_RESULTS = 50
 SHARE_ROLES = ("reader", "commenter", "writer")
 _CONTACT_ID = re.compile(r"people/[A-Za-z0-9_-]{1,256}")
 #: A range is one path segment: A1 notation and a sheet's name, with nothing that ends it.
-_CELL_RANGE = re.compile(r"[^/\?#%]{1,256}")
+_CELL_RANGE = re.compile(r"[^/\\?#%]{1,256}")
 
 
 def _range_part(cell_range: str) -> str:
