@@ -165,3 +165,12 @@ src/services/voices.py                       100
 # Deposits, USD quotes and settlement. Funding is idempotent and recoverable after a failed
 # settle -- the tests that prove it are in tests/unit/services/.
 src/services/wallet_service.py               100
+
+# Reminders, reports and the user's Google account.
+src/api/routes/assistant.py                  100
+src/api/routes/google.py                     100
+src/api/routes/providers.py                  100
+src/services/assistant_scheduler.py          100
+src/services/assistant_service.py            100
+src/services/google_service.py               100
+src/services/provider_keys_service.py        100

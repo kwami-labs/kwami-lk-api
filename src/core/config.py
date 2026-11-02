@@ -134,6 +134,24 @@ class Settings(BaseSettings):
     # Public URLs / webhooks
     app_public_url: str | None = Field(default=None, alias="APP_PUBLIC_URL")
 
+    # Google account of the user: Gmail and Calendar. Off until all three are set.
+    google_oauth_client_id: str | None = Field(default=None, alias="GOOGLE_OAUTH_CLIENT_ID")
+    google_oauth_client_secret: str | None = Field(default=None, alias="GOOGLE_OAUTH_CLIENT_SECRET")
+    # A Fernet key: encrypts refresh tokens at rest and signs the OAuth state.
+    google_token_key: str | None = Field(default=None, alias="GOOGLE_TOKEN_KEY")
+
+    # A Fernet key: encrypts the model keys users connect. The agent holds the same one.
+    provider_keys_secret: str | None = Field(default=None, alias="PROVIDER_KEYS_SECRET")
+
+    # Reminders and scheduled reports
+    assistant_scheduler_enabled: bool = Field(default=True, alias="ASSISTANT_SCHEDULER_ENABLED")
+    assistant_scheduler_interval_seconds: int = Field(
+        default=60,
+        ge=5,
+        le=3600,
+        alias="ASSISTANT_SCHEDULER_INTERVAL_SECONDS",
+    )
+
     # Twilio / telephony
     twilio_account_sid: str | None = Field(default=None, alias="TWILIO_ACCOUNT_SID")
     twilio_auth_token: str | None = Field(default=None, alias="TWILIO_AUTH_TOKEN")
@@ -427,6 +445,15 @@ class Settings(BaseSettings):
     def auth_enabled(self) -> bool:
         """Check if authentication is configured."""
         return self.supabase_url is not None
+
+    @property
+    def google_enabled(self) -> bool:
+        return bool(
+            self.google_oauth_client_id
+            and self.google_oauth_client_secret
+            and self.google_token_key
+            and self.app_public_url
+        )
 
     @property
     def twilio_enabled(self) -> bool:

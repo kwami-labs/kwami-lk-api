@@ -47,6 +47,7 @@ dependencies = [
     "python-louvain>=0.16",
     "thefuzz[speedup]>=0.22.0",
     "slowapi>=0.1.10",
+    "tzdata>=2026.4",
 ]
 
 [project.optional-dependencies]

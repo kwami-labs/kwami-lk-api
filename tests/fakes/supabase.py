@@ -46,6 +46,9 @@ CREDIT_TRANSACTION_TYPES = frozenset({"purchase", "usage", "bonus", "refund"})
 # Tables whose primary key is `id uuid DEFAULT gen_random_uuid()`.
 _TABLES_WITH_UUID_PK = frozenset(
     {
+        "kwami_assistant_notifications",
+        "kwami_assistant_tasks",
+        "kwami_outbound_audit",
         "credit_transactions",
         "credit_usage_logs",
         "user_kwamis",
@@ -324,7 +327,7 @@ class _Query:
         if op == "neq":
             return current != value
         if op == "is":
-            return current is value or current == value
+            return current is value or current == value or (value == "null" and current is None)
         if op == "in":
             return current in value
         if current is None:

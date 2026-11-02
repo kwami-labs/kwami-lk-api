@@ -21,7 +21,6 @@ from src.services.voices import (
     _extract_gemini_realtime_voices,
     _extract_openai_realtime_voices,
     _extract_openai_tts_voices,
-    _extract_rime_voices,
     _get_yaml_voices,
     _load_voices_yaml,
     get_realtime_voices,
@@ -87,33 +86,17 @@ class TestModels:
 
 class TestSdkExtraction:
     def test_openai_tts_voices_come_back_with_metadata(self):
-        vs = _extract_openai_tts_voices()
-        assert vs, "the openai plugin is a hard dependency; this should not be empty"
-        by_id = {v.id: v for v in vs}
+        by_id = {v.id: v for v in _extract_openai_tts_voices()}
         assert by_id["alloy"].name == "Alloy"
         assert by_id["alloy"].gender == "neutral"
-        assert all(v.language == "en" for v in vs)
+        assert by_id["marin"].gender == "female"
+        assert all(v.language == "multilingual" for v in by_id.values())
 
-    def test_a_voice_the_metadata_table_does_not_know_is_titled(self, monkeypatch):
-        """The SDK adds voices faster than the hand-written table does."""
-        import livekit.plugins.openai.models as m
-
-        monkeypatch.setattr(voices_mod, "get_args", lambda _t: ("brand_new",))
-        vs = _extract_openai_tts_voices()
-        assert [v.id for v in vs] == ["brand_new"]
-        assert vs[0].name == "Brand_New"
-        assert vs[0].category == "Unknown"
-        assert vs[0].gender is None
-        assert m is not None
-
-    def test_a_missing_openai_plugin_degrades_to_empty(self, monkeypatch, caplog):
-        _block_import(monkeypatch, "livekit.plugins.openai")
-        with caplog.at_level("WARNING", logger="kwami-api.voices"):
-            assert _extract_openai_tts_voices() == []
-        assert "Could not import OpenAI TTS voices" in caplog.text
-
-    def test_realtime_reuses_the_tts_voice_set(self):
-        assert _extract_openai_realtime_voices() == _extract_openai_tts_voices()
+    def test_realtime_lists_only_what_a_realtime_session_accepts(self):
+        """fable, nova and onyx fail at connect there, which is silence."""
+        ids = {v.id for v in _extract_openai_realtime_voices()}
+        assert {"marin", "cedar", "verse"} <= ids
+        assert not {"fable", "nova", "onyx"} & ids
 
     def test_gemini_voices_are_labelled_multilingual(self):
         vs = _extract_gemini_realtime_voices()
@@ -146,37 +129,6 @@ class TestSdkExtraction:
         with caplog.at_level("WARNING", logger="kwami-api.voices"):
             assert _extract_gemini_realtime_voices() == []
         assert "Could not import Gemini Live voices" in caplog.text
-
-    def test_rime_currently_yields_nothing_known_bug(self):
-        """`livekit.plugins.rime.models` no longer exports `ArcanaVoices`.
-
-        The installed plugin exports `TTSModels`, `DefaultCodaVoice` and
-        `DefaultMistVoice`. The import therefore raises, the `except ImportError`
-        swallows it, and Rime is absent from the TTS catalog the app renders --
-        silently, because a warning in the log is the only signal. Pinned as it
-        ships; invert this test when the extractor is pointed at the new names.
-        """
-        assert _extract_rime_voices() == []
-
-    def test_rime_voices_are_titled_and_labelled_arcana(self, monkeypatch):
-        """The mapping itself, exercised through a stand-in for the missing type."""
-        monkeypatch.setattr(voices_mod, "get_args", lambda _t: ("celeste", "orion"))
-        monkeypatch.setattr(
-            builtins,
-            "__import__",
-            _import_stub(builtins.__import__, "livekit.plugins.rime.models", ArcanaVoices=str),
-        )
-        vs = _extract_rime_voices()
-        assert [v.id for v in vs] == ["celeste", "orion"]
-        assert all(v.category == "Arcana" for v in vs)
-        assert all(v.language == "en" for v in vs)
-        assert all(v.name == v.id.title() for v in vs)
-
-    def test_a_missing_rime_plugin_degrades_to_empty(self, monkeypatch, caplog):
-        _block_import(monkeypatch, "livekit.plugins.rime")
-        with caplog.at_level("WARNING", logger="kwami-api.voices"):
-            assert _extract_rime_voices() == []
-        assert "Could not import Rime voices" in caplog.text
 
 
 class TestYamlLoading:
@@ -271,20 +223,31 @@ class TestGetYamlVoices:
 
 class TestPublicTtsApi:
     def test_the_sdk_providers_are_marked_as_such(self):
-        providers = get_tts_voices()
-        assert providers["openai"].source == "sdk"
-        assert "rime" not in providers, "see test_rime_currently_yields_nothing_known_bug"
+        assert get_tts_voices()["openai"].source == "sdk"
 
-    def test_rime_would_be_listed_as_an_sdk_provider_if_it_yielded_voices(self, monkeypatch):
-        """The arm the broken Rime import currently makes unreachable in production."""
-        monkeypatch.setattr(
-            voices_mod,
-            "_extract_rime_voices",
-            lambda: [Voice(id="celeste", name="Celeste", category="Arcana", language="en")],
-        )
+    def test_every_voice_the_providers_publish_is_listed(self):
         providers = get_tts_voices()
-        assert providers["rime"].source == "sdk"
-        assert [v.id for v in providers["rime"].voices] == ["celeste"]
+        assert len(providers["cartesia"].voices) > 1000
+        assert len(providers["deepgram"].voices) > 100
+        assert len({v.id for v in providers["cartesia"].voices}) == len(
+            providers["cartesia"].voices
+        )
+        assert len({v.id for v in providers["deepgram"].voices}) == len(
+            providers["deepgram"].voices
+        )
+
+    def test_spanish_from_spain_can_be_found(self):
+        providers = get_tts_voices()
+        for name in ("cartesia", "deepgram"):
+            assert any(v.language == "es-ES" for v in providers[name].voices), name
+
+    def test_rime_comes_from_the_yaml_by_model(self):
+        rime = get_tts_voices()["rime"]
+        assert rime.source == "yaml"
+        assert {v.category for v in rime.voices} == {"arcana", "mistv2"}
+
+    def test_deepgram_voices_can_be_heard(self):
+        assert all(v.preview_url for v in get_tts_voices()["deepgram"].voices)
 
     def test_yaml_providers_are_included_when_configured(self, monkeypatch):
         monkeypatch.setattr(
@@ -300,7 +263,6 @@ class TestPublicTtsApi:
 
     def test_an_empty_sdk_provider_is_omitted(self, monkeypatch):
         monkeypatch.setattr(voices_mod, "_extract_openai_tts_voices", list)
-        monkeypatch.setattr(voices_mod, "_extract_rime_voices", list)
         monkeypatch.setattr(voices_mod, "_extract_gemini_realtime_voices", list)
         monkeypatch.setattr(voices_mod, "_get_yaml_voices", lambda p, k: [])
         assert get_tts_voices() == {}
