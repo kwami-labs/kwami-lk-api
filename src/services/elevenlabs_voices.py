@@ -27,6 +27,7 @@ and ElevenLabs' own answer decides.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any, Literal
 from urllib.parse import urlencode
@@ -169,6 +170,9 @@ def clear_cache() -> None:
 # =============================================================================
 
 LIBRARY_PAGE_SIZE = 30
+#: What the two ids of a library voice are made of. They go into ElevenLabs' path with
+#: the deployment's key, where "../" would reach another endpoint.
+_LIBRARY_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 
 class VoiceLibraryNoKeyError(ServiceUnavailableError):
@@ -357,6 +361,8 @@ def _refusal(status: int, body: Any) -> DomainError:
 
 async def add_library_voice(owner_id: str, voice_id: str, name: str) -> str:
     """Save a library voice into the account; the id it has there."""
+    if not (_LIBRARY_ID.fullmatch(owner_id) and _LIBRARY_ID.fullmatch(voice_id)):
+        raise VoiceWithdrawnError
     api_key = get_settings().elevenlabs_api_key
     if not api_key:
         raise VoiceLibraryNoKeyError

@@ -187,6 +187,12 @@ class TestAddLibraryVoice:
         assert post.calls == [("/voices/add/o/v", {"new_name": "Lalo - Spanish"})]
         assert el._cache is None
 
+    @pytest.mark.parametrize(("owner", "voice"), [("../user", "v"), ("o", "a/b"), ("o", "")])
+    async def test_an_id_that_could_change_the_route_never_goes_out(self, post, owner, voice):
+        with pytest.raises(el.VoiceWithdrawnError):
+            await el.add_library_voice(owner, voice, "n")
+        assert post.calls == []
+
     async def test_an_answer_without_an_id_keeps_the_librarys(self, post):
         post.answer = (200, None)
         assert await el.add_library_voice("o", "v", "n") == "v"
