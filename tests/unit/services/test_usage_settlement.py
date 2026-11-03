@@ -288,6 +288,15 @@ def own_key_session() -> list[dict]:
     return [{**item, "own_key": True} for item in real_voice_session()]
 
 
+@pytest.fixture
+def connected(fake_supabase, tenant):
+    """The providers `real_voice_session` runs on, connected by this user."""
+    for provider in ("anthropic", "deepgram", "elevenlabs", "cartesia", "openai"):
+        fake_supabase.db.rows("kwami_provider_keys").append(
+            {"user_id": tenant.user_id, "provider": provider}
+        )
+
+
 def platform_row(result: dict) -> dict:
     return next(i for i in result["items"] if i["model_id"] == credits.PLATFORM_MODEL_ID)
 
@@ -302,7 +311,9 @@ def test_usage_on_their_own_key_costs_no_energy():
 
 
 @pytest.mark.anyio
-async def test_the_first_session_of_the_day_pays_the_platform(fake_supabase, funded_user):
+async def test_the_first_session_of_the_day_pays_the_platform(
+    fake_supabase, funded_user, connected
+):
     user_id = funded_user(10_000_000)
 
     result = await credits.process_usage_report(
@@ -314,7 +325,9 @@ async def test_the_first_session_of_the_day_pays_the_platform(fake_supabase, fun
 
 
 @pytest.mark.anyio
-async def test_a_later_session_within_the_included_minutes_pays_nothing(fake_supabase, funded_user):
+async def test_a_later_session_within_the_included_minutes_pays_nothing(
+    fake_supabase, funded_user, connected
+):
     user_id = funded_user(10_000_000)
     await credits.process_usage_report(user_id, "own-1", own_key_session(), session_minutes=10.0)
 
@@ -326,7 +339,9 @@ async def test_a_later_session_within_the_included_minutes_pays_nothing(fake_sup
 
 
 @pytest.mark.anyio
-async def test_minutes_past_the_included_ones_are_charged_once(fake_supabase, funded_user):
+async def test_minutes_past_the_included_ones_are_charged_once(
+    fake_supabase, funded_user, connected
+):
     user_id = funded_user(10_000_000)
     await credits.process_usage_report(user_id, "own-1", own_key_session(), session_minutes=25.0)
 
@@ -342,7 +357,7 @@ async def test_minutes_past_the_included_ones_are_charged_once(fake_supabase, fu
 
 
 @pytest.mark.anyio
-async def test_a_stage_on_our_key_is_still_metered(fake_supabase, funded_user):
+async def test_a_stage_on_our_key_is_still_metered(fake_supabase, funded_user, connected):
     user_id = funded_user(10_000_000)
     llm, stt, tts = real_voice_session()
     mixed = [{**llm, "own_key": True}, {**stt, "own_key": True}, tts]
@@ -351,6 +366,49 @@ async def test_a_stage_on_our_key_is_still_metered(fake_supabase, funded_user):
 
     tts_charge = credits.calculate_usage_charge(tts).requested_micro_credits
     assert result["total_credits_requested"] == 600_000 + tts_charge
+
+
+@pytest.mark.anyio
+async def test_a_key_they_never_connected_is_charged_like_ours(fake_supabase, funded_user):
+    """The agent says whose key it used, and it may say anything."""
+    user_id = funded_user(10_000_000)
+    claimed = own_key_session()
+
+    result = await credits.process_usage_report(user_id, "claim", claimed, session_minutes=4.4)
+
+    expected = sum(
+        credits.calculate_usage_charge(item).requested_micro_credits
+        for item in real_voice_session()
+    )
+    assert result["total_credits_requested"] == expected
+    assert not any(i["model_id"] == credits.PLATFORM_MODEL_ID for i in result["items"])
+
+
+def test_providers_are_named_as_the_agent_names_them():
+    assert credits._provider_of("api.openai.com/tts-1") == "openai"
+    assert credits._provider_of("Deepgram/nova-3") == "deepgram"
+    assert credits._provider_of("gemini/flash") == "google"
+    assert credits._provider_of("no-prefix") == ""
+
+
+@pytest.mark.anyio
+async def test_two_reports_at_once_pay_the_day_once(fake_supabase, funded_user):
+    user_id = funded_user(10_000_000)
+    today = credits.datetime.now(credits.UTC).date()
+
+    assert await credits._claim_day_fee(user_id, "first", today) is True
+    assert await credits._claim_day_fee(user_id, "second", today) is False
+
+
+@pytest.mark.anyio
+async def test_another_failure_claiming_the_day_is_not_swallowed(monkeypatch):
+    class Broken:
+        def table(self, _name):
+            raise RuntimeError("database down")
+
+    monkeypatch.setattr(credits, "get_supabase_admin", lambda: Broken())
+    with pytest.raises(RuntimeError, match="database down"):
+        await credits._claim_day_fee("u", "s", credits.datetime.now(credits.UTC).date())
 
 
 @pytest.mark.anyio

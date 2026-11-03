@@ -313,6 +313,20 @@ class TestReports:
         assert "No he podido leer su Google Calendar." in body
 
 
+class TestSendNotifyCode:
+    async def test_the_code_goes_to_the_number_and_the_proof_back(
+        self, fake_supabase, tenant, sent
+    ):
+        _channel(fake_supabase, tenant, "sms")
+        proof = await sched.send_notify_code(tenant.user_id, tenant.kwami_id, "612345678", "sms")
+        assert "." in proof
+        assert sent and "Kwami" in str(sent[0])
+
+    async def test_no_way_to_send_it_is_a_failure(self, fake_supabase, tenant, sent):
+        with pytest.raises(RuntimeError, match="could not be sent"):
+            await sched.send_notify_code(tenant.user_id, tenant.kwami_id, "612345678", "whatsapp")
+
+
 class TestDeliver:
     async def test_with_no_phone_it_stays_in_the_app(self, fake_supabase, tenant, sent):
         note = await sched.deliver(tenant.user_id, tenant.kwami_id, None, "T", "B")

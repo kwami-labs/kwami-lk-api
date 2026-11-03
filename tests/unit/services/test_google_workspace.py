@@ -422,3 +422,15 @@ class TestIdsInThePath:
         with pytest.raises(g.GoogleRequestError):
             await w.read_range(USER, "s1", bad)
         assert not route.called
+
+
+class TestIsShared:
+    @respx.mock
+    @pytest.mark.parametrize(
+        ("answer", "expected"),
+        [({"shared": False}, False), ({"shared": True}, True), ({}, True)],
+    )
+    async def test_not_knowing_counts_as_shared(self, answer, expected):
+        route = respx.get(f"{w.DRIVE_URL}/f1").respond(json=answer)
+        assert await w.is_shared(USER, "f1") is expected
+        assert route.calls.last.request.url.params["fields"] == "shared"

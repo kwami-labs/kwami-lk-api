@@ -297,6 +297,18 @@ async def write_file(
     return _file(updated)
 
 
+async def is_shared(user_id: str, file_id: str, *, account: str | None = None) -> bool:
+    """Whether anyone else can see this file or folder. Not knowing counts as yes."""
+    found = await google_json(
+        user_id,
+        "GET",
+        f"{DRIVE_URL}/{path_id(file_id)}",
+        params={"fields": "shared"},
+        account=account,
+    )
+    return found.get("shared") is not False
+
+
 async def create_folder(
     user_id: str, *, name: str, parent_id: str | None = None, account: str | None = None
 ) -> dict[str, Any]:

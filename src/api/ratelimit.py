@@ -38,6 +38,10 @@ logger = logging.getLogger("kwami-api.ratelimit")
 TOKEN_LIMIT = "30/minute"  # noqa: S105 - a rate, not a credential
 PURCHASE_LIMIT = "10/minute"
 PROVISIONING_LIMIT = "5/minute"
+#: Each is a message to a number nobody has confirmed, on the platform's Twilio.
+NOTIFY_CODE_LIMIT = "3/hour;6/day"
+#: Saving is where a code is tried, so guessing one has to take longer than it lasts.
+ASSISTANT_SETTINGS_LIMIT = "10/minute"
 #: A sample costs a provider call the first time anybody asks for it.
 VOICE_PREVIEW_LIMIT = "30/minute;300/day"
 #: Each search is a call on the deployment's ElevenLabs key.
