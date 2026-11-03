@@ -38,6 +38,8 @@ logger = logging.getLogger("kwami-api.ratelimit")
 TOKEN_LIMIT = "30/minute"  # noqa: S105 - a rate, not a credential
 PURCHASE_LIMIT = "10/minute"
 PROVISIONING_LIMIT = "5/minute"
+#: A sample costs a provider call the first time anybody asks for it.
+VOICE_PREVIEW_LIMIT = "30/minute;300/day"
 WEBHOOK_LIMIT = "300/minute"
 DEFAULT_LIMIT = "300/minute"
 

@@ -88,3 +88,35 @@ def test_service_role_only_tables_are_revoked_from_the_public_roles(migrated_dat
     assert not still_granted, (
         f"policy-less tables still granted to anon/authenticated: {still_granted}"
     )
+
+
+def test_security_definer_functions_are_closed_to_the_public_roles(migrated_database):
+    """A SECURITY DEFINER function runs as its owner, past every RLS policy.
+
+    Postgres grants EXECUTE to PUBLIC on every new function, and PostgREST exposes
+    each one at /rest/v1/rpc/<name>. So `add_credits` and `deduct_credits`, which
+    trust the user id they are given, could be called with the public anon key
+    until 023 closed them.
+    """
+    import psycopg
+
+    with psycopg.connect(migrated_database) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT p.oid::regprocedure::text
+              FROM pg_proc p
+              JOIN pg_namespace n ON n.oid = p.pronamespace
+             WHERE n.nspname = 'public'
+               AND p.prosecdef
+               AND (has_function_privilege('anon', p.oid, 'EXECUTE')
+                    OR has_function_privilege('authenticated', p.oid, 'EXECUTE'))
+             ORDER BY 1
+            """
+        )
+        callable_by_clients = [row[0] for row in cur.fetchall()]
+
+    assert not callable_by_clients, (
+        f"these run as their owner and the anon key can call them: {callable_by_clients}. "
+        "REVOKE ALL ON FUNCTION ... FROM PUBLIC, anon, authenticated in a migration, and "
+        "GRANT EXECUTE to service_role if the API calls it."
+    )

@@ -219,3 +219,62 @@ def test_new_users_receive_the_welcome_bonus_exactly_once(db):
     assert balance_of(db, new_id) > 0
     bonuses = [r for r in ledger_rows(db, new_id) if r[0] == "bonus"]
     assert len(bonuses) == 1
+
+
+# --------------------------------------------------------------------------
+# who may call them
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("role", ["anon", "authenticated"])
+def test_the_public_roles_cannot_move_credits(db, user_id, role):
+    """Both trust the user id they are given, so a client must never reach them."""
+    import psycopg
+
+    with db.cursor() as cur:
+        cur.execute("SELECT add_credits(%s, %s, 'purchase')", (user_id, 100 * MICRO))
+    with db.cursor() as cur:
+        cur.execute(f"SET ROLE {role}")
+        try:
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                cur.execute("SELECT add_credits(%s, %s, 'purchase')", (user_id, MICRO))
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                cur.execute("SELECT deduct_credits(%s, %s)", (user_id, MICRO))
+        finally:
+            cur.execute("RESET ROLE")
+
+    assert balance_of(db, user_id) == 100 * MICRO
+
+
+def test_the_service_role_can_still_move_credits(db, user_id):
+    """The API calls both with the service role key. Revoking PUBLIC must not cut it off."""
+    with db.cursor() as cur:
+        cur.execute("SET ROLE service_role")
+        try:
+            cur.execute("SELECT add_credits(%s, %s, 'purchase')", (user_id, 2 * MICRO))
+            cur.execute("SELECT deduct_credits(%s, %s)", (user_id, MICRO))
+        finally:
+            cur.execute("RESET ROLE")
+
+    assert balance_of(db, user_id) == MICRO
+
+
+def test_a_signup_without_execute_on_the_trigger_function_still_gets_the_bonus(db):
+    """Sign-ups insert as Supabase's auth role, which 023 does not grant EXECUTE."""
+    new_id = str(uuid.uuid4())
+    with db.cursor() as cur:
+        cur.execute("DROP ROLE IF EXISTS signup_writer")
+        cur.execute("CREATE ROLE signup_writer NOLOGIN")
+        cur.execute("GRANT USAGE ON SCHEMA auth TO signup_writer")
+        cur.execute("GRANT INSERT ON auth.users TO signup_writer")
+        cur.execute("SET ROLE signup_writer")
+        try:
+            cur.execute(
+                "INSERT INTO auth.users (id, email) VALUES (%s, 's@example.com')", (new_id,)
+            )
+        finally:
+            cur.execute("RESET ROLE")
+            cur.execute("DROP OWNED BY signup_writer")
+            cur.execute("DROP ROLE signup_writer")
+
+    assert balance_of(db, new_id) > 0

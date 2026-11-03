@@ -2,12 +2,12 @@
 
 This module provides voice data for TTS and Realtime models.
 It uses a hybrid approach:
-- Extracts voices from LiveKit SDK where available (OpenAI, Google Gemini, Rime)
-- Falls back to YAML configuration for providers without SDK types (Cartesia, Deepgram, ElevenLabs, Google Cloud TTS)
+- Extracts Gemini's voices from the LiveKit SDK, and has OpenAI's in code
+- Falls back to YAML configuration for providers without SDK types (Cartesia, Rime, Deepgram, ElevenLabs, Google Cloud TTS)
 - Lists ElevenLabs from the account itself when the API has its key (see
   `src.services.elevenlabs_voices`), the YAML list being the fallback
 
-Last updated: 2026-02-04
+Last updated: 2026-11-02
 """
 
 import logging
@@ -51,49 +51,62 @@ class VoiceProvider(BaseModel):
 # =============================================================================
 
 
+#: Category and gender of every OpenAI voice: the SDK ships at most the ids.
+_OPENAI_VOICE_META: dict[str, tuple[str, Literal["male", "female", "neutral"]]] = {
+    "alloy": ("Neutral", "neutral"),
+    "ash": ("Male", "male"),
+    "ballad": ("Male", "male"),
+    "cedar": ("Male", "male"),
+    "coral": ("Female", "female"),
+    "echo": ("Male", "male"),
+    "fable": ("Neutral", "neutral"),
+    "marin": ("Female", "female"),
+    "nova": ("Female", "female"),
+    "onyx": ("Male", "male"),
+    "sage": ("Female", "female"),
+    "shimmer": ("Female", "female"),
+    "verse": ("Male", "male"),
+}
+
+#: tts-1 stops at nine of these; gpt-4o-mini-tts takes them all. The app filters by model.
+OPENAI_TTS_VOICES = tuple(_OPENAI_VOICE_META)
+#: Only overlaps with the TTS set: a realtime session handed fable, nova or onyx
+#: fails at connect, which on that pipeline is silence.
+OPENAI_REALTIME_VOICES = (
+    "alloy",
+    "ash",
+    "ballad",
+    "cedar",
+    "coral",
+    "echo",
+    "marin",
+    "sage",
+    "shimmer",
+    "verse",
+)
+
+
+def _openai_voices(voice_ids: tuple[str, ...]) -> list[Voice]:
+    return [
+        Voice(
+            id=vid,
+            name=vid.title(),
+            category=_OPENAI_VOICE_META[vid][0],
+            gender=_OPENAI_VOICE_META[vid][1],
+            language="multilingual",
+        )
+        for vid in voice_ids
+    ]
+
+
 def _extract_openai_tts_voices() -> list[Voice]:
-    """Extract OpenAI TTS voices from SDK."""
-    try:
-        from livekit.plugins.openai.models import TTSVoices
-
-        voice_ids = get_args(TTSVoices)
-
-        # Voice metadata (not in SDK, manually defined)
-        voice_meta = {
-            "alloy": {"name": "Alloy", "category": "Neutral", "gender": "neutral"},
-            "ash": {"name": "Ash", "category": "Male", "gender": "male"},
-            "ballad": {"name": "Ballad", "category": "Male", "gender": "male"},
-            "coral": {"name": "Coral", "category": "Female", "gender": "female"},
-            "echo": {"name": "Echo", "category": "Male", "gender": "male"},
-            "fable": {"name": "Fable", "category": "Neutral", "gender": "neutral"},
-            "nova": {"name": "Nova", "category": "Female", "gender": "female"},
-            "onyx": {"name": "Onyx", "category": "Male", "gender": "male"},
-            "sage": {"name": "Sage", "category": "Female", "gender": "female"},
-            "shimmer": {"name": "Shimmer", "category": "Female", "gender": "female"},
-        }
-
-        voices = []
-        for vid in voice_ids:
-            meta = voice_meta.get(vid, {"name": vid.title(), "category": "Unknown"})
-            voices.append(
-                Voice(
-                    id=vid,
-                    name=meta["name"],
-                    category=meta.get("category"),
-                    gender=meta.get("gender"),
-                    language="en",
-                )
-            )
-        return voices
-    except ImportError as e:
-        logger.warning("Could not import OpenAI TTS voices: %s", e)
-        return []
+    """OpenAI TTS voices."""
+    return _openai_voices(OPENAI_TTS_VOICES)
 
 
 def _extract_openai_realtime_voices() -> list[Voice]:
-    """Extract OpenAI Realtime voices (same as TTS voices)."""
-    # OpenAI Realtime uses the same voice set as TTS
-    return _extract_openai_tts_voices()
+    """OpenAI Realtime voices."""
+    return _openai_voices(OPENAI_REALTIME_VOICES)
 
 
 #: Character of each Gemini Live voice, as Google describes it, and the
@@ -164,29 +177,6 @@ def _extract_gemini_realtime_voices() -> list[Voice]:
         return []
 
 
-def _extract_rime_voices() -> list[Voice]:
-    """Extract Rime Arcana voices from SDK."""
-    try:
-        from livekit.plugins.rime.models import ArcanaVoices
-
-        voice_ids = get_args(ArcanaVoices)
-
-        voices = []
-        for vid in voice_ids:
-            voices.append(
-                Voice(
-                    id=vid,
-                    name=vid.title(),
-                    category="Arcana",
-                    language="en",
-                )
-            )
-        return voices
-    except ImportError as e:
-        logger.warning("Could not import Rime voices: %s", e)
-        return []
-
-
 # =============================================================================
 # YAML Voice Loading
 # =============================================================================
@@ -202,7 +192,7 @@ def _load_voices_yaml() -> dict:
 
     yaml_path = Path(__file__).parents[2] / "config" / "livekit_voices.yaml"
     try:
-        with open(yaml_path) as f:
+        with open(yaml_path, encoding="utf-8") as f:
             _VOICES_YAML = yaml.safe_load(f) or {}
             logger.info("Loaded voices from %s", yaml_path)
             return _VOICES_YAML
@@ -259,14 +249,6 @@ def get_tts_voices(elevenlabs: list[Voice] | None = None) -> dict[str, VoiceProv
             source="sdk",
         )
 
-    rime_voices = _extract_rime_voices()
-    if rime_voices:
-        providers["rime"] = VoiceProvider(
-            provider="rime",
-            voices=rime_voices,
-            source="sdk",
-        )
-
     # Gemini TTS ("gemini", on the Gemini API key) speaks with the same 30
     # prebuilt voices as Gemini Live; "google" below is Google Cloud TTS.
     gemini_voices = _extract_gemini_realtime_voices()
@@ -279,7 +261,7 @@ def get_tts_voices(elevenlabs: list[Voice] | None = None) -> dict[str, VoiceProv
         )
 
     # YAML voices
-    yaml_providers = ["cartesia", "elevenlabs", "deepgram", "google"]
+    yaml_providers = ["cartesia", "elevenlabs", "deepgram", "rime", "google"]
     for provider in yaml_providers:
         if provider in providers:
             continue

@@ -12,7 +12,7 @@ from livekit import api as livekit_api
 
 from src.core.config import settings
 from src.services.credits import get_supabase_admin
-from src.services.pricing import ALL_PRICING
+from src.services.pricing import get_model_pricing
 
 logger = logging.getLogger("kwami-api.admin-reconciliation")
 
@@ -606,7 +606,7 @@ async def _fetch_rows(
 
 
 def _infer_internal_provider(model_id: str) -> str:
-    pricing_entry = ALL_PRICING.get(model_id)
+    pricing_entry = get_model_pricing(model_id)
     if pricing_entry:
         return pricing_entry.provider
     if "/" in model_id:

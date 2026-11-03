@@ -404,3 +404,23 @@ def test_without_an_engine_or_direction_nothing_is_invented():
     assert "type" not in voice
     assert "realtime" not in voice
     assert "style" not in voice["tts"]
+
+
+class TestGoogleForTheWorkThread:
+    async def test_it_needs_the_key(self, client):
+        r = await client.post("/internal/users/u1/google", json={"action": "accounts"})
+        assert r.status_code == 401
+
+    async def test_an_allowed_action_runs(self, keyed_client, monkeypatch):
+        from src.services import google_worker
+
+        async def run(user_id, **_kwargs):
+            return {"user": user_id}
+
+        monkeypatch.setitem(google_worker.ALLOWED, "accounts", run)
+        r = await keyed_client.post("/internal/users/u1/google", json={"action": "accounts"})
+        assert r.json() == {"result": {"user": "u1"}}
+
+    async def test_sending_is_refused(self, keyed_client):
+        r = await keyed_client.post("/internal/users/u1/google", json={"action": "gmail_send"})
+        assert r.status_code == 400

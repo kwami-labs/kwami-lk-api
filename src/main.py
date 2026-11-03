@@ -1,5 +1,6 @@
 """FastAPI application entry point."""
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -17,16 +18,20 @@ from src.api.middleware import (
 from src.api.ratelimit import limiter, rate_limit_exceeded_handler
 from src.api.routes import (
     admin_reconciliation,
+    assistant,
     calendar,
     channels,
     contacts,
     credits,
     email,
+    google,
+    google_workspace,
     health,
     internal,
     languages,
     memory,
     models,
+    providers,
     token,
     voices,
     wallet,
@@ -36,8 +41,10 @@ from src.api.routes.memory import close_zep_client
 from src.core.config import settings
 from src.core.errors import install_error_handlers
 from src.core.logging import configure_logging
+from src.services.assistant_scheduler import start_scheduler, stop_scheduler
 from src.services.credits import init_supabase_admin
 from src.services.twilio_service import close_twilio_client
+from src.services.voices import get_tts_voices
 
 # JSON records carrying the request id, so a reported error can be found.
 configure_logging(debug=settings.debug, json_output=settings.log_json)
@@ -69,8 +76,16 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("🗄️  Supabase not configured; database-backed routes will fail")
 
+    start_scheduler()
+
+    # The catalogue imports a heavy plugin: seconds with every request waiting, on whoever
+    # opened the voice panel first. Off the event loop, and before anybody asks.
+    app.state.voices_warm = asyncio.create_task(asyncio.to_thread(get_tts_voices))
+
     yield
 
+    await app.state.voices_warm
+    await stop_scheduler()
     await close_zep_client()
     await close_twilio_client()
     logger.info("👋 Shutting down...")
@@ -133,6 +148,10 @@ app.include_router(contacts.router, prefix="/contacts", tags=["Contacts"])
 app.include_router(wallet.router, prefix="/wallets", tags=["Wallets"])
 app.include_router(email.router, prefix="/email", tags=["Email"])
 app.include_router(calendar.router, prefix="/calendar", tags=["Calendar"])
+app.include_router(assistant.router, prefix="/assistant", tags=["Assistant"])
+app.include_router(google.router, prefix="/google", tags=["Google"])
+app.include_router(google_workspace.router, prefix="/google", tags=["Google"])
+app.include_router(providers.router, prefix="/providers", tags=["Providers"])
 app.include_router(internal.router, prefix="/internal", tags=["Internal"])
 app.include_router(webhooks.router, prefix="/webhooks", tags=["Webhooks"])
 app.include_router(

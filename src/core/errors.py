@@ -27,16 +27,21 @@ read ``error.code``, which is stable in a way that a human-readable string is no
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from postgrest.exceptions import APIError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from src.core.logging import get_request_id
 
 logger = logging.getLogger("kwami-api.errors")
+
+UPSTREAM_RETRY_AFTER_SECONDS = 5
 
 
 class DomainError(Exception):
@@ -167,6 +172,18 @@ def error_body(code: str, message: str, details: Any = None) -> dict[str, Any]:
     }
 
 
+def _is_upstream_outage(exc: Exception) -> bool:
+    """Whether this is a dependency being down rather than a bug of ours.
+
+    PostgREST reports a gateway failure with the HTTP status as its code (a 502
+    from Cloudflare, on 2026-11-02), and its own errors with letters or the five
+    digits of a Postgres code, which are not an outage.
+    """
+    if isinstance(exc, httpx.TransportError):
+        return True
+    return isinstance(exc, APIError) and bool(re.fullmatch(r"5\d\d", str(exc.code)))
+
+
 def install_error_handlers(app: FastAPI) -> None:
     """Register the handlers that turn exceptions into the envelope."""
 
@@ -204,6 +221,21 @@ def install_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def _unhandled(request: Request, exc: Exception) -> JSONResponse:
+        if _is_upstream_outage(exc):
+            # A blip the client can retry, not a 500 that reads as our bug.
+            logger.warning(
+                "Upstream unavailable on %s %s: %s",
+                request.method,
+                request.url.path,
+                type(exc).__name__,
+            )
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content=error_body(
+                    "service_unavailable", "A service we depend on is briefly unavailable"
+                ),
+                headers={"Retry-After": str(UPSTREAM_RETRY_AFTER_SECONDS)},
+            )
         # Full traceback server-side, nothing upstream-specific to the client.
         logger.exception("Unhandled error on %s %s", request.method, request.url.path, exc_info=exc)
         return JSONResponse(
