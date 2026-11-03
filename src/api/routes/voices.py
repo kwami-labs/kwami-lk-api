@@ -10,13 +10,19 @@ grouped by provider. Uses a hybrid approach:
 import logging
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response, status
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.api.deps import require_auth
-from src.api.ratelimit import VOICE_PREVIEW_LIMIT, limiter
-from src.core.security import AuthUser
+from src.api.ratelimit import (
+    VOICE_LIBRARY_ADD_LIMIT,
+    VOICE_LIBRARY_LIMIT,
+    VOICE_PREVIEW_LIMIT,
+    limiter,
+)
+from src.core.security import AuthUser, is_admin_user
 from src.services import elevenlabs_voices, voice_preview
+from src.services.elevenlabs_voices import LibraryCapacity, LibraryPage
 from src.services.voices import (
     Voice,
     VoiceProvider,
@@ -186,6 +192,85 @@ async def voice_sample(
         media_type=sample.media_type,
         headers={"Cache-Control": "private, max-age=86400"},
     )
+
+
+# =============================================================================
+# The ElevenLabs library
+# =============================================================================
+
+
+class LibraryAccessResponse(BaseModel):
+    """Whether this caller may search the library, and the room the plan has."""
+
+    allowed: bool
+    capacity: LibraryCapacity | None = None
+
+
+class AddLibraryVoiceRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=120)
+
+
+class AddLibraryVoiceResponse(BaseModel):
+    id: str = Field(description="The voice's id in the account")
+
+
+#: The two ids go into ElevenLabs' path, so nothing there can change the route.
+LibraryId = Annotated[str, Path(pattern=r"^[A-Za-z0-9_-]+$", max_length=128)]
+
+
+def _library_admin(user: Annotated[AuthUser, Depends(require_auth)]) -> AuthUser:
+    """The account is the whole deployment's: only an administrator touches it."""
+    if not is_admin_user(user):
+        raise HTTPException(status_code=403, detail="Only an administrator can do this")
+    return user
+
+
+@router.get("/library/access", response_model=LibraryAccessResponse)
+@limiter.limit(VOICE_LIBRARY_LIMIT)
+async def voice_library_access(
+    request: Request,
+    user: Annotated[AuthUser, Depends(require_auth)],
+) -> LibraryAccessResponse:
+    """Whether to offer the library at all: a plain no for everybody else."""
+    if not is_admin_user(user) or not elevenlabs_voices.has_key():
+        return LibraryAccessResponse(allowed=False)
+    return LibraryAccessResponse(allowed=True, capacity=await elevenlabs_voices.library_capacity())
+
+
+@router.get("/library", response_model=LibraryPage)
+@limiter.limit(VOICE_LIBRARY_LIMIT)
+async def search_voice_library(
+    request: Request,
+    _: Annotated[AuthUser, Depends(_library_admin)],
+    search: Annotated[str | None, Query(max_length=120)] = None,
+    language: Annotated[str | None, Query(pattern=r"^[a-z]{2,3}$")] = None,
+    gender: Literal["male", "female", "neutral"] | None = None,
+    page: Annotated[int, Query(ge=0, le=1000)] = 0,
+) -> LibraryPage:
+    """Search ElevenLabs' public library, the most used voices first."""
+    return await elevenlabs_voices.search_library(
+        search=search, language=language, gender=gender, page=page
+    )
+
+
+@router.post(
+    "/library/{owner_id}/{voice_id}",
+    response_model=AddLibraryVoiceResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+@limiter.limit(VOICE_LIBRARY_ADD_LIMIT)
+async def add_voice_from_library(
+    request: Request,
+    _: Annotated[AuthUser, Depends(_library_admin)],
+    owner_id: LibraryId,
+    voice_id: LibraryId,
+    body: AddLibraryVoiceRequest,
+) -> AddLibraryVoiceResponse:
+    """Save a library voice into the deployment's ElevenLabs account."""
+    added = await elevenlabs_voices.add_library_voice(owner_id, voice_id, body.name)
+    return AddLibraryVoiceResponse(id=added)
 
 
 # =============================================================================

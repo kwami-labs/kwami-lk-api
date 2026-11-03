@@ -40,6 +40,10 @@ PURCHASE_LIMIT = "10/minute"
 PROVISIONING_LIMIT = "5/minute"
 #: A sample costs a provider call the first time anybody asks for it.
 VOICE_PREVIEW_LIMIT = "30/minute;300/day"
+#: Each search is a call on the deployment's ElevenLabs key.
+VOICE_LIBRARY_LIMIT = "30/minute;500/day"
+#: Each add may count against what the plan allows, and is not undone from here.
+VOICE_LIBRARY_ADD_LIMIT = "5/minute;30/day"
 WEBHOOK_LIMIT = "300/minute"
 DEFAULT_LIMIT = "300/minute"
 
