@@ -123,32 +123,33 @@ class TestOpenRouter:
         return httpx.URL(parsed.params["callback_url"]).params["state"], parsed
 
     def test_the_url_carries_a_real_pkce_challenge(self):
-        state, url = self._state(p.openrouter_authorization_url(USER))
+        state, url = self._state(p.openrouter_authorization_url(USER, "kwami://back"))
         assert url.params["code_challenge_method"] == "S256"
         assert httpx.URL(url.params["callback_url"]).host == "api.test"
-        user, verifier = p._read_state(state)
-        assert user == USER
+        user, verifier, target = p._read_state(state)
+        assert (user, target) == (USER, "kwami://back")
+        assert p.openrouter_return_target(state) == "kwami://back"
         digest = hashlib.sha256(verifier.encode()).digest()
         assert (
             base64.urlsafe_b64encode(digest).rstrip(b"=").decode() == url.params["code_challenge"]
         )
 
     def test_the_verifier_is_not_readable_in_the_url(self):
-        state, _ = self._state(p.openrouter_authorization_url(USER))
+        state, _ = self._state(p.openrouter_authorization_url(USER, "kwami://back"))
         assert USER not in state
 
     def test_no_public_url_is_not_configured(self, monkeypatch):
         monkeypatch.setattr(p.settings, "app_public_url", None, raising=False)
         with pytest.raises(p.ProviderKeysNotConfiguredError):
-            p.openrouter_authorization_url(USER)
+            p.openrouter_authorization_url(USER, "kwami://back")
 
     @respx.mock
     async def test_a_code_becomes_a_stored_key(self, fake_supabase):
         route = respx.post(p.OPENROUTER_KEYS_URL).mock(
             return_value=httpx.Response(200, json={"key": "sk-or-abcd"})
         )
-        state, _ = self._state(p.openrouter_authorization_url(USER))
-        await p.complete_openrouter(state, "the-code")
+        state, _ = self._state(p.openrouter_authorization_url(USER, "kwami://back"))
+        await p.complete_openrouter(USER, state, "the-code")
         body = json.loads(route.calls[0].request.content)
         assert body["code"] == "the-code" and body["code_verifier"] == p._read_state(state)[1]
         row = _rows(fake_supabase)[0]
@@ -161,21 +162,33 @@ class TestOpenRouter:
     @respx.mock
     async def test_no_key_back_stores_nothing(self, fake_supabase, response):
         respx.post(p.OPENROUTER_KEYS_URL).mock(return_value=response)
-        state, _ = self._state(p.openrouter_authorization_url(USER))
+        state, _ = self._state(p.openrouter_authorization_url(USER, "kwami://back"))
         with pytest.raises(p.InvalidKeyError):
-            await p.complete_openrouter(state, "c")
+            await p.complete_openrouter(USER, state, "c")
         assert _rows(fake_supabase) == []
 
     @respx.mock
     async def test_openrouter_down(self, fake_supabase):
         respx.post(p.OPENROUTER_KEYS_URL).mock(side_effect=httpx.ConnectError("down"))
-        state, _ = self._state(p.openrouter_authorization_url(USER))
+        state, _ = self._state(p.openrouter_authorization_url(USER, "kwami://back"))
         with pytest.raises(p.ProviderUnavailableError):
-            await p.complete_openrouter(state, "c")
+            await p.complete_openrouter(USER, state, "c")
 
     async def test_a_forged_state_is_refused(self):
         with pytest.raises(p.InvalidKeyError):
-            await p.complete_openrouter("forged", "c")
+            await p.complete_openrouter(USER, "forged", "c")
+
+    @respx.mock
+    async def test_someone_elses_consent_stores_nothing(self, fake_supabase):
+        """A link sent to someone: their code must not put their key on this account."""
+        route = respx.post(p.OPENROUTER_KEYS_URL).mock(
+            return_value=httpx.Response(200, json={"key": "sk-or-abcd"})
+        )
+        state, _ = self._state(p.openrouter_authorization_url(USER, "kwami://back"))
+        with pytest.raises(p.WrongUserError):
+            await p.complete_openrouter("someone-else", state, "c")
+        assert not route.called
+        assert _rows(fake_supabase) == []
 
 
 @pytest.mark.anyio

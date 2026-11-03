@@ -57,6 +57,10 @@ class InvalidKeyError(ValueError):
     """The provider says this key is no good, or it does not look like one."""
 
 
+class WrongUserError(InvalidKeyError):
+    """The consent was started by someone other than who is finishing it."""
+
+
 class ProviderUnavailableError(RuntimeError):
     """The provider could not say either way. Carries no upstream text."""
 
@@ -228,11 +232,12 @@ def _callback_url(state: str) -> str:
     return f"{base}/providers/openrouter/callback?{httpx.QueryParams({'state': state})}"
 
 
-def openrouter_authorization_url(user_id: str) -> str:
+def openrouter_authorization_url(user_id: str, target: str) -> str:
     """Where to send the user to approve a key.
 
     OpenRouter returns to the callback with only a code, so what the callback needs
-    (whose it is, the PKCE verifier) travels encrypted inside the callback's own URL.
+    (whose it is, where it goes next, the PKCE verifier) travels encrypted inside the
+    callback's own URL.
     """
     if not settings.app_public_url:
         raise ProviderKeysNotConfiguredError("APP_PUBLIC_URL is not set")
@@ -240,7 +245,9 @@ def openrouter_authorization_url(user_id: str) -> str:
     challenge = (
         base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
     )
-    state = _fernet().encrypt(json.dumps({"u": user_id, "v": verifier}).encode()).decode()
+    state = (
+        _fernet().encrypt(json.dumps({"u": user_id, "v": verifier, "r": target}).encode()).decode()
+    )
     query = httpx.QueryParams(
         {
             "callback_url": _callback_url(state),
@@ -251,17 +258,27 @@ def openrouter_authorization_url(user_id: str) -> str:
     return f"{OPENROUTER_AUTH_URL}?{query}"
 
 
-def _read_state(state: str) -> tuple[str, str]:
+def _read_state(state: str) -> tuple[str, str, str]:
     try:
         data = json.loads(_fernet().decrypt(state.encode(), ttl=STATE_TTL_SECONDS))
-    except (InvalidToken, ValueError) as exc:
+        return str(data["u"]), str(data["v"]), str(data["r"])
+    except (InvalidToken, ValueError, KeyError, TypeError) as exc:
         raise InvalidKeyError("Invalid or expired state") from exc
-    return str(data["u"]), str(data["v"])
 
 
-async def complete_openrouter(state: str, code: str) -> None:
-    """Swap the code for a key. A forged or stale state raises `InvalidKeyError`."""
-    user_id, verifier = _read_state(state)
+def openrouter_return_target(state: str) -> str:
+    """Where the callback passes the code on to. A forged state raises `InvalidKeyError`."""
+    return _read_state(state)[2]
+
+
+async def complete_openrouter(user_id: str, state: str, code: str) -> None:
+    """Swap the code for a key, for the signed-in user who started this consent.
+
+    A forged, stale or someone else's state raises `InvalidKeyError`.
+    """
+    started_by, verifier, _target = _read_state(state)
+    if started_by != user_id:
+        raise WrongUserError("Another user started this connection")
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
             response = await client.post(

@@ -15,6 +15,7 @@ belongs to the user.
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import re
 import time
@@ -56,6 +57,9 @@ SCOPES = (
 #: so they say nothing about what a link can do.
 IDENTITY_SCOPES = frozenset({"openid", "email"})
 STATE_TTL_SECONDS = 600
+#: A work thread's token cannot be taken back, so it runs out.
+WORK_TOKEN_TTL_SECONDS = 90 * 24 * 3600
+_WORK_TOKEN_PURPOSE = "work-thread"  # noqa: S105
 TIMEOUT_SECONDS = 60.0
 MAX_BODY_CHARS = 20_000
 MAX_LIST_RESULTS = 25
@@ -102,19 +106,45 @@ def redirect_uri() -> str:
     return f"{str(base).rstrip('/')}/google/callback"
 
 
-def read_state(state: str) -> str:
-    """The user this consent was started for. A forged or stale state raises ValueError."""
+@dataclass(frozen=True)
+class ConsentState:
+    """Who started a consent, and where its result goes (`oauth_return`)."""
+
+    user_id: str
+    target: str
+
+
+def read_state(state: str) -> ConsentState:
+    """What this consent was started with. A forged or stale state raises ValueError."""
     try:
-        return _fernet().decrypt(state.encode(), ttl=STATE_TTL_SECONDS).decode()
-    except InvalidToken as exc:
+        data = json.loads(_fernet().decrypt(state.encode(), ttl=STATE_TTL_SECONDS))
+        return ConsentState(user_id=str(data["u"]), target=str(data["r"]))
+    except (InvalidToken, ValueError, KeyError, TypeError) as exc:
         raise ValueError("Invalid or expired state") from exc
 
 
-def authorization_url(user_id: str) -> str:
+def work_thread_token(user_id: str) -> str:
+    """What the work thread on a PC shows: it opens this user's Google and nobody else's."""
+    payload = json.dumps({"p": _WORK_TOKEN_PURPOSE, "u": user_id})
+    return _fernet().encrypt(payload.encode()).decode()
+
+
+def read_work_thread_token(token: str) -> str:
+    """The user it belongs to. Anything else encrypted with this key raises ValueError."""
+    try:
+        data = json.loads(_fernet().decrypt(token.encode(), ttl=WORK_TOKEN_TTL_SECONDS))
+        if data["p"] != _WORK_TOKEN_PURPOSE:
+            raise ValueError("Not a work thread token")
+        return str(data["u"])
+    except (InvalidToken, ValueError, KeyError, TypeError) as exc:
+        raise ValueError("Invalid or expired token") from exc
+
+
+def authorization_url(user_id: str, target: str) -> str:
     query = httpx.QueryParams(
         {
             # `state` first: it is what raises when Google is not configured.
-            "state": _fernet().encrypt(user_id.encode()).decode(),
+            "state": _fernet().encrypt(json.dumps({"u": user_id, "r": target}).encode()).decode(),
             "client_id": settings.google_oauth_client_id or "",
             "redirect_uri": redirect_uri(),
             "response_type": "code",

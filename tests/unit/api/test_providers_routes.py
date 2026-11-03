@@ -82,11 +82,18 @@ class TestOpenRouter:
         assert (await client.post("/providers/openrouter/connect")).status_code == 401
 
     async def test_connect_gives_the_consent_url(self, tenant_client, keys_on):
-        r = await tenant_client.post("/providers/openrouter/connect")
+        r = await tenant_client.post("/providers/openrouter/connect", json={"desktop": True})
         assert r.status_code == 200 and r.json()["url"].startswith(p.OPENROUTER_AUTH_URL)
 
+    async def test_connect_from_an_unknown_origin_is_a_400(self, tenant_client, keys_on):
+        r = await tenant_client.post(
+            "/providers/openrouter/connect", headers={"Origin": "https://evil.test"}
+        )
+        assert r.status_code == 400
+
     async def test_connect_unconfigured_is_a_503(self, tenant_client, keys_off):
-        assert (await tenant_client.post("/providers/openrouter/connect")).status_code == 503
+        r = await tenant_client.post("/providers/openrouter/connect", json={"desktop": True})
+        assert r.status_code == 503
 
     async def test_no_code_means_no_consent(self, client, keys_on):
         r = await client.get("/providers/openrouter/callback", params={"state": "x"})
@@ -98,18 +105,81 @@ class TestOpenRouter:
         )
         assert r.status_code == 400
 
+    def _state(self, user_id: str) -> str:
+        url = httpx.URL(p.openrouter_authorization_url(user_id, "kwami://back"))
+        return httpx.URL(url.params["callback_url"]).params["state"]
+
     @respx.mock
-    async def test_the_callback_connects(self, client, keys_on, tenant):
+    async def test_the_callback_connects_nothing(self, client, keys_on, tenant, fake_supabase):
+        """It hands the code to the app: whoever opened the link may not be who started it."""
+        route = respx.post(p.OPENROUTER_KEYS_URL).mock(
+            return_value=httpx.Response(200, json={"key": "sk-or-abcd"})
+        )
+        state = self._state(tenant.user_id)
+        r = await client.get(
+            "/providers/openrouter/callback",
+            params={"state": state, "code": "c"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 302
+        back = httpx.URL(r.headers["location"])
+        assert str(back).startswith("kwami://back#")
+        assert dict(httpx.QueryParams(back.fragment)) == {
+            "connect": "openrouter",
+            "state": state,
+            "grant": "c",
+        }
+        assert not route.called
+
+    @respx.mock
+    async def test_the_app_finishes_it(self, tenant_client, keys_on, tenant):
         respx.post(p.OPENROUTER_KEYS_URL).mock(
             return_value=httpx.Response(200, json={"key": "sk-or-abcd"})
         )
-        url = httpx.URL(p.openrouter_authorization_url(tenant.user_id))
-        callback = httpx.URL(url.params["callback_url"])
-        r = await client.get(
-            "/providers/openrouter/callback",
-            params={"state": callback.params["state"], "code": "c"},
+        r = await tenant_client.post(
+            "/providers/openrouter/complete",
+            json={"state": self._state(tenant.user_id), "code": "c"},
         )
-        assert r.status_code == 200 and "conectado" in r.text
+        assert r.status_code == 200 and r.json() == {"ok": True}
+
+    @respx.mock
+    async def test_someone_else_cannot_finish_it(self, tenant_client, keys_on):
+        route = respx.post(p.OPENROUTER_KEYS_URL).mock(
+            return_value=httpx.Response(200, json={"key": "sk-or-abcd"})
+        )
+        r = await tenant_client.post(
+            "/providers/openrouter/complete",
+            json={"state": self._state("someone-else"), "code": "c"},
+        )
+        assert r.status_code == 403 and not route.called
+
+    async def test_finishing_needs_a_signed_in_user(self, client, keys_on, tenant):
+        r = await client.post(
+            "/providers/openrouter/complete",
+            json={"state": self._state(tenant.user_id), "code": "c"},
+        )
+        assert r.status_code == 401
+
+    async def test_finishing_with_a_forged_state_is_a_400(self, tenant_client, keys_on):
+        r = await tenant_client.post(
+            "/providers/openrouter/complete", json={"state": "forged", "code": "c"}
+        )
+        assert r.status_code == 400
+
+    async def test_finishing_unconfigured_is_a_503(self, tenant_client, keys_off):
+        r = await tenant_client.post(
+            "/providers/openrouter/complete", json={"state": "s", "code": "c"}
+        )
+        assert r.status_code == 503
+
+    @respx.mock
+    async def test_finishing_with_openrouter_down_is_a_502(self, tenant_client, keys_on, tenant):
+        respx.post(p.OPENROUTER_KEYS_URL).mock(side_effect=httpx.ConnectError("down"))
+        r = await tenant_client.post(
+            "/providers/openrouter/complete",
+            json={"state": self._state(tenant.user_id), "code": "c"},
+        )
+        assert r.status_code == 502
 
 
 class TestCheckingAKey:

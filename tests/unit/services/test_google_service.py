@@ -48,21 +48,43 @@ def linked(fake_supabase):
 
 class TestLink:
     def test_the_consent_url_asks_for_offline_access(self):
-        url = g.authorization_url(USER)
+        url = g.authorization_url(USER, "kwami://back")
         query = httpx.URL(url).params
         assert query["access_type"] == "offline"
         assert query["redirect_uri"] == "https://api.test/google/callback"
         assert "gmail.modify" in query["scope"]
-        assert g.read_state(query["state"]) == USER
+        assert g.read_state(query["state"]) == g.ConsentState(USER, "kwami://back")
 
     def test_no_client_means_not_configured(self, monkeypatch):
         monkeypatch.setattr(g.settings, "google_oauth_client_id", None, raising=False)
         with pytest.raises(g.GoogleNotConfiguredError):
-            g.authorization_url(USER)
+            g.authorization_url(USER, "kwami://back")
 
     def test_a_forged_state_is_refused(self):
         with pytest.raises(ValueError, match="state"):
             g.read_state("forged")
+
+    def test_a_work_token_is_not_a_state(self):
+        with pytest.raises(ValueError, match="state"):
+            g.read_state(g.work_thread_token(USER))
+
+    def test_a_work_token_names_its_user(self):
+        assert g.read_work_thread_token(g.work_thread_token(USER)) == USER
+
+    def test_a_state_is_not_a_work_token(self):
+        """A state travels in URLs that other people can see."""
+        state = httpx.URL(g.authorization_url(USER, "kwami://back")).params["state"]
+        with pytest.raises(ValueError, match="token"):
+            g.read_work_thread_token(state)
+
+    def test_a_token_for_something_else_is_refused(self):
+        other = g._fernet().encrypt(b'{"p": "other", "u": "x"}').decode()
+        with pytest.raises(ValueError, match="token"):
+            g.read_work_thread_token(other)
+
+    def test_a_forged_work_token_is_refused(self):
+        with pytest.raises(ValueError, match="token"):
+            g.read_work_thread_token("forged")
 
     @respx.mock
     async def test_completing_stores_the_token_encrypted(self, fake_supabase):

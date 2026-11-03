@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import httpx
 import pytest
 from cryptography.fernet import Fernet
 
@@ -128,27 +129,141 @@ class TestGoogleLink:
         assert r.json() == {"configured": True, "connected": False, "email": None, "accounts": []}
 
     async def test_connect(self, tenant_client, google_on):
-        r = await tenant_client.post("/google/connect")
+        r = await tenant_client.post("/google/connect", json={"desktop": True})
         assert r.json()["url"].startswith(google_service.AUTH_URL)
 
-    async def test_connect_when_not_configured(self, tenant_client, google_off):
-        assert (await tenant_client.post("/google/connect")).status_code == 503
-
-    async def test_callback_links_the_user_in_the_state(
-        self, client, tenant, google_on, monkeypatch
+    async def test_connect_from_the_app_comes_back_to_it(
+        self, tenant_client, tenant, google_on, monkeypatch
     ):
-        seen = {}
+        monkeypatch.setattr(google_service.settings, "cors_origins_str", "https://kwami.test")
+        r = await tenant_client.post("/google/connect", headers={"Origin": "https://kwami.test"})
+        state = httpx.URL(r.json()["url"]).params["state"]
+        assert google_service.read_state(state).target == "https://kwami.test/"
+
+    async def test_connect_from_an_unknown_origin_is_a_400(self, tenant_client, google_on):
+        r = await tenant_client.post("/google/connect", headers={"Origin": "https://evil.test"})
+        assert r.status_code == 400
+
+    async def test_connect_when_not_configured(self, tenant_client, google_off):
+        r = await tenant_client.post("/google/connect", json={"desktop": True})
+        assert r.status_code == 503
+
+    def _state(self, user_id: str) -> str:
+        url = google_service.authorization_url(user_id, "kwami://back")
+        return httpx.URL(url).params["state"]
+
+    def _complete(self, monkeypatch) -> dict:
+        seen: dict = {}
 
         async def complete(user_id, code):
             seen.update(user=user_id, code=code)
             return "yo@gmail.com"
 
         monkeypatch.setattr(google_service, "complete_connection", complete)
-        state = Fernet(KEY.encode()).encrypt(tenant.user_id.encode()).decode()
-        r = await client.get("/google/callback", params={"state": state, "code": "c"})
-        assert r.status_code == 200
-        assert "Cuenta conectada" in r.text
+        return seen
+
+    async def test_the_callback_connects_nothing(self, client, tenant, google_on, monkeypatch):
+        """It hands the code to the app: whoever opened the link may not be who started it."""
+        seen = self._complete(monkeypatch)
+        state = self._state(tenant.user_id)
+        r = await client.get(
+            "/google/callback", params={"state": state, "code": "c"}, follow_redirects=False
+        )
+        assert r.status_code == 302
+        back = httpx.URL(r.headers["location"])
+        assert str(back).startswith("kwami://back#")
+        assert dict(httpx.QueryParams(back.fragment)) == {
+            "connect": "google",
+            "state": state,
+            "grant": "c",
+        }
+        assert seen == {}
+
+    async def test_the_app_finishes_it(self, tenant_client, tenant, google_on, monkeypatch):
+        seen = self._complete(monkeypatch)
+        r = await tenant_client.post(
+            "/google/complete", json={"state": self._state(tenant.user_id), "code": "c"}
+        )
+        assert r.json() == {"email": "yo@gmail.com"}
         assert seen == {"user": tenant.user_id, "code": "c"}
+
+    async def test_someone_else_cannot_finish_it(self, tenant_client, google_on, monkeypatch):
+        """The link sent to a stranger: their code reaches their app, and stops there."""
+        seen = self._complete(monkeypatch)
+        r = await tenant_client.post(
+            "/google/complete", json={"state": self._state("someone-else"), "code": "c"}
+        )
+        assert r.status_code == 403
+        assert seen == {}
+
+    async def test_finishing_needs_a_signed_in_user(self, client, tenant, google_on):
+        r = await client.post(
+            "/google/complete", json={"state": self._state(tenant.user_id), "code": "c"}
+        )
+        assert r.status_code == 401
+
+    async def test_finishing_with_a_forged_state_is_a_400(self, tenant_client, google_on):
+        r = await tenant_client.post("/google/complete", json={"state": "forged", "code": "c"})
+        assert r.status_code == 400
+
+    async def test_finishing_when_not_configured_is_a_503(self, tenant_client, google_off):
+        r = await tenant_client.post("/google/complete", json={"state": "s", "code": "c"})
+        assert r.status_code == 503
+
+    async def test_finishing_when_google_refuses_is_a_400(
+        self, tenant_client, tenant, google_on, monkeypatch
+    ):
+        async def refused(_user_id, _code):
+            raise google_service.GoogleNotConnectedError("no")
+
+        monkeypatch.setattr(google_service, "complete_connection", refused)
+        r = await tenant_client.post(
+            "/google/complete", json={"state": self._state(tenant.user_id), "code": "c"}
+        )
+        assert r.status_code == 400
+
+    async def test_the_work_token_opens_only_its_user(
+        self, tenant_client, client, tenant, google_on, monkeypatch
+    ):
+        from src.services import google_worker
+
+        async def run(user_id, **_kwargs):
+            return {"user": user_id}
+
+        monkeypatch.setitem(google_worker.ALLOWED, "accounts", run)
+        made = await tenant_client.post("/google/work-thread/token")
+        assert made.json()["expires_in"] == google_service.WORK_TOKEN_TTL_SECONDS
+        r = await client.post(
+            "/google/work-thread",
+            json={"action": "accounts"},
+            headers={"X-Kwami-Work-Token": made.json()["token"]},
+        )
+        assert r.json() == {"result": {"user": tenant.user_id}}
+
+    async def test_making_a_work_token_when_not_configured(self, tenant_client, google_off):
+        assert (await tenant_client.post("/google/work-thread/token")).status_code == 503
+
+    async def test_making_a_work_token_needs_a_signed_in_user(self, client, google_on):
+        assert (await client.post("/google/work-thread/token")).status_code == 401
+
+    @pytest.mark.parametrize("headers", [{}, {"X-Kwami-Work-Token": "forged"}])
+    async def test_the_work_thread_needs_a_real_token(self, client, google_on, headers):
+        r = await client.post("/google/work-thread", json={"action": "accounts"}, headers=headers)
+        assert r.status_code == 401
+
+    async def test_the_work_thread_when_not_configured(self, client, google_off):
+        r = await client.post(
+            "/google/work-thread", json={"action": "accounts"}, headers={"X-Kwami-Work-Token": "t"}
+        )
+        assert r.status_code == 503
+
+    async def test_sending_is_refused_to_the_work_thread(self, client, tenant, google_on):
+        r = await client.post(
+            "/google/work-thread",
+            json={"action": "gmail_send"},
+            headers={"X-Kwami-Work-Token": google_service.work_thread_token(tenant.user_id)},
+        )
+        assert r.status_code == 400
 
     @pytest.mark.parametrize(
         "params", [{"error": "access_denied"}, {"state": "forged", "code": "c"}, {}]

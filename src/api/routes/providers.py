@@ -5,18 +5,20 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
 from src.api.deps import require_auth
 from src.api.ratelimit import PROVISIONING_LIMIT, limiter
 from src.core.security import AuthUser
-from src.services import provider_keys_service
+from src.services import oauth_return, provider_keys_service
+from src.services.oauth_return import UnknownReturnError
 from src.services.provider_keys_service import (
     InvalidKeyError,
     ProviderKeysNotConfiguredError,
     ProviderUnavailableError,
     UnknownProviderError,
+    WrongUserError,
 )
 
 router = APIRouter()
@@ -30,6 +32,15 @@ _PAGE = (
 
 class KeyRequest(BaseModel):
     key: str = Field(..., min_length=1, max_length=512)
+
+
+class ConnectRequest(BaseModel):
+    desktop: bool = False
+
+
+class CompleteRequest(BaseModel):
+    state: str = Field(..., min_length=1, max_length=4096)
+    code: str = Field(..., min_length=1, max_length=4096)
 
 
 @router.get("")
@@ -84,9 +95,16 @@ async def disconnect(
 
 
 @router.post("/openrouter/connect")
-async def openrouter_connect(user: Annotated[AuthUser, Depends(require_auth)]) -> dict[str, str]:
+async def openrouter_connect(
+    request: Request,
+    user: Annotated[AuthUser, Depends(require_auth)],
+    body: ConnectRequest = ConnectRequest(),  # noqa: B008
+) -> dict[str, str]:
     try:
-        return {"url": provider_keys_service.openrouter_authorization_url(user.id)}
+        target = oauth_return.return_target(request.headers.get("origin"), desktop=body.desktop)
+        return {"url": provider_keys_service.openrouter_authorization_url(user.id, target)}
+    except UnknownReturnError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ProviderKeysNotConfiguredError as exc:
         raise HTTPException(status_code=503, detail="Keys cannot be stored here") from exc
 
@@ -94,19 +112,38 @@ async def openrouter_connect(user: Annotated[AuthUser, Depends(require_auth)]) -
 @router.get("/openrouter/callback", response_class=HTMLResponse)
 async def openrouter_callback(
     state: str = Query(default=""), code: str = Query(default="")
-) -> HTMLResponse:
-    """Where OpenRouter sends the browser. Unauthenticated: `state` says who it is for."""
+) -> Response:
+    """Where OpenRouter sends the browser. It connects nothing: see `oauth_return`."""
     try:
         if not code:
             raise InvalidKeyError("Consent not given")
-        await provider_keys_service.complete_openrouter(state, code)
-    except (InvalidKeyError, ProviderUnavailableError, ProviderKeysNotConfiguredError):
+        target = provider_keys_service.openrouter_return_target(state)
+    except (InvalidKeyError, ProviderKeysNotConfiguredError):
         return HTMLResponse(
             _PAGE.format(
                 heading="No se ha conectado", text="Vuelva a la app e inténtelo de nuevo."
             ),
             status_code=400,
         )
-    return HTMLResponse(
-        _PAGE.format(heading="OpenRouter conectado", text="Ya puede cerrar esta ventana.")
-    )
+    return RedirectResponse(oauth_return.return_url(target, "openrouter", state, code), 302)
+
+
+@router.post("/openrouter/complete")
+@limiter.limit(PROVISIONING_LIMIT)
+async def openrouter_complete(
+    request: Request,
+    body: CompleteRequest,
+    user: Annotated[AuthUser, Depends(require_auth)],
+) -> dict[str, bool]:
+    """The app, signed in, finishes what the callback passed on."""
+    try:
+        await provider_keys_service.complete_openrouter(user.id, body.state, body.code)
+    except WrongUserError as exc:
+        raise HTTPException(status_code=403, detail="Another user started this") from exc
+    except InvalidKeyError as exc:
+        raise HTTPException(status_code=400, detail="OpenRouter refused this") from exc
+    except ProviderKeysNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail="Keys cannot be stored here") from exc
+    except ProviderUnavailableError as exc:
+        raise HTTPException(status_code=502, detail="The provider did not answer") from exc
+    return {"ok": True}

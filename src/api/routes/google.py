@@ -8,18 +8,20 @@ from __future__ import annotations
 from collections.abc import Awaitable
 from typing import Annotated, Any, TypeVar
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
 from src.api.deps import require_auth
+from src.api.ratelimit import PROVISIONING_LIMIT, limiter
 from src.core.security import AuthUser
-from src.services import google_service, google_workspace
+from src.services import google_service, google_worker, google_workspace, oauth_return
 from src.services.google_service import (
     GoogleNotConfiguredError,
     GoogleNotConnectedError,
     GoogleRequestError,
 )
+from src.services.oauth_return import UnknownReturnError
 
 router = APIRouter()
 
@@ -32,6 +34,22 @@ _PAGE = (
     "background:#0b0d12;color:#e8eaf0'>"
     "<h1>{heading}</h1><p>{text}</p></body></html>"
 )
+
+
+class ConnectRequest(BaseModel):
+    desktop: bool = False
+
+
+class CompleteRequest(BaseModel):
+    state: str = Field(..., min_length=1, max_length=4096)
+    code: str = Field(..., min_length=1, max_length=4096)
+
+
+class WorkThreadCall(BaseModel):
+    """One action of the work thread in the user's Google accounts."""
+
+    action: str = Field(min_length=1, max_length=64)
+    args: dict[str, Any] = Field(default_factory=dict)
 
 
 class SendRequest(BaseModel):
@@ -104,9 +122,16 @@ async def status(user: Annotated[AuthUser, Depends(require_auth)]) -> dict[str, 
 
 
 @router.post("/connect")
-async def connect(user: Annotated[AuthUser, Depends(require_auth)]) -> dict[str, str]:
+async def connect(
+    request: Request,
+    user: Annotated[AuthUser, Depends(require_auth)],
+    body: ConnectRequest = ConnectRequest(),  # noqa: B008
+) -> dict[str, str]:
     try:
-        return {"url": google_service.authorization_url(user.id)}
+        target = oauth_return.return_target(request.headers.get("origin"), desktop=body.desktop)
+        return {"url": google_service.authorization_url(user.id, target)}
+    except UnknownReturnError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except GoogleNotConfiguredError as exc:
         raise HTTPException(status_code=503, detail="Google is not configured") from exc
 
@@ -114,25 +139,67 @@ async def connect(user: Annotated[AuthUser, Depends(require_auth)]) -> dict[str,
 @router.get("/callback", response_class=HTMLResponse)
 async def callback(
     state: str = Query(default=""), code: str = Query(default=""), error: str = Query(default="")
-) -> HTMLResponse:
-    """Where Google sends the browser. Unauthenticated: `state` says who it is for."""
+) -> Response:
+    """Where Google sends the browser. It connects nothing: see `oauth_return`."""
     try:
         if error or not code:
             raise ValueError("Consent not given")
-        user_id = google_service.read_state(state)
-        await google_service.complete_connection(user_id, code)
-    except (ValueError, GoogleNotConnectedError, GoogleNotConfiguredError):
+        target = google_service.read_state(state).target
+    except (ValueError, GoogleNotConfiguredError):
         return HTMLResponse(
             _PAGE.format(
                 heading="No se ha conectado", text="Vuelva a la app e inténtelo de nuevo."
             ),
             status_code=400,
         )
-    return HTMLResponse(
-        _PAGE.format(
-            heading="Cuenta conectada", text="Ya puede cerrar esta pestaña y volver a Jarvis."
-        )
-    )
+    return RedirectResponse(oauth_return.return_url(target, "google", state, code), 302)
+
+
+@router.post("/complete")
+@limiter.limit(PROVISIONING_LIMIT)
+async def complete(
+    request: Request,
+    body: CompleteRequest,
+    user: Annotated[AuthUser, Depends(require_auth)],
+) -> dict[str, str]:
+    """The app, signed in, finishes what the callback passed on."""
+    try:
+        started_by = google_service.read_state(body.state).user_id
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except GoogleNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail="Google is not configured") from exc
+    if started_by != user.id:
+        raise HTTPException(status_code=403, detail="Another user started this")
+    try:
+        return {"email": await google_service.complete_connection(user.id, body.code)}
+    except GoogleNotConnectedError as exc:
+        raise HTTPException(status_code=400, detail="Google refused this") from exc
+
+
+@router.post("/work-thread/token")
+async def work_thread_token(user: Annotated[AuthUser, Depends(require_auth)]) -> dict[str, Any]:
+    """For the work thread on this user's PC. It opens their Google and nobody else's."""
+    try:
+        token = google_service.work_thread_token(user.id)
+    except GoogleNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail="Google is not configured") from exc
+    return {"token": token, "expires_in": google_service.WORK_TOKEN_TTL_SECONDS}
+
+
+@router.post("/work-thread")
+async def work_thread(
+    body: WorkThreadCall,
+    x_kwami_work_token: Annotated[str, Header(alias="X-Kwami-Work-Token")] = "",
+) -> dict[str, Any]:
+    """The work thread's calls. The user comes from the token, never from the caller."""
+    try:
+        user_id = google_service.read_work_thread_token(x_kwami_work_token)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except GoogleNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail="Google is not configured") from exc
+    return {"result": await _call(google_worker.call(user_id, body.action, body.args))}
 
 
 @router.delete("/account")

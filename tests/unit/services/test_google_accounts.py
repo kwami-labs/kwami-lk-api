@@ -63,7 +63,7 @@ def _json(route) -> dict:
 
 class TestSeveralAccounts:
     def test_the_consent_screen_lets_the_user_choose_the_account(self):
-        query = httpx.URL(g.authorization_url(USER)).params
+        query = httpx.URL(g.authorization_url(USER, "kwami://back")).params
         assert query["prompt"] == "select_account consent"
         assert query["access_type"] == "offline"
 

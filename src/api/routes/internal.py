@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from src.api.deps import require_internal_api_key
-from src.api.routes.google import _call as google_call
-from src.services import google_worker
 from src.services.browser_sessions import (
     UnsupportedVendorError,
     delete_browser_context,
@@ -21,27 +19,11 @@ from src.services.channels import build_agent_bootstrap_payload, find_channel_by
 router = APIRouter()
 
 
-class GoogleCall(BaseModel):
-    """One action of the work thread in the user's Google accounts."""
-
-    action: str = Field(min_length=1, max_length=64)
-    args: dict[str, Any] = Field(default_factory=dict)
-
-
 class BrowserContextIn(BaseModel):
     """The vendor-side handle for one owner's persisted browser profile."""
 
     vendor: str = Field(min_length=1, max_length=64)
     context_id: str = Field(min_length=1, max_length=255)
-
-
-@router.post("/users/{user_id}/google")
-async def google_for_the_work_thread(
-    user_id: str,
-    body: GoogleCall,
-    _: Annotated[None, Depends(require_internal_api_key)],
-) -> dict[str, Any]:
-    return {"result": await google_call(google_worker.call(user_id, body.action, body.args))}
 
 
 @router.get("/kwamis/{kwami_id}/runtime")
