@@ -8,12 +8,15 @@ grouped by provider. Uses a hybrid approach:
 """
 
 import logging
-from typing import Literal
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
-from src.services import elevenlabs_voices
+from src.api.deps import require_auth
+from src.api.ratelimit import VOICE_PREVIEW_LIMIT, limiter
+from src.core.security import AuthUser
+from src.services import elevenlabs_voices, voice_preview
 from src.services.voices import (
     Voice,
     VoiceProvider,
@@ -153,6 +156,36 @@ async def get_tts_voices_for_provider(provider: str):
         )
 
     return _convert_provider(provider_data)
+
+
+# =============================================================================
+# Hearing a voice
+# =============================================================================
+
+
+@router.get("/preview")
+@limiter.limit(VOICE_PREVIEW_LIMIT)
+async def voice_sample(
+    request: Request,
+    user: Annotated[AuthUser, Depends(require_auth)],
+    provider: Annotated[str, Query(max_length=32)],
+    voice: Annotated[str, Query(max_length=128)],
+    lang: Annotated[str, Query(max_length=16)] = "en",
+) -> Response:
+    """A short sample of a voice that publishes none of its own."""
+    try:
+        sample = await voice_preview.preview(user.id, provider, voice, lang)
+    except voice_preview.UnknownVoiceError as exc:
+        raise HTTPException(status_code=404, detail="Not a voice of this provider") from exc
+    except voice_preview.PreviewNotAvailableError as exc:
+        raise HTTPException(status_code=503, detail="No sample here for this provider") from exc
+    except voice_preview.PreviewFailedError as exc:
+        raise HTTPException(status_code=502, detail="The provider gave no sample") from exc
+    return Response(
+        content=sample.audio,
+        media_type=sample.media_type,
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
 
 
 # =============================================================================

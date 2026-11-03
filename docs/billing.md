@@ -10,10 +10,10 @@ overdraft cannot.
 | Unit | Size |
 |------|------|
 | 1 display credit | 1 000 micro-credits |
-| 1 display credit | $0.001 USD (`USD_PER_CREDIT`) |
+| 1 display credit | $0.001 USD of billed usage (`USD_PER_CREDIT`) |
 | Spark pack | 5 000 credits / $5.00 |
-| Surge pack | 25 000 credits / $25.00 |
-| Overcharge pack | 100 000 credits / $100.00 |
+| Surge pack | 25 000 credits / $22.00 |
+| Overcharge pack | 100 000 credits / $85.00 |
 
 Balances, ledger amounts, and usage charges are stored as **micro-credits**
 (`bigint`). The API converts to display credits at the edge.
@@ -34,8 +34,8 @@ micro_credits      = ceil(billed_cost_usd / USD_PER_CREDIT) * 1000
                    # actually: credits = billed / 0.001; micro = credits * 1000
 ```
 
-`BILLING_MARKUP_MULTIPLIER` defaults to `2.0`. `BILLING_PRICING_VERSION`
-(default `2026-03-20`) is written onto every usage row so a later catalog
+`BILLING_MARKUP_MULTIPLIER` defaults to `1.75`. `BILLING_PRICING_VERSION`
+(default `2026-11-02`) is written onto every usage row so a later catalog
 change does not rewrite history.
 
 Model types: `llm`, `stt`, `tts`, `realtime`, `tool`, `memory`. Token
@@ -44,8 +44,32 @@ or per-1M-characters. Realtime models split audio minutes and optional
 text tokens. Tools and Zep calls are per-request, configured via
 `BILLING_*_PER_CALL_USD`.
 
-Unknown models fall back to
-`BILLING_FALLBACK_COST_PER_1M_TOKENS_USD` rather than charging zero.
+The agent reports ids as LiveKit's plugins spell them
+(`ElevenLabs/eleven_flash_v2_5`, `api.anthropic.com/claude-haiku-5-5`).
+`get_model_pricing` normalizes those before looking them up.
+
+Unknown models fall back to a high rate of their kind
+(`BILLING_FALLBACK_COST_PER_1M_TOKENS_USD`,
+`BILLING_FALLBACK_STT_PER_MINUTE_USD`,
+`BILLING_FALLBACK_TTS_PER_1M_CHARACTERS_USD`,
+`BILLING_FALLBACK_REALTIME_PER_MINUTE_USD`) rather than charging zero.
+A row priced that way has `pricing_source = fallback`: add the model to the
+catalog when one appears. Cloud browsers are stored as `tool` and billed per
+minute (`BILLING_BROWSER_PER_MINUTE_USD`).
+
+## Own model keys
+
+A user can connect their own provider keys (`/providers`). The agent builds each
+voice stage on them when they exist and marks that usage `own_key`. Such a row
+costs no energy: the provider bills the user. LiveKit still costs us, so a session
+with any own-key usage pays the platform instead, as one `kwami/platform` row:
+
+- `BILLING_PLATFORM_DAY_CREDITS` (600) on the user's first session of the UTC day,
+  covering `BILLING_PLATFORM_DAY_MINUTES` (30).
+- `BILLING_PLATFORM_EXTRA_MINUTE_CREDITS` (20) per minute past that, across the day.
+
+Whatever does not run on their key (a stage they did not connect, a fallback to
+one of ours, tools, memory) is metered in energy as usual.
 
 ## Purchase
 

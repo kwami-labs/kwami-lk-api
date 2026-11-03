@@ -223,3 +223,63 @@ class TestTableIntegrity:
             assert audio.per_minute is not None or audio.per_1m_characters is not None, (
                 f"{pricing.model_id} has no price at all"
             )
+
+
+class TestPluginSpelledIds:
+    """The ids as they really reach the API, copied from the usage ledger."""
+
+    @pytest.mark.parametrize(
+        ("reported", "catalog_id"),
+        [
+            ("api.anthropic.com/claude-haiku-5-5", "anthropic/claude-haiku-5-5"),
+            ("api.openai.com/tts-1", "openai/tts-1"),
+            ("api.openai.com/gpt-realtime", "openai/gpt-realtime"),
+            ("Gemini/gemini-3.5-flash", "google/gemini-3.5-flash"),
+            ("Deepgram/nova-3", "deepgram/nova-3"),
+            ("ElevenLabs/eleven_flash_v2_5", "elevenlabs/eleven_flash_v2_5"),
+            ("livekit/elevenlabs/scribe_v2_realtime", "elevenlabs/scribe_v2_realtime"),
+            ("Cartesia/sonic-3", "cartesia/sonic-3"),
+        ],
+    )
+    def test_each_finds_its_catalog_entry(self, reported, catalog_id):
+        entry = get_model_pricing(reported)
+        assert entry is not None
+        assert entry.model_id == catalog_id
+
+    @pytest.mark.parametrize("reported", ["nope/unknown", "unknown"])
+    def test_an_unknown_id_stays_unknown(self, reported):
+        assert get_model_pricing(reported) is None
+
+
+class TestCachedRealtimeText:
+    def test_cached_input_is_billed_at_its_own_rate(self):
+        p = RealtimePricing(
+            audio_input_per_minute=0.0,
+            audio_output_per_minute=0.0,
+            text_input_per_1m=4.0,
+            text_output_per_1m=16.0,
+            text_cached_input_per_1m=0.4,
+        )
+        cost = calculate_realtime_cost(
+            p, text_input_tokens=1_000_000, cached_text_input_tokens=500_000
+        )
+        assert cost == pytest.approx(2.2)
+
+    def test_without_a_cached_rate_it_costs_the_normal_rate(self):
+        p = RealtimePricing(
+            audio_input_per_minute=0.0, audio_output_per_minute=0.0, text_input_per_1m=4.0
+        )
+        cost = calculate_realtime_cost(
+            p, text_input_tokens=1_000_000, cached_text_input_tokens=500_000
+        )
+        assert cost == pytest.approx(4.0)
+
+    def test_more_cached_than_sent_cannot_go_negative(self):
+        p = RealtimePricing(
+            audio_input_per_minute=0.0,
+            audio_output_per_minute=0.0,
+            text_input_per_1m=4.0,
+            text_cached_input_per_1m=0.4,
+        )
+        cost = calculate_realtime_cost(p, text_input_tokens=100, cached_text_input_tokens=900)
+        assert cost == pytest.approx(0.00004)
