@@ -11,9 +11,11 @@ Two properties matter and are easy to lose:
 
 from __future__ import annotations
 
+import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
+from postgrest.exceptions import APIError
 from pydantic import BaseModel
 
 from src.core.errors import (
@@ -297,3 +299,34 @@ async def test_the_traceback_is_logged_server_side(error_client, caplog):
         await error_client.get("/boom")
     assert "Unhandled error on GET /boom" in caplog.text
     assert "sk_live_deadbeef" in caplog.text, "the detail belongs in the log, not the response"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("raised", "status_code"),
+    [
+        (APIError({"message": "JSON could not be generated", "code": 502}), 503),
+        (APIError({"message": "bad gateway", "code": "503"}), 503),
+        (httpx.ConnectError("refused"), 503),
+        (httpx.ReadTimeout("slow"), 503),
+        (APIError({"message": "duplicate key", "code": "23505"}), 500),
+        (APIError({"message": "statement timeout", "code": "57014"}), 500),
+        (APIError({"message": "no rows", "code": "PGRST116"}), 500),
+    ],
+)
+async def test_a_dependency_being_down_is_a_503_and_a_bug_stays_a_500(raised, status_code):
+    app = FastAPI()
+    install_error_handlers(app)
+
+    @app.get("/outage")
+    async def outage():
+        raise raised
+
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        r = await client.get("/outage")
+
+    assert r.status_code == status_code
+    assert ("retry-after" in r.headers) == (status_code == 503)
+    assert "gateway" not in r.text
+    assert "refused" not in r.text
