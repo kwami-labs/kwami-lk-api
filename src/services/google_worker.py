@@ -4,10 +4,14 @@ An allow list, because that process runs with no one watching and reads mail and
 that can say anything. It reads, organizes, drafts and creates. Nothing here speaks to
 anyone: sending, inviting and sharing need the app's check, and a filter is a standing
 rule the user would not see being made.
+
+Sharing has other names. Whatever goes into a shared file or folder reaches whoever it
+is shared with, and a formula that fetches a URL sends out what it is given.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -61,6 +65,40 @@ ALLOWED: dict[str, Callable[..., Awaitable[Any]]] = {
 }
 
 
+#: The action, and the argument naming the file or folder it puts something into.
+_PUTS_INTO = {
+    "drive_create": "parent_id",
+    "drive_folder": "parent_id",
+    "drive_update": "add_parent",
+    "gmail_save_attachment": "parent_id",
+    "drive_write": "file_id",
+    "docs_append": "document_id",
+    "docs_replace": "document_id",
+    "sheets_write": "spreadsheet_id",
+    "sheets_append": "spreadsheet_id",
+    "slides_add": "presentation_id",
+}
+
+#: Sheets evaluates what it is written, and these fetch from wherever they are told.
+_FETCHING_FORMULA = re.compile(
+    r"\b(?:IMPORT(?:XML|HTML|DATA|FEED|RANGE)|IMAGE)\s*\(", re.IGNORECASE
+)
+
+
+def _has_fetching_formula(values: Any) -> bool:
+    if isinstance(values, list):
+        return any(_has_fetching_formula(value) for value in values)
+    return isinstance(values, str) and bool(_FETCHING_FORMULA.search(values))
+
+
+async def _refuse_what_reaches_others(user_id: str, action: str, args: dict[str, Any]) -> None:
+    if action in ("sheets_write", "sheets_append") and _has_fetching_formula(args.get("values")):
+        raise ValueError("Formulas that fetch from outside are not allowed from the work thread")
+    target = args.get(_PUTS_INTO.get(action, ""))
+    if target and await workspace.is_shared(user_id, target, account=args.get("account")):
+        raise ValueError("That is shared with others: leave a draft and tell the user")
+
+
 async def call(user_id: str, action: str, args: dict[str, Any]) -> Any:
     """Run one allowed action. Anything else raises ValueError."""
     function = ALLOWED.get(action)
@@ -70,6 +108,7 @@ async def call(user_id: str, action: str, args: dict[str, Any]) -> Any:
         raise ValueError("Inviting people is not allowed from the work thread")
     if "user_id" in args:
         raise ValueError("user_id cannot be passed")
+    await _refuse_what_reaches_others(user_id, action, args)
     try:
         return await function(user_id, **args)
     except TypeError as exc:

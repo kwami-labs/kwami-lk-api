@@ -44,6 +44,11 @@ class TestAssistantSettings:
             "/assistant/settings", params={"kwami_id": other_tenant.kwami_id}
         )
         assert r.status_code == 400
+        r = await tenant_client.post(
+            "/assistant/settings/notify-code",
+            json={"kwami_id": other_tenant.kwami_id, "notify_to": "612345678"},
+        )
+        assert r.status_code in (400, 404)
         r = await tenant_client.put("/assistant/settings", json={"kwami_id": other_tenant.kwami_id})
         assert r.status_code == 400
 
@@ -471,3 +476,38 @@ class TestGoogleData:
         monkeypatch.setattr(google_workspace, "search_files", answer)
         await tenant_client.get("/google/drive/files", params={"account": "a@b.c"})
         assert seen["account"] == "a@b.c"
+
+
+class TestNotifyCode:
+    async def test_the_proof_comes_back_and_confirms_the_number(
+        self, tenant_client, tenant, monkeypatch
+    ):
+        codes = []
+
+        async def send(_kind, _user, _kwami, _to, text):
+            codes.append(text.split(" es ")[1][:6])
+
+        monkeypatch.setattr("src.services.assistant_scheduler._send_over", send)
+        body = {"kwami_id": tenant.kwami_id, "notify_to": "612345678", "notify_channel": "sms"}
+        r = await tenant_client.post("/assistant/settings/notify-code", json=body)
+        assert r.status_code == 200
+
+        r = await tenant_client.put(
+            "/assistant/settings",
+            json={**body, "notify_code": codes[0], "notify_proof": r.json()["proof"]},
+        )
+        assert r.status_code == 200
+        assert r.json()["settings"]["notify_to"] == "+34612345678"
+
+    async def test_saving_a_new_number_without_it_is_refused(self, tenant_client, tenant):
+        r = await tenant_client.put(
+            "/assistant/settings", json={"kwami_id": tenant.kwami_id, "notify_to": "612345678"}
+        )
+        assert r.status_code == 400
+
+    async def test_a_code_that_cannot_be_sent_says_so(self, tenant_client, tenant):
+        r = await tenant_client.post(
+            "/assistant/settings/notify-code",
+            json={"kwami_id": tenant.kwami_id, "notify_to": "612345678"},
+        )
+        assert r.status_code == 502
