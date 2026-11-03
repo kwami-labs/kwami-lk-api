@@ -132,7 +132,14 @@ class TestCalculateFallbackCost:
         )
         assert _calculate_fallback_cost("llm", 1_000_000) == pytest.approx(2.0)
 
-    @pytest.mark.parametrize("model_type", ["stt", "tts", "realtime", "tool", "memory", "other"])
+    @pytest.mark.parametrize(
+        ("model_type", "units", "expected"),
+        [("stt", 10, 0.092), ("tts", 1_000_000, 80.0), ("realtime", 10, 1.0)],
+    )
+    def test_an_unknown_voice_model_is_never_free(self, model_type, units, expected):
+        assert _calculate_fallback_cost(model_type, units) == pytest.approx(expected)
+
+    @pytest.mark.parametrize("model_type", ["tool", "memory", "other"])
     def test_everything_else_falls_back_to_free(self, model_type):
         assert _calculate_fallback_cost(model_type, 1_000_000) == 0.0
 

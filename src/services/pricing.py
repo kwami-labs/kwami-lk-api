@@ -36,6 +36,7 @@ class RealtimePricing(BaseModel):
     audio_output_per_minute: float
     text_input_per_1m: float | None = None
     text_output_per_1m: float | None = None
+    text_cached_input_per_1m: float | None = None
 
 
 class ExternalPricing(BaseModel):
@@ -161,6 +162,64 @@ LLM_PRICING: dict[str, ModelPricing] = {
             cached_input_per_1m=0.3125,
         ),
     ),
+    # Gemini 3.5 Flash is gone from Google's price page; third-party trackers agree on this.
+    "google/gemini-3.5-flash": ModelPricing(
+        model_id="google/gemini-3.5-flash",
+        provider="google",
+        model_type="llm",
+        display_name="Gemini 3.5 Flash",
+        pricing=TokenPricing(
+            input_per_1m=1.50,
+            output_per_1m=9.00,
+            cached_input_per_1m=0.15,
+        ),
+    ),
+    # Anthropic. Haiku 5.5 multiplies its rates by 5 on prompts over 100K tokens. A report
+    # only carries session totals, so that tier cannot be seen here; voice turns stay below it.
+    "anthropic/claude-haiku-5-5": ModelPricing(
+        model_id="anthropic/claude-haiku-5-5",
+        provider="anthropic",
+        model_type="llm",
+        display_name="Claude Haiku 5.5",
+        pricing=TokenPricing(
+            input_per_1m=0.10,
+            output_per_1m=0.50,
+            cached_input_per_1m=0.01,
+        ),
+    ),
+    "anthropic/claude-sonnet-5-5": ModelPricing(
+        model_id="anthropic/claude-sonnet-5-5",
+        provider="anthropic",
+        model_type="llm",
+        display_name="Claude Sonnet 5.5",
+        pricing=TokenPricing(
+            input_per_1m=2.00,
+            output_per_1m=10.00,
+            cached_input_per_1m=0.20,
+        ),
+    ),
+    "anthropic/claude-opus-5-5": ModelPricing(
+        model_id="anthropic/claude-opus-5-5",
+        provider="anthropic",
+        model_type="llm",
+        display_name="Claude Opus 5.5",
+        pricing=TokenPricing(
+            input_per_1m=4.00,
+            output_per_1m=20.00,
+            cached_input_per_1m=0.20,
+        ),
+    ),
+    "anthropic/claude-fable-5-1": ModelPricing(
+        model_id="anthropic/claude-fable-5-1",
+        provider="anthropic",
+        model_type="llm",
+        display_name="Claude Fable 5.1",
+        pricing=TokenPricing(
+            input_per_1m=10.00,
+            output_per_1m=50.00,
+            cached_input_per_1m=0.25,
+        ),
+    ),
     # DeepSeek Models (via LiveKit Inference)
     "deepseek-ai/deepseek-v3": ModelPricing(
         model_id="deepseek-ai/deepseek-v3",
@@ -191,19 +250,41 @@ LLM_PRICING: dict[str, ModelPricing] = {
 # =============================================================================
 
 STT_PRICING: dict[str, ModelPricing] = {
+    # Streaming rates: a voice session never uses the cheaper pre-recorded ones.
+    "deepgram/nova-3": ModelPricing(
+        model_id="deepgram/nova-3",
+        provider="deepgram",
+        model_type="stt",
+        display_name="Deepgram Nova 3",
+        pricing=AudioPricing(per_minute=0.0077),
+    ),
     "deepgram/nova-3-general": ModelPricing(
         model_id="deepgram/nova-3-general",
         provider="deepgram",
         model_type="stt",
         display_name="Deepgram Nova 3",
-        pricing=AudioPricing(per_minute=0.0043),
+        pricing=AudioPricing(per_minute=0.0077),
+    ),
+    "deepgram/nova-2": ModelPricing(
+        model_id="deepgram/nova-2",
+        provider="deepgram",
+        model_type="stt",
+        display_name="Deepgram Nova 2",
+        pricing=AudioPricing(per_minute=0.0058),
     ),
     "deepgram/nova-2-general": ModelPricing(
         model_id="deepgram/nova-2-general",
         provider="deepgram",
         model_type="stt",
         display_name="Deepgram Nova 2",
-        pricing=AudioPricing(per_minute=0.0043),
+        pricing=AudioPricing(per_minute=0.0058),
+    ),
+    "elevenlabs/scribe_v2_realtime": ModelPricing(
+        model_id="elevenlabs/scribe_v2_realtime",
+        provider="elevenlabs",
+        model_type="stt",
+        display_name="ElevenLabs Scribe v2 Realtime",
+        pricing=AudioPricing(per_minute=0.0065),
     ),
     "assemblyai/universal": ModelPricing(
         model_id="assemblyai/universal",
@@ -238,7 +319,29 @@ TTS_PRICING: dict[str, ModelPricing] = {
         provider="elevenlabs",
         model_type="tts",
         display_name="ElevenLabs Turbo v2.5",
-        pricing=AudioPricing(per_1m_characters=30.00),
+        pricing=AudioPricing(per_1m_characters=40.00),
+    ),
+    "elevenlabs/eleven_flash_v2_5": ModelPricing(
+        model_id="elevenlabs/eleven_flash_v2_5",
+        provider="elevenlabs",
+        model_type="tts",
+        display_name="ElevenLabs Flash v2.5",
+        pricing=AudioPricing(per_1m_characters=40.00),
+    ),
+    "elevenlabs/eleven_multilingual_v2": ModelPricing(
+        model_id="elevenlabs/eleven_multilingual_v2",
+        provider="elevenlabs",
+        model_type="tts",
+        display_name="ElevenLabs Multilingual v2",
+        pricing=AudioPricing(per_1m_characters=80.00),
+    ),
+    # Google bills audio out at $20 per 1M tokens; about 2 audio tokens per character spoken.
+    "google/gemini-3.1-flash-tts-preview": ModelPricing(
+        model_id="google/gemini-3.1-flash-tts-preview",
+        provider="google",
+        model_type="tts",
+        display_name="Gemini 3.1 Flash TTS",
+        pricing=AudioPricing(per_1m_characters=45.00),
     ),
     "openai/tts-1": ModelPricing(
         model_id="openai/tts-1",
@@ -285,6 +388,31 @@ REALTIME_PRICING: dict[str, ModelPricing] = {
             text_output_per_1m=2.40,
         ),
     ),
+    "openai/gpt-realtime": ModelPricing(
+        model_id="openai/gpt-realtime",
+        provider="openai",
+        model_type="realtime",
+        display_name="GPT Realtime",
+        pricing=RealtimePricing(
+            audio_input_per_minute=0.02,
+            audio_output_per_minute=0.08,
+            text_input_per_1m=4.00,
+            text_output_per_1m=16.00,
+            text_cached_input_per_1m=0.40,
+        ),
+    ),
+    "google/gemini-3.1-flash-live-preview": ModelPricing(
+        model_id="google/gemini-3.1-flash-live-preview",
+        provider="google",
+        model_type="realtime",
+        display_name="Gemini 3.1 Flash Live",
+        pricing=RealtimePricing(
+            audio_input_per_minute=0.005,
+            audio_output_per_minute=0.018,
+            text_input_per_1m=0.75,
+            text_output_per_1m=4.50,
+        ),
+    ),
 }
 
 # =============================================================================
@@ -323,6 +451,21 @@ EXTERNAL_PRICING: dict[str, ModelPricing] = {
         display_name="Microlink Fetch",
         pricing=ExternalPricing(per_call=settings.billing_microlink_fetch_per_call_usd),
         notes="Configure BILLING_MICROLINK_FETCH_PER_CALL_USD if Microlink is billable on your plan.",
+    ),
+    # Cloud browsers report wall-clock minutes, so "per call" here is per minute.
+    "browserbase/cloud": ModelPricing(
+        model_id="browserbase/cloud",
+        provider="browserbase",
+        model_type="tool",
+        display_name="Browserbase Session",
+        pricing=ExternalPricing(per_call=settings.billing_browser_per_minute_usd),
+    ),
+    "browser_use/cloud": ModelPricing(
+        model_id="browser_use/cloud",
+        provider="browser_use",
+        model_type="tool",
+        display_name="Browser Use Session",
+        pricing=ExternalPricing(per_call=settings.billing_browser_per_minute_usd),
     ),
     "zep/add_messages": ModelPricing(
         model_id="zep/add_messages",
@@ -425,6 +568,7 @@ def calculate_realtime_cost(
     audio_output_minutes: float = 0.0,
     text_input_tokens: int = 0,
     text_output_tokens: int = 0,
+    cached_text_input_tokens: int = 0,
     fallback_minutes: float = 0.0,
 ) -> float:
     """Calculate realtime cost from the most detailed units available."""
@@ -439,7 +583,12 @@ def calculate_realtime_cost(
     cost += audio_input_minutes * pricing.audio_input_per_minute
     cost += audio_output_minutes * pricing.audio_output_per_minute
     if pricing.text_input_per_1m is not None:
-        cost += (text_input_tokens / 1_000_000) * pricing.text_input_per_1m
+        cached = min(max(cached_text_input_tokens, 0), text_input_tokens)
+        cached_rate = pricing.text_cached_input_per_1m
+        if cached_rate is None:
+            cached_rate = pricing.text_input_per_1m
+        cost += ((text_input_tokens - cached) / 1_000_000) * pricing.text_input_per_1m
+        cost += (cached / 1_000_000) * cached_rate
     if pricing.text_output_per_1m is not None:
         cost += (text_output_tokens / 1_000_000) * pricing.text_output_per_1m
     return cost
@@ -471,6 +620,26 @@ def get_pricing_by_type(
             }
 
 
+#: The name a provider's plugin reports for itself -> the name the catalog uses.
+_PROVIDER_ALIASES = {
+    "api.openai.com": "openai",
+    "api.anthropic.com": "anthropic",
+    "gemini": "google",
+}
+
+
 def get_model_pricing(model_id: str) -> ModelPricing | None:
-    """Get pricing for a specific model."""
-    return ALL_PRICING.get(model_id)
+    """Get pricing for a model, however its provider's plugin spelled the id.
+
+    The agent reports what LiveKit says: `ElevenLabs/eleven_flash_v2_5`,
+    `api.anthropic.com/claude-haiku-5-5`, `livekit/elevenlabs/...`. An exact lookup
+    missed all of them, which billed voice at nothing and language at a flat guess.
+    """
+    entry = ALL_PRICING.get(model_id)
+    if entry is not None:
+        return entry
+    normalized = model_id.strip().lower().removeprefix("livekit/")
+    provider, separator, model = normalized.partition("/")
+    if separator:
+        normalized = f"{_PROVIDER_ALIASES.get(provider, provider)}/{model}"
+    return ALL_PRICING.get(normalized)

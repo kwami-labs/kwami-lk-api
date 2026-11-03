@@ -134,6 +134,27 @@ class Settings(BaseSettings):
     # Public URLs / webhooks
     app_public_url: str | None = Field(default=None, alias="APP_PUBLIC_URL")
 
+    # Google account of the user: Gmail and Calendar. Off until all three are set.
+    google_oauth_client_id: str | None = Field(default=None, alias="GOOGLE_OAUTH_CLIENT_ID")
+    google_oauth_client_secret: str | None = Field(default=None, alias="GOOGLE_OAUTH_CLIENT_SECRET")
+    # A Fernet key: encrypts refresh tokens at rest and signs the OAuth state.
+    google_token_key: str | None = Field(default=None, alias="GOOGLE_TOKEN_KEY")
+    # Where Google sends the browser back, when that is not APP_PUBLIC_URL: a local API
+    # keeps the public address for its webhooks, and Google must return to the PC.
+    google_redirect_base_url: str | None = Field(default=None, alias="GOOGLE_REDIRECT_BASE_URL")
+
+    # A Fernet key: encrypts the model keys users connect. The agent holds the same one.
+    provider_keys_secret: str | None = Field(default=None, alias="PROVIDER_KEYS_SECRET")
+
+    # Reminders and scheduled reports
+    assistant_scheduler_enabled: bool = Field(default=True, alias="ASSISTANT_SCHEDULER_ENABLED")
+    assistant_scheduler_interval_seconds: int = Field(
+        default=60,
+        ge=5,
+        le=3600,
+        alias="ASSISTANT_SCHEDULER_INTERVAL_SECONDS",
+    )
+
     # Twilio / telephony
     twilio_account_sid: str | None = Field(default=None, alias="TWILIO_ACCOUNT_SID")
     twilio_auth_token: str | None = Field(default=None, alias="TWILIO_AUTH_TOKEN")
@@ -201,11 +222,11 @@ class Settings(BaseSettings):
 
     # Billing policy
     billing_pricing_version: str = Field(
-        default="2026-03-20",
+        default="2026-11-02",
         alias="BILLING_PRICING_VERSION",
     )
     billing_markup_multiplier: float = Field(
-        default=2.0,
+        default=1.75,
         alias="BILLING_MARKUP_MULTIPLIER",
     )
     billing_fixed_fee_usd: float = Field(
@@ -216,14 +237,52 @@ class Settings(BaseSettings):
         default=2.0,
         alias="BILLING_FALLBACK_COST_PER_1M_TOKENS_USD",
     )
+    # Models the catalog does not know yet. Priced at the dearest of their kind, so a new
+    # model is never served for free; the row is marked `fallback` so it gets noticed.
+    billing_fallback_stt_per_minute_usd: float = Field(
+        default=0.0092,
+        alias="BILLING_FALLBACK_STT_PER_MINUTE_USD",
+    )
+    billing_fallback_tts_per_1m_characters_usd: float = Field(
+        default=80.0,
+        alias="BILLING_FALLBACK_TTS_PER_1M_CHARACTERS_USD",
+    )
+    billing_fallback_realtime_per_minute_usd: float = Field(
+        default=0.10,
+        alias="BILLING_FALLBACK_REALTIME_PER_MINUTE_USD",
+    )
+    billing_browser_per_minute_usd: float = Field(
+        default=0.005,
+        alias="BILLING_BROWSER_PER_MINUTE_USD",
+    )
+
+    # Someone on their own model keys pays the providers directly and us for the
+    # platform: a fee per day of use that covers these minutes, then per extra minute.
+    # 600 is about $18 for 30 days of use. The floor is what LiveKit costs us per minute.
+    billing_platform_day_credits: int = Field(
+        default=600,
+        alias="BILLING_PLATFORM_DAY_CREDITS",
+    )
+    billing_platform_day_minutes: float = Field(
+        default=30.0,
+        alias="BILLING_PLATFORM_DAY_MINUTES",
+    )
+    billing_platform_extra_minute_credits: int = Field(
+        default=20,
+        alias="BILLING_PLATFORM_EXTRA_MINUTE_CREDITS",
+    )
+    billing_infra_per_minute_usd: float = Field(
+        default=0.01,
+        alias="BILLING_INFRA_PER_MINUTE_USD",
+    )
 
     # External service costs are plan-dependent, so keep them configurable.
     billing_tavily_search_per_call_usd: float = Field(
-        default=0.0,
+        default=0.008,
         alias="BILLING_TAVILY_SEARCH_PER_CALL_USD",
     )
     billing_tavily_extract_per_call_usd: float = Field(
-        default=0.0,
+        default=0.008,
         alias="BILLING_TAVILY_EXTRACT_PER_CALL_USD",
     )
     billing_serpapi_search_per_call_usd: float = Field(
@@ -271,6 +330,10 @@ class Settings(BaseSettings):
     elevenlabs_api_key: str | None = Field(
         default=None, validation_alias=AliasChoices("ELEVEN_API_KEY", "ELEVENLABS_API_KEY")
     )
+    #: Speak a sample of an OpenAI or Gemini voice for the picker. Without them, the
+    #: key the user connected is used, and without that there is no sample.
+    openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
+    google_api_key: str | None = Field(default=None, alias="GOOGLE_API_KEY")
     tavily_project_id: str | None = Field(default=None, alias="TAVILY_PROJECT_ID")
     reconciliation_tavily_cost_per_credit_usd: float = Field(
         default=0.008,
@@ -427,6 +490,15 @@ class Settings(BaseSettings):
     def auth_enabled(self) -> bool:
         """Check if authentication is configured."""
         return self.supabase_url is not None
+
+    @property
+    def google_enabled(self) -> bool:
+        return bool(
+            self.google_oauth_client_id
+            and self.google_oauth_client_secret
+            and self.google_token_key
+            and self.app_public_url
+        )
 
     @property
     def twilio_enabled(self) -> bool:

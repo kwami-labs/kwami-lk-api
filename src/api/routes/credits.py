@@ -157,6 +157,9 @@ class UsageReportItem(BaseModel):
     event_count: int | None = Field(
         None, description="How many events were aggregated into this item"
     )
+    own_key: bool | None = Field(
+        None, description="Ran on the user's own provider key, so not charged in energy"
+    )
 
 
 class UsageReportRequest(BaseModel):
@@ -165,6 +168,7 @@ class UsageReportRequest(BaseModel):
     user_id: str = Field(..., description="Supabase user ID")
     session_id: str = Field(..., description="LiveKit room name")
     usage: list[UsageReportItem] = Field(..., description="Usage items")
+    session_minutes: float = Field(0.0, ge=0, description="How long the session ran")
 
 
 class UsageReportResponse(BaseModel):
@@ -465,6 +469,7 @@ async def report_usage(
             "text_output_tokens": item.text_output_tokens,
             "request_count": item.request_count,
             "event_count": item.event_count,
+            "own_key": item.own_key,
         }
         for item in request.usage
     ]
@@ -474,6 +479,7 @@ async def report_usage(
         user_id=request.user_id,
         session_id=request.session_id,
         usage_items=usage_items,
+        session_minutes=request.session_minutes,
     )
 
     # `.get` throughout: a replay returns the cached result of the original

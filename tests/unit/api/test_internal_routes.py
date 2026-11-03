@@ -404,3 +404,24 @@ def test_without_an_engine_or_direction_nothing_is_invented():
     assert "type" not in voice
     assert "realtime" not in voice
     assert "style" not in voice["tts"]
+
+
+class TestGoogleIsNotInternal:
+    async def test_the_shared_key_opens_nobodys_google(self, keyed_client):
+        r = await keyed_client.post("/internal/users/u1/google", json={"action": "accounts"})
+        assert r.status_code == 404
+
+    async def test_the_shared_key_is_not_a_work_token(self, keyed_client, monkeypatch):
+        from cryptography.fernet import Fernet
+
+        from src.services import google_service
+
+        settings = google_service.settings
+        monkeypatch.setattr(settings, "google_oauth_client_id", "c", raising=False)
+        monkeypatch.setattr(settings, "google_oauth_client_secret", "s", raising=False)
+        monkeypatch.setattr(
+            settings, "google_token_key", Fernet.generate_key().decode(), raising=False
+        )
+        monkeypatch.setattr(settings, "app_public_url", "https://a.b", raising=False)
+        r = await keyed_client.post("/google/work-thread", json={"action": "accounts"})
+        assert r.status_code == 401
