@@ -10,6 +10,7 @@ It uses a hybrid approach:
 Last updated: 2026-11-02
 """
 
+import importlib
 import logging
 from pathlib import Path
 from typing import Literal, get_args
@@ -149,6 +150,18 @@ GEMINI_VOICE_META: dict[str, tuple[Literal["male", "female"], str]] = {
 #: The agent and the models catalogue call Gemini "google"; this catalogue
 #: grew up calling it "gemini". Both are accepted.
 REALTIME_PROVIDER_ALIASES = {"google": "gemini"}
+
+
+def import_voice_plugins() -> None:
+    """Import the plugin the catalogue reads. Call it on the main thread.
+
+    A LiveKit plugin refuses to register anywhere else, so importing it for the first
+    time from a worker thread raises RuntimeError rather than ImportError.
+    """
+    try:
+        importlib.import_module("livekit.plugins.google")
+    except ImportError as e:
+        logger.warning("The Google voices are not available: %s", e)
 
 
 def _extract_gemini_realtime_voices() -> list[Voice]:
