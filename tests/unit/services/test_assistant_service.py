@@ -84,6 +84,7 @@ class TestSettings:
     async def test_enabling_creates_the_three_reports_on_the_users_days(
         self, fake_supabase, tenant
     ):
+        number, code, proof = svc.new_notify_code(tenant.user_id, tenant.kwami_id, "612 345 678")
         row = await svc.save_settings(
             tenant.user_id,
             tenant.kwami_id,
@@ -91,8 +92,10 @@ class TestSettings:
             notify_channel="whatsapp",
             timezone=MADRID,
             reports_enabled=True,
+            notify_code=code,
+            notify_proof=proof,
         )
-        assert row["notify_to"] == "+34612345678"
+        assert row["notify_to"] == number == "+34612345678"
         reports = {t["report_type"]: t for t in fake_supabase.db.rows("kwami_assistant_tasks")}
         assert set(reports) == {"monday", "friday", "sunday"}
         assert reports["monday"]["weekdays"] == [0]
@@ -340,3 +343,45 @@ class TestScheduledWork:
         )
         assert row["kind"] == "work"
         assert row["next_run_at"]
+
+
+class TestConfirmingANumber:
+    COMMON = {"notify_channel": "sms", "timezone": MADRID, "reports_enabled": False}
+
+    async def _save(self, tenant, number="612345678", **proof):
+        return await svc.save_settings(
+            tenant.user_id, tenant.kwami_id, notify_to=number, **self.COMMON, **proof
+        )
+
+    async def test_a_new_number_needs_its_code(self, fake_supabase, tenant):
+        with pytest.raises(svc.NotifyNumberNotConfirmedError):
+            await self._save(tenant)
+
+    async def test_the_wrong_code_is_refused(self, fake_supabase, tenant):
+        _, _, proof = svc.new_notify_code(tenant.user_id, tenant.kwami_id, "612345678")
+        with pytest.raises(svc.NotifyNumberNotConfirmedError):
+            await self._save(tenant, notify_code="not-it", notify_proof=proof)
+
+    async def test_a_code_is_for_the_number_it_was_sent_to(self, fake_supabase, tenant):
+        _, code, proof = svc.new_notify_code(tenant.user_id, tenant.kwami_id, "699999999")
+        with pytest.raises(svc.NotifyNumberNotConfirmedError):
+            await self._save(tenant, notify_code=code, notify_proof=proof)
+
+    async def test_an_expired_code_is_refused(self, fake_supabase, tenant, monkeypatch):
+        monkeypatch.setattr(svc, "NOTIFY_CODE_SECONDS", -1)
+        _, code, proof = svc.new_notify_code(tenant.user_id, tenant.kwami_id, "612345678")
+        with pytest.raises(svc.NotifyNumberNotConfirmedError):
+            await self._save(tenant, notify_code=code, notify_proof=proof)
+
+    async def test_a_proof_that_is_not_one_is_refused(self, fake_supabase, tenant):
+        with pytest.raises(svc.NotifyNumberNotConfirmedError):
+            await self._save(tenant, notify_code="123456", notify_proof="nonsense")
+
+    async def test_a_number_already_saved_needs_nothing(self, fake_supabase, tenant):
+        _, code, proof = svc.new_notify_code(tenant.user_id, tenant.kwami_id, "612345678")
+        await self._save(tenant, notify_code=code, notify_proof=proof)
+        assert (await self._save(tenant))["notify_to"] == "+34612345678"
+
+    async def test_removing_the_number_needs_nothing(self, fake_supabase, tenant):
+        row = await self._save(tenant, number=None)
+        assert row["notify_to"] is None

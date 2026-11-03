@@ -40,6 +40,10 @@ PURCHASE_LIMIT = "10/minute"
 PROVISIONING_LIMIT = "5/minute"
 #: A sample costs a provider call the first time anybody asks for it.
 VOICE_PREVIEW_LIMIT = "30/minute;300/day"
+#: Each is a message to a number nobody has confirmed, on the platform's Twilio.
+NOTIFY_CODE_LIMIT = "3/hour;6/day"
+#: Saving is where a code is tried, so guessing one has to take longer than it lasts.
+ASSISTANT_SETTINGS_LIMIT = "10/minute"
 WEBHOOK_LIMIT = "300/minute"
 DEFAULT_LIMIT = "300/minute"
 
