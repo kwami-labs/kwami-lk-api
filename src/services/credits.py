@@ -5,7 +5,7 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 from decimal import ROUND_CEILING, ROUND_HALF_EVEN, Decimal
 from typing import Any
 
@@ -13,7 +13,7 @@ from supabase import AsyncClient, create_async_client
 
 from src.core.config import settings
 from src.services.pricing import (
-    ALL_PRICING,
+    ALL_PRICING,  # noqa: F401  (tests pick their sample models from here)
     PRICING_VERSION,
     AudioPricing,
     ExternalPricing,
@@ -23,6 +23,7 @@ from src.services.pricing import (
     calculate_external_cost,
     calculate_realtime_cost,
     calculate_token_cost,
+    get_model_pricing,
 )
 
 logger = logging.getLogger("kwami-api.credits")
@@ -44,7 +45,19 @@ QUANTIZE_EXPONENT = Decimal("1e-6")
 MARKUP_MULTIPLIER = settings.billing_markup_multiplier
 FIXED_FEE_USD = settings.billing_fixed_fee_usd
 
+# What the `credit_model_type` column accepts. The agent also reports `browser`, which
+# the column rejected: the insert raised and the whole session went unsettled.
+LEDGER_MODEL_TYPES = frozenset({"llm", "stt", "tts", "realtime", "tool", "memory"})
+
+# The ledger row for what someone on their own keys pays for the platform.
+PLATFORM_MODEL_ID = "kwami/platform"
+
 # Credit pack definitions: (pack_id, display_name, credits, price_cents)
+# With the 1.75 markup a voice minute burns about 70 credits and really costs about
+# $0.05 (providers plus LiveKit). So Spark is 70 min, ten a day for a week; Surge is
+# 357 min, 17 a day for three weeks; Overcharge is 1428 min for a month of tasks.
+# Bigger packs are cheaper per credit, down to the point where they still clear the
+# costs and Stripe's fee. test_usage_settlement pins that floor.
 CREDIT_PACKS = {
     "starter": {
         "id": "starter",
@@ -57,14 +70,14 @@ CREDIT_PACKS = {
         "id": "standard",
         "name": "Surge",
         "credits": 25_000,
-        "price_cents": 2500,  # $25.00
+        "price_cents": 2200,  # $22.00
         "popular": True,
     },
     "pro": {
         "id": "pro",
         "name": "Overcharge",
         "credits": 100_000,
-        "price_cents": 10000,  # $100.00
+        "price_cents": 8500,  # $85.00
         "popular": False,
     },
 }
@@ -184,6 +197,12 @@ def _calculate_fallback_cost(model_type: str, units_used: float) -> float:
     """Fallback when the model or service is unknown."""
     if model_type == "llm":
         return (units_used / 1_000_000) * settings.billing_fallback_cost_per_1m_tokens_usd
+    if model_type == "stt":
+        return units_used * settings.billing_fallback_stt_per_minute_usd
+    if model_type == "tts":
+        return (units_used / 1_000_000) * settings.billing_fallback_tts_per_1m_characters_usd
+    if model_type == "realtime":
+        return units_used * settings.billing_fallback_realtime_per_minute_usd
     return 0.0
 
 
@@ -203,7 +222,35 @@ def calculate_usage_charge(item: dict[str, Any]) -> PricingBreakdown:
     units_used = float(item.get("units_used") or 0.0)
     usage_metadata = _extract_usage_metadata(item)
 
-    pricing_entry = ALL_PRICING.get(model_id)
+    if item.get("platform_micro_credits") is not None:
+        micro_credits = int(item["platform_micro_credits"])
+        provider_cost_usd = units_used * settings.billing_infra_per_minute_usd
+        billed_cost_usd = micro_credits / (MICRO_CREDITS_PER_CREDIT / USD_PER_CREDIT)
+        usage_metadata["units_used"] = round(units_used, 6)
+        return PricingBreakdown(
+            normalized_units_used=round(units_used, 6),
+            provider_cost_usd=_round_usd(provider_cost_usd),
+            billed_cost_usd=_round_usd(billed_cost_usd),
+            margin_usd=_round_usd(billed_cost_usd - provider_cost_usd),
+            requested_micro_credits=micro_credits,
+            pricing_source=f"platform:{PRICING_VERSION}",
+            usage_metadata=usage_metadata,
+        )
+
+    if item.get("own_key"):
+        # Their key, their bill. Charging energy for it as well would make them pay twice.
+        usage_metadata["units_used"] = round(units_used, 6)
+        return PricingBreakdown(
+            normalized_units_used=round(units_used, 6),
+            provider_cost_usd=0.0,
+            billed_cost_usd=0.0,
+            margin_usd=0.0,
+            requested_micro_credits=0,
+            pricing_source="own_key",
+            usage_metadata=usage_metadata,
+        )
+
+    pricing_entry = get_model_pricing(model_id)
     pricing_source = f"catalog:{PRICING_VERSION}"
     provider_cost_usd = 0.0
 
@@ -234,6 +281,15 @@ def calculate_usage_charge(item: dict[str, Any]) -> PricingBreakdown:
                 pricing_source = "estimated_total_tokens"
         elif isinstance(pricing, AudioPricing):
             provider_cost_usd = calculate_audio_cost(pricing, units_used)
+        elif isinstance(pricing, RealtimePricing) and model_type == "llm":
+            # A realtime model's text-only turns arrive as LLM usage, and then
+            # `units_used` is tokens: read as minutes it would bill for days of audio.
+            provider_cost_usd = calculate_realtime_cost(
+                pricing,
+                text_input_tokens=int(item.get("prompt_tokens") or 0),
+                text_output_tokens=int(item.get("completion_tokens") or 0),
+                cached_text_input_tokens=int(item.get("cached_input_tokens") or 0),
+            )
         elif isinstance(pricing, RealtimePricing):
             provider_cost_usd = calculate_realtime_cost(
                 pricing,
@@ -241,6 +297,7 @@ def calculate_usage_charge(item: dict[str, Any]) -> PricingBreakdown:
                 audio_output_minutes=float(item.get("audio_output_minutes") or 0.0),
                 text_input_tokens=int(item.get("text_input_tokens") or 0),
                 text_output_tokens=int(item.get("text_output_tokens") or 0),
+                cached_text_input_tokens=int(item.get("cached_input_tokens") or 0),
                 fallback_minutes=units_used,
             )
             if (
@@ -542,7 +599,7 @@ async def get_usage_logs_for_reconciliation(
 
 
 def _infer_provider(model_id: str) -> str:
-    pricing_entry = ALL_PRICING.get(model_id)
+    pricing_entry = get_model_pricing(model_id)
     if pricing_entry:
         return pricing_entry.provider
     if "/" in model_id:
@@ -782,11 +839,34 @@ async def _find_usage_report(report_key: str) -> dict[str, Any] | None:
     return rows[0] if rows else None
 
 
+async def _platform_charge_micro(user_id: str, minutes: float) -> int:
+    """What this session owes the platform, given what today's sessions already used."""
+    start_of_day = datetime.combine(datetime.now(UTC).date(), time.min, tzinfo=UTC)
+    sb = get_supabase_admin()
+    earlier = (
+        await sb.table("credit_usage_logs")
+        .select("units_used")
+        .eq("user_id", user_id)
+        .eq("model_id", PLATFORM_MODEL_ID)
+        .gte("created_at", start_of_day.isoformat())
+        .execute()
+    )
+    rows = getattr(earlier, "data", None) or []
+    used = sum(float(row.get("units_used") or 0.0) for row in rows)
+    included = settings.billing_platform_day_minutes
+    extra = max(used + minutes - included, 0.0) - max(used - included, 0.0)
+    credits_owed = extra * settings.billing_platform_extra_minute_credits
+    if not rows:
+        credits_owed += settings.billing_platform_day_credits
+    return round(credits_owed * MICRO_CREDITS_PER_CREDIT)
+
+
 async def process_usage_report(
     user_id: str,
     session_id: str,
     usage_items: list[dict],
     idempotency_key: str | None = None,
+    session_minutes: float = 0.0,
 ) -> dict:
     """Process a batch usage report from the agent.
 
@@ -840,6 +920,19 @@ async def process_usage_report(
             return cached
         raise
 
+    if session_minutes > 0 and any(item.get("own_key") for item in usage_items):
+        usage_items = [
+            *usage_items,
+            {
+                "model_type": "tool",
+                "model_id": PLATFORM_MODEL_ID,
+                "units_used": session_minutes,
+                "platform_micro_credits": await _platform_charge_micro(
+                    ledger_user_id, session_minutes
+                ),
+            },
+        ]
+
     total_requested_micro_credits = 0
     total_charged_micro_credits = 0
     total_provider_cost_usd = 0.0
@@ -848,7 +941,7 @@ async def process_usage_report(
     logged_items = []
 
     for item in usage_items:
-        model_type = item["model_type"]
+        model_type = item["model_type"] if item["model_type"] in LEDGER_MODEL_TYPES else "tool"
         model_id = item["model_id"]
 
         breakdown = calculate_usage_charge(item)
@@ -939,7 +1032,11 @@ async def process_usage_report(
     remaining = total_charged_micro_credits
     for logged_item in logged_items:
         requested = logged_item["requested_credits"]
-        if settlement_status in ("charged", "partially_charged") and remaining > 0:
+        if requested == 0:
+            # Nothing was asked of the user, so nothing was forgiven either.
+            credits_charged = 0
+            item_status = "skipped"
+        elif settlement_status in ("charged", "partially_charged") and remaining > 0:
             credits_charged = min(requested, remaining)
             remaining -= credits_charged
             item_status = "charged" if credits_charged == requested else "partially_charged"

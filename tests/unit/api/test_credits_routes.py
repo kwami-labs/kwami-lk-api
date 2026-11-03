@@ -47,7 +47,7 @@ class TestPacks:
     async def test_the_price_is_rendered_for_display(self, client):
         packs = {p["id"]: p for p in (await client.get("/credits/packs")).json()["packs"]}
         assert packs["starter"]["price_display"] == "$5.00"
-        assert packs["pro"]["price_display"] == "$100.00"
+        assert packs["pro"]["price_display"] == "$85.00"
 
     async def test_exactly_one_pack_is_marked_popular(self, client):
         packs = (await client.get("/credits/packs")).json()["packs"]

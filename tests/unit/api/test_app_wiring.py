@@ -16,9 +16,32 @@ from src.api import authz
 from src.api.authz import kwami_from_path, kwami_from_query, require_kwami_owned
 from src.core.errors import KwamiNotFoundError
 from src.main import app, docs_urls, lifespan
+from src.services import voices
+
+
+class TestVoicePlugins:
+    def test_a_missing_plugin_only_warns(self, monkeypatch, caplog):
+        def missing(_name):
+            raise ImportError("no plugin")
+
+        monkeypatch.setattr(voices.importlib, "import_module", missing)
+        with caplog.at_level("WARNING"):
+            voices.import_voice_plugins()
+        assert "not available" in caplog.text
 
 
 class TestLifespan:
+    @pytest.mark.anyio
+    async def test_the_plugin_is_imported_before_the_warm_up_leaves_for_a_thread(self, monkeypatch):
+        """A first import from a worker thread raises, and that broke the warm-up."""
+        order: list[str] = []
+        main_globals = lifespan.__wrapped__.__globals__
+        monkeypatch.setitem(main_globals, "import_voice_plugins", lambda: order.append("import"))
+        monkeypatch.setitem(main_globals, "get_tts_voices", lambda: order.append("warm"))
+        async with lifespan(app):
+            pass
+        assert order == ["import", "warm"]
+
     @pytest.mark.anyio
     async def test_it_logs_the_identity_of_the_running_service(self, caplog):
         with caplog.at_level("INFO", logger="kwami-api"):
