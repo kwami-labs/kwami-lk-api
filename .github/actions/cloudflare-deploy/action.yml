@@ -64,7 +64,9 @@ runs:
         fi
 
         if [ -z "${TOKEN:-}" ] || [ -z "${ACCOUNT:-}" ]; then
-          echo "::error::Cloudflare deploy is half-configured: both CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are required."
+          missing=CLOUDFLARE_API_TOKEN
+          [ -n "${TOKEN:-}" ] && missing=CLOUDFLARE_ACCOUNT_ID
+          echo "::error::Cloudflare deploy is half-configured: $missing is missing from the ${WRANGLER_ENV:-top-level} environment of $GITHUB_REPOSITORY. Secrets belong to one repository, so a token saved in another one does not reach this one."
           exit 1
         fi
 
