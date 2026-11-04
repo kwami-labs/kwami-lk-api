@@ -8,10 +8,14 @@ change, and the scheduler can only look up an instant.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import secrets
 from datetime import UTC, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from src.core.config import settings
 from src.services.channels import get_owned_kwami, normalize_phone_number, now_iso
 from src.services.credits import get_supabase_admin
 
@@ -24,6 +28,14 @@ MAX_ROWS = 200
 
 #: The user's rule (2026-11-01): reports on Mondays and Fridays, and on Sundays a
 #: reminder of what is coming the week after. weekday, local time, title.
+NOTIFY_CODE_DIGITS = 6
+NOTIFY_CODE_SECONDS = 600
+
+
+class NotifyNumberNotConfirmedError(ValueError):
+    """A new number for the reports, without the code that was sent to it."""
+
+
 REPORTS: dict[str, tuple[int, str, str]] = {
     "monday": (0, "08:00", "Informe del lunes"),
     "friday": (4, "18:00", "Informe del viernes"),
@@ -102,6 +114,35 @@ async def get_settings(user_id: str, kwami_id: str) -> dict[str, Any]:
     }
 
 
+def _notify_digest(user_id: str, kwami_id: str, number: str, code: str, expires: int) -> str:
+    key = f"notify-code:{settings.supabase_secret_key}".encode()
+    message = f"{user_id}|{kwami_id}|{number}|{code}|{expires}".encode()
+    return hmac.new(key, message, hashlib.sha256).hexdigest()
+
+
+def new_notify_code(
+    user_id: str, kwami_id: str, notify_to: str, default_region: str = "ES"
+) -> tuple[str, str, str]:
+    """(the number, the code to send to it, the proof the app sends back with the code).
+
+    Nothing is stored: the proof ties the code to this user, kwami, number and time, and
+    without the code it says nothing.
+    """
+    number = normalize_phone_number(notify_to, default_region)
+    code = f"{secrets.randbelow(10**NOTIFY_CODE_DIGITS):0{NOTIFY_CODE_DIGITS}d}"
+    expires = int(datetime.now(UTC).timestamp()) + NOTIFY_CODE_SECONDS
+    proof = f"{expires}.{_notify_digest(user_id, kwami_id, number, code, expires)}"
+    return number, code, proof
+
+
+def _notify_code_holds(user_id: str, kwami_id: str, number: str, code: str, proof: str) -> bool:
+    expires, _, digest = proof.partition(".")
+    if not expires.isdigit() or int(expires) < datetime.now(UTC).timestamp():
+        return False
+    expected = _notify_digest(user_id, kwami_id, number, code, int(expires))
+    return hmac.compare_digest(expected, digest)
+
+
 async def save_settings(
     user_id: str,
     kwami_id: str,
@@ -110,6 +151,8 @@ async def save_settings(
     notify_channel: str,
     timezone: str,
     reports_enabled: bool,
+    notify_code: str = "",
+    notify_proof: str = "",
     default_region: str = "ES",
 ) -> dict[str, Any]:
     await get_owned_kwami(user_id, kwami_id)
@@ -117,6 +160,13 @@ async def save_settings(
         raise ValueError("notify_channel must be 'whatsapp' or 'sms'")
     parse_zone(timezone)
     number = normalize_phone_number(notify_to, default_region) if notify_to else None
+    # Reports go to this number on the platform's Twilio, so it has to be yours.
+    if (
+        number
+        and number != (await get_settings(user_id, kwami_id)).get("notify_to")
+        and not _notify_code_holds(user_id, kwami_id, number, notify_code, notify_proof)
+    ):
+        raise NotifyNumberNotConfirmedError("Confirm the number with the code sent to it")
     result = await (
         get_supabase_admin()
         .table("kwami_assistant_settings")

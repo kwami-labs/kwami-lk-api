@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from src.api.deps import require_auth
+from src.api.ratelimit import ASSISTANT_SETTINGS_LIMIT, NOTIFY_CODE_LIMIT, limiter
 from src.core.security import AuthUser
-from src.services import assistant_service
+from src.services import assistant_scheduler, assistant_service
 
 router = APIRouter()
 
@@ -20,6 +21,14 @@ class SettingsRequest(BaseModel):
     notify_channel: str = "whatsapp"
     timezone: str = assistant_service.DEFAULT_TIMEZONE
     reports_enabled: bool = False
+    notify_code: str = Field(default="", max_length=16)
+    notify_proof: str = Field(default="", max_length=128)
+
+
+class NotifyCodeRequest(BaseModel):
+    kwami_id: str
+    notify_to: str = Field(..., min_length=1, max_length=32)
+    notify_channel: str = "whatsapp"
 
 
 class TaskCreateRequest(BaseModel):
@@ -62,9 +71,28 @@ async def read_settings(
         raise _bad_request(exc) from exc
 
 
+@router.post("/settings/notify-code")
+@limiter.limit(NOTIFY_CODE_LIMIT)
+async def send_notify_code(
+    request: Request, body: NotifyCodeRequest, user: Annotated[AuthUser, Depends(require_auth)]
+) -> dict[str, str]:
+    """Send a number the code that confirms it. The proof comes back when saving."""
+    try:
+        await assistant_service.get_owned_kwami(user.id, body.kwami_id)
+        proof = await assistant_scheduler.send_notify_code(
+            user.id, body.kwami_id, body.notify_to, body.notify_channel
+        )
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail="The code could not be sent") from exc
+    return {"proof": proof}
+
+
 @router.put("/settings")
+@limiter.limit(ASSISTANT_SETTINGS_LIMIT)
 async def write_settings(
-    body: SettingsRequest, user: Annotated[AuthUser, Depends(require_auth)]
+    request: Request, body: SettingsRequest, user: Annotated[AuthUser, Depends(require_auth)]
 ) -> dict[str, Any]:
     try:
         row = await assistant_service.save_settings(
@@ -74,6 +102,8 @@ async def write_settings(
             notify_channel=body.notify_channel,
             timezone=body.timezone,
             reports_enabled=body.reports_enabled,
+            notify_code=body.notify_code,
+            notify_proof=body.notify_proof,
         )
     except ValueError as exc:
         raise _bad_request(exc) from exc

@@ -184,6 +184,19 @@ async def _send_over(kind: str, user_id: str, kwami_id: str, to: str, body: str)
     )
 
 
+async def send_notify_code(user_id: str, kwami_id: str, notify_to: str, preferred: str) -> str:
+    """Send the code that confirms a number. The proof for it goes back to the app."""
+    number, code, proof = assistant_service.new_notify_code(user_id, kwami_id, notify_to)
+    text = f"Su código de Kwami es {code}. Caduca en 10 minutos."
+    for kind in [preferred, *[k for k in ("whatsapp", "sms") if k != preferred]]:
+        try:
+            await _send_over(kind, user_id, kwami_id, number, text)
+            return proof
+        except Exception as exc:
+            logger.warning("Could not send a code over %s: %s", kind, type(exc).__name__)
+    raise RuntimeError("The code could not be sent")
+
+
 async def deliver(
     user_id: str, kwami_id: str, task_id: str | None, title: str, body: str
 ) -> dict[str, Any]:

@@ -5,7 +5,7 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime, time
+from datetime import UTC, date, datetime, time
 from decimal import ROUND_CEILING, ROUND_HALF_EVEN, Decimal
 from typing import Any
 
@@ -839,9 +839,79 @@ async def _find_usage_report(report_key: str) -> dict[str, Any] | None:
     return rows[0] if rows else None
 
 
-async def _platform_charge_micro(user_id: str, minutes: float) -> int:
+#: Where a usage report and `kwami_provider_keys` call a provider different names.
+_PROVIDER_LABELS = {"gemini": "google"}
+
+
+def _provider_of(model_id: str) -> str:
+    """`api.openai.com/tts-1` -> openai, `Deepgram/nova-3` -> deepgram, no prefix -> "".
+
+    As the agent names them when it reports usage on someone's own key.
+    """
+    label, separator, _ = model_id.lower().partition("/")
+    if not separator:
+        return ""
+    if label.startswith("api."):
+        label = label.split(".")[1]
+    return _PROVIDER_LABELS.get(label, label)
+
+
+async def _only_keys_they_connected(user_id: str, usage_items: list[dict]) -> list[dict]:
+    """Take `own_key` back from an item whose provider this user has no key for.
+
+    The agent says whose key it used, and a key it holds on someone's PC can say anything.
+    Usage on no key of theirs is ours to pay, so it is charged like any other.
+    """
+    if not any(item.get("own_key") for item in usage_items):
+        return usage_items
+    sb = get_supabase_admin()
+    result = (
+        await sb.table("kwami_provider_keys").select("provider").eq("user_id", user_id).execute()
+    )
+    connected = {row["provider"] for row in getattr(result, "data", None) or []}
+    checked = []
+    for item in usage_items:
+        if item.get("own_key") and _provider_of(str(item.get("model_id"))) not in connected:
+            logger.warning(
+                "Usage on an own key the user has not connected: %s", item.get("model_id")
+            )
+            item = {**item, "own_key": False}
+        checked.append(item)
+    return checked
+
+
+async def _claim_day_fee(user_id: str, session_id: str, day: date) -> bool:
+    """Whether this report is the one to charge today's fee.
+
+    Reading today's sessions cannot say: two reports arriving at once both see none. The
+    report key is unique, so of those two only one gets to write this row.
+    """
+    try:
+        await (
+            get_supabase_admin()
+            .table("usage_reports")
+            .insert(
+                {
+                    "report_key": f"platform-day:{user_id}:{day.isoformat()}",
+                    "user_id": user_id,
+                    "session_id": session_id,
+                    "status": "settled",
+                    "items_count": 0,
+                }
+            )
+            .execute()
+        )
+    except Exception as exc:
+        if "23505" in str(exc) or "duplicate key" in str(exc).lower():
+            return False
+        raise
+    return True
+
+
+async def _platform_charge_micro(user_id: str, session_id: str, minutes: float) -> int:
     """What this session owes the platform, given what today's sessions already used."""
-    start_of_day = datetime.combine(datetime.now(UTC).date(), time.min, tzinfo=UTC)
+    today = datetime.now(UTC).date()
+    start_of_day = datetime.combine(today, time.min, tzinfo=UTC)
     sb = get_supabase_admin()
     earlier = (
         await sb.table("credit_usage_logs")
@@ -856,7 +926,7 @@ async def _platform_charge_micro(user_id: str, minutes: float) -> int:
     included = settings.billing_platform_day_minutes
     extra = max(used + minutes - included, 0.0) - max(used - included, 0.0)
     credits_owed = extra * settings.billing_platform_extra_minute_credits
-    if not rows:
+    if not rows and await _claim_day_fee(user_id, session_id, today):
         credits_owed += settings.billing_platform_day_credits
     return round(credits_owed * MICRO_CREDITS_PER_CREDIT)
 
@@ -920,6 +990,7 @@ async def process_usage_report(
             return cached
         raise
 
+    usage_items = await _only_keys_they_connected(ledger_user_id, usage_items)
     if session_minutes > 0 and any(item.get("own_key") for item in usage_items):
         usage_items = [
             *usage_items,
@@ -928,7 +999,7 @@ async def process_usage_report(
                 "model_id": PLATFORM_MODEL_ID,
                 "units_used": session_minutes,
                 "platform_micro_credits": await _platform_charge_micro(
-                    ledger_user_id, session_minutes
+                    ledger_user_id, session_id, session_minutes
                 ),
             },
         ]
