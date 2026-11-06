@@ -101,6 +101,7 @@ src/api/routes/memory/core.py                100
 src/api/routes/memory/graph.py               100
 src/api/routes/memory/ontology.py            100
 src/api/routes/memory/analysis.py            100
+src/api/routes/memory/sessions.py            100
 src/api/routes/models.py                     100
 
 # LiveKit token issuance -- the endpoint the app cannot work without, and the one that decides
@@ -156,6 +157,8 @@ src/services/memory/ownership.py             100
 # duplicate-pair pass, pure so the routes can run it off the event loop.
 src/services/memory/merge.py                 100
 src/services/memory/analysis.py              100
+# `threads.py` reads one user's threads instead of every thread in the project.
+src/services/memory/threads.py               100
 src/services/languages.py                    100
 src/services/livekit.py                      100
 src/services/models.py                       100

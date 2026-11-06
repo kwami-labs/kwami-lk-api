@@ -31,10 +31,33 @@ def message(uuid="m-1", content="hello", role="user", created_at="2026-03-01T00:
 class TestMessages:
     PATH = f"/memory/{USER_ID}/messages"
 
-    def _threads(self, zep, *threads, total=None):
-        zep.thread.list_all.result = SimpleNamespace(
-            threads=list(threads), total_count=total if total is not None else len(threads)
+    def _threads(self, zep, *threads):
+        zep.user.get_threads.result = list(threads)
+
+    async def test_it_reads_the_users_threads_not_the_project(self, mem, zep):
+        """It used to page through every tenant's threads on each request."""
+        self._threads(zep, thread("t-1"))
+        await mem.get(self.PATH)
+        assert not zep.thread.list_all.called
+        assert zep.user.get_threads.called
+
+    async def test_each_thread_is_read_from_its_end(self, mem, zep):
+        """`limit` read a thread's first messages, so a long session hid how it ended."""
+        self._threads(zep, thread("t-1"))
+        await mem.get(self.PATH, params={"limit": 30})
+        assert zep.thread.get.last == {"thread_id": "t-1", "lastn": 30}
+
+    async def test_reading_stops_once_the_limit_is_held(self, mem, zep):
+        """Newest session first: an older session cannot hold a newer message."""
+        self._threads(
+            zep,
+            thread("t-old", created_at="2026-01-01"),
+            thread("t-new", created_at="2026-06-01"),
         )
+        zep.thread.get.result = SimpleNamespace(messages=[message(uuid=f"m{i}") for i in range(3)])
+        body = (await mem.get(self.PATH, params={"limit": 3})).json()
+        assert [c["thread_id"] for c in zep.thread.get.calls] == ["t-new"]
+        assert body["session_count"] == 2
 
     async def test_it_returns_messages_and_sessions(self, mem, zep):
         self._threads(zep, thread("t-1"))
@@ -98,7 +121,7 @@ class TestMessages:
         assert "Failed to get messages from thread" in caplog.text
 
     async def test_a_failing_listing_returns_an_empty_result(self, mem, zep, caplog):
-        zep.thread.list_all.error = RuntimeError("threads down")
+        zep.user.get_threads.error = RuntimeError("threads down")
         with caplog.at_level("WARNING", logger="kwami-api.memory"):
             body = (await mem.get(self.PATH)).json()
         assert body == {"messages": [], "message_count": 0, "sessions": [], "session_count": 0}
@@ -130,7 +153,12 @@ class TestMessages:
         zep.thread.get.result = SimpleNamespace(messages=[message(uuid=f"m{i}") for i in range(5)])
         body = (await mem.get(self.PATH, params={"limit": 2})).json()
         assert len(body["messages"]) == 2
-        assert body["message_count"] == 5, "the count is the true total"
+        assert body["message_count"] == 5, "what was read, before the cap"
+
+    async def test_a_user_zep_never_saw_has_no_messages(self, mem, zep):
+        zep.user.get_threads.error = RuntimeError("status_code: 404, not found")
+        body = (await mem.get(self.PATH)).json()
+        assert body["session_count"] == 0
 
     @pytest.mark.parametrize("limit", [0, 501])
     async def test_an_out_of_range_limit_is_a_422(self, mem, limit):

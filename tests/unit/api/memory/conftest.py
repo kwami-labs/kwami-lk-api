@@ -216,10 +216,19 @@ class FakeZep:
         self.thread = SimpleNamespace(
             list_all=Recorder(SimpleNamespace(threads=[], total_count=0)),
             get_context=Recorder(SimpleNamespace(context="ctx")),
+            get_user_context=Recorder(SimpleNamespace(context="ctx")),
+            get_summary=Recorder(
+                SimpleNamespace(
+                    summary="They talked about the trip.",
+                    last_summarized_at="2026-03-02T00:00:00Z",
+                    created_at="2026-03-01T00:00:00Z",
+                )
+            ),
             delete=Recorder(None),
             get=Recorder(SimpleNamespace(messages=[])),
         )
         self.user = SimpleNamespace(
+            get_threads=Recorder([]),
             delete=Recorder(None),
             get=Recorder(SimpleNamespace(first_name=None, last_name=None, email=None, metadata={})),
             update=Recorder(None),

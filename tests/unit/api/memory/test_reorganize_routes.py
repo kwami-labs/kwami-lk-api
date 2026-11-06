@@ -660,12 +660,9 @@ class TestFinalBranches:
         """Not a MessageListResponse and not a list -- yields no messages, no crash."""
         from types import SimpleNamespace
 
-        zep.thread.list_all.result = SimpleNamespace(
-            threads=[
-                SimpleNamespace(thread_id="t-1", uuid_="t-1", user_id=USER_ID, created_at=None)
-            ],
-            total_count=1,
-        )
+        zep.user.get_threads.result = [
+            SimpleNamespace(thread_id="t-1", uuid_="t-1", user_id=USER_ID, created_at=None)
+        ]
         zep.thread.get.result = "an unexpected string"
         body = (await mem.get(f"/memory/{USER_ID}/messages")).json()
         assert body["session_count"] == 1
