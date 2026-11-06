@@ -105,23 +105,24 @@ def _preview(messages: list[Any]) -> str | None:
 async def describe_thread(client: AsyncZep, thread: Any) -> dict:
     """One session as the panel lists it: when, how long, how it opened.
 
-    Two calls: the first few messages (which carry the total) and the last one.
+    The first few messages carry the total. Only a session longer than that
+    needs a second call for its last message; an empty one -- most of the
+    threads reconnects left behind -- or a short one costs one call.
     """
     thread_id = thread_id_of(thread) or ""
-    head, tail = await asyncio.gather(
-        client.thread.get(thread_id=thread_id, limit=PREVIEW_MESSAGES),
-        client.thread.get(thread_id=thread_id, lastn=1),
-    )
+    head = await client.thread.get(thread_id=thread_id, limit=PREVIEW_MESSAGES)
     first = messages_of(head)
-    last = messages_of(tail)
     count = getattr(head, "total_count", None)
     if not isinstance(count, int) or count < len(first):
         count = len(first)
+    last = first
+    if count > len(first):
+        last = messages_of(await client.thread.get(thread_id=thread_id, lastn=1)) or first
     return {
         "thread_id": thread_id,
         "created_at": _when(thread),
         "started_at": _when(first[0]) if first else None,
-        "ended_at": _when(last[-1]) if last else (_when(first[-1]) if first else None),
+        "ended_at": _when(last[-1]) if last else None,
         "message_count": count,
         "preview": _preview(first),
         "empty": not first,

@@ -88,13 +88,31 @@ class TestListSessions:
         assert body["total_threads"] == 2
         assert body["next_offset"] is None
 
-    async def test_two_calls_describe_a_session(self, mem, zep):
+    async def test_a_short_session_is_described_in_one_call(self, mem, zep):
+        """Its first page already holds its last message."""
         fake = two_sessions(zep)
         await mem.get(self.PATH, params={"limit": 1})
+        assert fake.calls == [{"thread_id": "t-new", "limit": 4, "lastn": None, "cursor": None}]
+
+    async def test_a_long_session_also_reads_its_last_message(self, mem, zep):
+        zep.user.get_threads.result = [thread("t-long")]
+        fake = FakeThreads(
+            zep,
+            {"t-long": [msg(f"m{i}", created_at=f"2026-03-01T09:0{i}:00Z") for i in range(6)]},
+        )
+        body = (await mem.get(self.PATH)).json()
         assert fake.calls == [
-            {"thread_id": "t-new", "limit": 4, "lastn": None, "cursor": None},
-            {"thread_id": "t-new", "limit": None, "lastn": 1, "cursor": None},
+            {"thread_id": "t-long", "limit": 4, "lastn": None, "cursor": None},
+            {"thread_id": "t-long", "limit": None, "lastn": 1, "cursor": None},
         ]
+        assert body["sessions"][0]["ended_at"] == "2026-03-01T09:05:00Z"
+        assert body["sessions"][0]["message_count"] == 6
+
+    async def test_an_empty_session_costs_one_call(self, mem, zep):
+        zep.user.get_threads.result = [thread("t-empty")]
+        fake = FakeThreads(zep, {"t-empty": []})
+        await mem.get(self.PATH)
+        assert len(fake.calls) == 1
 
     async def test_a_page_continues_from_next_offset(self, mem, zep):
         two_sessions(zep)
