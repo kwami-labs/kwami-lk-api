@@ -73,7 +73,7 @@ Upstream exception text is not forwarded.
 | `/email` | user | Smart Hub inbox, send, username. |
 | `/calendar` | user | Per-kwami events. |
 | `/internal` | agent | Runtime config, channel lookup by address. |
-| `/webhooks` | signature | Twilio voice/WhatsApp, SendGrid inbound. |
+| `/webhooks` | signature | Twilio voice/WhatsApp, SendGrid inbound, LiveKit room events. |
 | `/admin/reconciliation` | admin | Provider invoice import and findings. |
 
 ### Token
@@ -117,6 +117,17 @@ Outbound telephony is authenticated (`/channels/calls/outbound`,
 returns TwiML that either `<Reject/>` or dials `LIVEKIT_SIP_INBOUND_URI`.
 
 SendGrid inbound parse posts to `/webhooks/email/inbound`.
+
+LiveKit Cloud posts room events to `/webhooks/livekit`, signed with the
+project's `LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET` over the SHA-256 of the body
+(anything that does not verify is a 401). They keep `livekit_sessions` honest:
+`room_started`, `participant_joined` and `track_published` make a room `active`,
+`participant_left` and `track_unpublished` move `last_seen_at`, and
+`room_finished` sets `ended` and `ended_at`. `ended` and `abandoned` are final, so
+a late or redelivered event never reopens a room; rooms this API did not issue
+are acknowledged and ignored. A database failure answers 503 so LiveKit retries
+(every update is idempotent). Enable it in the LiveKit project's settings
+(Settings → Webhooks) with the URL `https://<api host>/webhooks/livekit`.
 
 ### Internal
 
