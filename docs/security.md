@@ -76,6 +76,17 @@ Supabase JWKS, using the algorithm in the token header and audience
 Those checks are anchored. A previous `str.replace("kwami_", "")` accepted
 ids that merely contained the caller's id after mangling.
 
+The namespace check does not cover the edge and node uuids a route acts on,
+and Zep deletes or rewrites any uuid in the project. Before an edit, delete,
+merge, connect or reorganize, `src/services/memory/ownership.py` confirms
+each uuid through the caller's own Zep listings (filtered by edge uuid or by
+connected node, falling back to the caller's node listing for a node with no
+edges). It compares the uuids that come back, so a filter Zep ignored fails
+closed, and a uuid that is not the caller's is a 404, not a 403. A thread's
+owner comes back on the `thread.get` answer itself, so `/sessions/{thread_id}`
+routes check it without an extra call and never return another tenant's
+messages.
+
 ### Agents
 
 `KWAMI_API_KEY` is a shared secret between this API and the LiveKit agent.
