@@ -17,6 +17,9 @@ from src.core.security import AuthUser
 from src.services.memory import (
     get_zep_client,
     iter_all_threads,
+    require_edge,
+    require_node,
+    require_nodes,
     thread_belongs_to,
     verify_user_access,
 )
@@ -326,6 +329,7 @@ async def delete_edge(
     This permanently removes the fact/relationship from memory.
     """
     verify_user_access(user, user_id)
+    await require_edge(client, user_id, edge_uuid)
     logger.info("🗑️ Deleting edge %s for user: %s", edge_uuid, user_id)
 
     try:
@@ -352,6 +356,7 @@ async def delete_node(
     Note: This will also delete all edges connected to this node.
     """
     verify_user_access(user, user_id)
+    await require_node(client, user_id, node_uuid)
     logger.info("🗑️ Deleting node %s for user: %s", node_uuid, user_id)
 
     try:
@@ -380,6 +385,13 @@ async def update_edge(
     with the updated fields. Only provided fields are changed.
     """
     verify_user_access(user, user_id)
+    await require_edge(client, user_id, edge_uuid)
+    # The new endpoints are written into this user's graph, so they must be its own.
+    await require_nodes(
+        client,
+        user_id,
+        [uuid for uuid in (body.source_node_uuid, body.target_node_uuid) if uuid],
+    )
     logger.info("✏️ Updating edge %s for user: %s", edge_uuid, user_id)
 
     try:
@@ -486,6 +498,7 @@ async def update_node(
     with the updated node fields.
     """
     verify_user_access(user, user_id)
+    await require_node(client, user_id, node_uuid)
     logger.info("✏️ Updating node %s for user: %s", node_uuid, user_id)
 
     try:

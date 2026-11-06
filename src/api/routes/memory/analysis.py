@@ -21,6 +21,7 @@ from src.core.security import AuthUser
 from src.services.memory import (
     _fetch_graph_raw,
     get_zep_client,
+    require_nodes,
     verify_user_access,
 )
 
@@ -284,6 +285,7 @@ async def merge_nodes(
     3. Delete the duplicate node (cascades its old edges)
     """
     verify_user_access(user, user_id)
+    await require_nodes(client, user_id, [body.keep_uuid, body.remove_uuid])
     logger.info(
         "🔗 Merging nodes for user: %s (keep=%s, remove=%s)",
         user_id,
@@ -521,6 +523,17 @@ async def reorganize_apply(
     and merge specific duplicate pairs.
     """
     verify_user_access(user, user_id)
+    # This route deletes every uuid it is handed, so all of them must be the
+    # caller's -- checked against one listing, not one probe per uuid.
+    await require_nodes(
+        client,
+        user_id,
+        [
+            *body.orphan_uuids,
+            *(pair.keep_uuid for pair in body.merge_pairs),
+            *(pair.remove_uuid for pair in body.merge_pairs),
+        ],
+    )
     logger.info(
         "🧹 Applying reorganization for user: %s (%s orphans, %s merges)",
         user_id,
@@ -767,6 +780,7 @@ async def connect_nodes(
     Uses add_fact_triple to create the connection in the knowledge graph.
     """
     verify_user_access(user, user_id)
+    await require_nodes(client, user_id, [body.source_node_uuid, body.target_node_uuid])
     logger.info(
         "🔗 Connecting nodes for user: %s (%s --[%s]--> %s)",
         user_id,

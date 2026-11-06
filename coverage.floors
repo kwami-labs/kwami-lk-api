@@ -148,6 +148,10 @@ src/services/memory/client.py                100
 src/services/memory/tenancy.py               100
 src/services/memory/ontology.py              100
 src/services/memory/graph.py                 100
+# `paging.py` walks a graph past Zep's 50-record page; `ownership.py` checks that a
+# uuid named in a route is in the caller's own graph before anything is changed.
+src/services/memory/paging.py                100
+src/services/memory/ownership.py             100
 src/services/languages.py                    100
 src/services/livekit.py                      100
 src/services/models.py                       100
