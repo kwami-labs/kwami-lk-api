@@ -236,6 +236,12 @@ class TestPublicTtsApi:
             providers["deepgram"].voices
         )
 
+    def test_jarvis_s_livekit_voice_heads_cartesia(self):
+        """Designed in LiveKit Cloud: no Cartesia listing has it, so the catalogue does."""
+        jarvis = get_tts_voices()["cartesia"].voices[0]
+        assert jarvis.id == "v_ZMPWZvfoRpsC"
+        assert (jarvis.category, jarvis.gender, jarvis.language) == ("LiveKit", "male", "es-ES")
+
     def test_spanish_from_spain_can_be_found(self):
         providers = get_tts_voices()
         for name in ("cartesia", "deepgram"):

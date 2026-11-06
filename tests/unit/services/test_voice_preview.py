@@ -166,6 +166,13 @@ class TestTheGateway:
             assert file.getframerate() == vp.SAMPLE_RATE and file.getnchannels() == 1
             assert file.readframes(1) == b"\x01\x02"
 
+    async def test_a_voice_designed_in_livekit_speaks_on_sonic_3_5(self, gateway):
+        """LiveKit designs its "v_" voices on Sonic 3.5, not on Cartesia's Sonic 3."""
+        await vp._cartesia(_voice("v_ZMPWZvfoRpsC", language="es-ES"), "es", "x")
+        create = gateway["messages"][0]
+        assert create["model"] == gateway["model"] == "cartesia/sonic-3.5"
+        assert create["voice"] == "v_ZMPWZvfoRpsC"
+
     async def test_arcana_reads_the_language_from_the_text(self, gateway):
         await vp._rime(_voice("luna", category="arcana"), "es", "x")
         assert gateway["model"] == "rime/arcana"
