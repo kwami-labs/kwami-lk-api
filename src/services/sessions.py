@@ -10,6 +10,7 @@ belongs to the first user it was issued to -- enforced by the UNIQUE constraint 
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
@@ -86,3 +87,55 @@ async def claim_room(
         raise
     rows = getattr(result, "data", None) or []
     return rows[0] if rows else payload
+
+
+# ---------------------------------------------------------------------------
+# Room lifecycle, from LiveKit webhooks
+# ---------------------------------------------------------------------------
+#
+# The table has always had `active`, `ended`, `last_seen_at` and `ended_at`, and
+# nothing ever wrote them: every room stayed `issued` forever, so the table could
+# not say which sessions were live, how long one lasted, or which never reached
+# the usage report. LiveKit already announces each of those moments.
+
+#: Events that prove someone is in the room right now.
+ROOM_ALIVE_EVENTS = frozenset({"room_started", "participant_joined", "track_published"})
+#: Events that only move the last-seen time.
+ROOM_SEEN_EVENTS = frozenset({"participant_left", "track_unpublished"})
+ROOM_FINISHED_EVENT = "room_finished"
+
+#: Statuses a late or redelivered webhook may still move. `ended` and
+#: `abandoned` are final: a retry of `participant_joined` must not reopen a room.
+OPEN_STATUSES = ("issued", "active")
+
+
+async def record_room_event(event: str, room_name: str, *, at: datetime) -> bool:
+    """Bring a room's `livekit_sessions` row up to date with one LiveKit event.
+
+    Returns True when a row changed. A room this API never issued has no row and
+    is ignored, as is any event that says nothing about the room's life.
+    """
+    if not room_name:
+        return False
+    when = at.isoformat()
+    if event == ROOM_FINISHED_EVENT:
+        payload: dict[str, Any] = {"status": "ended", "ended_at": when, "last_seen_at": when}
+    elif event in ROOM_ALIVE_EVENTS:
+        payload = {"status": "active", "last_seen_at": when}
+    elif event in ROOM_SEEN_EVENTS:
+        payload = {"last_seen_at": when}
+    else:
+        return False
+
+    sb = get_supabase_admin()
+    result = (
+        await sb.table("livekit_sessions")
+        .update(payload)
+        .eq("room_name", room_name)
+        .in_("status", list(OPEN_STATUSES))
+        .execute()
+    )
+    rows = getattr(result, "data", None) or []
+    if rows:
+        logger.info("Room %s: %s", room_name, event)
+    return bool(rows)
