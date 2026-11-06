@@ -221,6 +221,32 @@ their own id, the legacy `kwami_<user.id>` namespace, or a per-kwami
 contract — a previous `str.replace` rule accepted namespaces that merely
 contained the caller's id after mangling.
 
+That check covers the namespace, not the uuids in the rest of the path or
+body: Zep edits and deletes any uuid in the project. Every route that acts on
+an edge or node uuid first asks Zep, through the caller's own listings,
+whether it is in the caller's graph (`src/services/memory/ownership.py`), and
+answers 404 when it is not.
+
+Zep answers a node or edge listing with **at most 50 records**, whatever
+`limit` says. Readers walk the `uuid_cursor` (`src/services/memory/paging.py`);
+`/edges` and `/nodes` return a `next_cursor`. A listing Zep fails to serve is
+a 502, never an empty page — the panel must not show a down memory as an empty
+one. The analysis passes read the whole graph or fail: a partial edge list
+makes connected nodes look orphaned, and the reorganizer deletes orphans (each
+is re-checked with Zep right before). Merges take a node's facts from the
+connected-node edge listing, not `graph.node.get_edges`, which under-reports,
+and delete the duplicate only once every fact has moved.
+
+Conversations are Zep threads, one per session. `/sessions` lists them from
+`user.get_threads` (never a scan of the whole project), skipping empty ones;
+`/sessions/{thread_id}/messages` and `/summary` read one; `/status` says
+whether the kwami has a memory yet. The agent creates a session's thread with
+its first message.
+
+The agent stamps `kwami_ontology` on the Zep user's metadata with the version
+of the default ontology it applied; `PUT /ontology` sets it to `custom`, which
+the agent never overwrites, and a reset clears it.
+
 ## Where money is decided
 
 Python prices a usage item (`src/services/pricing.py`) and applies markup
