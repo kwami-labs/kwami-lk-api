@@ -25,7 +25,7 @@ from fastapi import HTTPException
 from zep_cloud import SearchFilters
 from zep_cloud.client import AsyncZep
 
-from src.services.memory.paging import uuid_of, walk
+from src.services.memory.paging import collect, uuid_of, walk
 
 
 def _ends(edge: object) -> tuple[str | None, str | None]:
@@ -86,3 +86,27 @@ async def require_nodes(client: AsyncZep, user_id: str, node_uuids: Iterable[str
 
 async def require_node(client: AsyncZep, user_id: str, node_uuid: str) -> None:
     await require_nodes(client, user_id, [node_uuid])
+
+
+async def edges_of_node(client: AsyncZep, user_id: str, node_uuid: str) -> list[object]:
+    """Every edge of the user's graph that touches `node_uuid`.
+
+    `graph.node.get_edges` is not usable for this: measured against a live graph
+    it returned 0 of a node's 9 edges and 1 of another's 5, and the routes that
+    deleted a node after "moving" the edges it reported lost the rest. The
+    user-scoped edge listing filtered by connected node returned all of them.
+    """
+    edges = await collect(
+        client.graph.edge.get_by_user_id,
+        user_id,
+        filters=SearchFilters(connected_node_uuids=[node_uuid]),
+    )
+    return [edge for edge in edges if node_uuid in _ends(edge)]
+
+
+async def has_edges(client: AsyncZep, user_id: str, node_uuid: str) -> bool:
+    """Whether any edge of the user's graph touches `node_uuid`: one call."""
+    found = await client.graph.edge.get_by_user_id(
+        user_id=user_id, limit=1, filters=SearchFilters(connected_node_uuids=[node_uuid])
+    )
+    return any(node_uuid in _ends(edge) for edge in found or [])

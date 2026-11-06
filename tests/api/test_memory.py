@@ -16,10 +16,12 @@ def mock_zep_client():
     mock_edge = MagicMock()
     mock_edge.fact = "User likes pizza"
     mock_edge.uuid = "edge-123"
+    mock_edge.uuid_ = "edge-123"
 
     search_response = MagicMock()
     search_response.edges = [mock_edge]
     client.graph.search.return_value = search_response
+    client.graph.edge.get_by_user_id.return_value = [mock_edge]
 
     # Mock graph.node.get_by_user_id
     mock_node = MagicMock()
@@ -54,9 +56,9 @@ async def test_get_user_facts(auth_client_with_zep: AsyncClient, mock_zep_client
     assert data["total"] == 1
     assert data["has_more"] is False
 
-    # Verify Zep client was called correctly
-    mock_zep_client.graph.search.assert_called_once()
-    call_kwargs = mock_zep_client.graph.search.call_args.kwargs
+    # The facts are listed from the graph, not searched for.
+    mock_zep_client.graph.search.assert_not_called()
+    call_kwargs = mock_zep_client.graph.edge.get_by_user_id.call_args.kwargs
     assert call_kwargs["user_id"] == "test-user-id"
 
 

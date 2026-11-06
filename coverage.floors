@@ -152,6 +152,10 @@ src/services/memory/graph.py                 100
 # uuid named in a route is in the caller's own graph before anything is changed.
 src/services/memory/paging.py                100
 src/services/memory/ownership.py             100
+# `merge.py` moves every fact of a duplicate before deleting it; `analysis.py` is the
+# duplicate-pair pass, pure so the routes can run it off the event loop.
+src/services/memory/merge.py                 100
+src/services/memory/analysis.py              100
 src/services/languages.py                    100
 src/services/livekit.py                      100
 src/services/models.py                       100
