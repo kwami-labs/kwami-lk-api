@@ -26,6 +26,24 @@ from src.services.memory import (
 logger = logging.getLogger("kwami-api.memory")
 router = APIRouter()
 
+#: The agent stamps this key on the Zep user's metadata with the version of
+#: the default ontology it applied, and never applies its defaults over the
+#: value "custom". Setting an ontology here marks it custom; a reset clears it,
+#: so the agent's current defaults go back on at the next conversation.
+ONTOLOGY_METADATA_KEY = "kwami_ontology"
+CUSTOM_ONTOLOGY = "custom"
+
+
+async def _mark_ontology(client: AsyncZep, user_id: str, value: str | None) -> None:
+    """Record on the user's Zep metadata whose ontology this is. Best effort."""
+    try:
+        record = await client.user.get(user_id)
+        metadata = dict(getattr(record, "metadata", None) or {})
+        metadata[ONTOLOGY_METADATA_KEY] = value
+        await client.user.update(user_id=user_id, metadata=metadata)
+    except Exception as e:
+        logger.warning("📋 Could not mark the ontology of %s: %s", user_id, e)
+
 
 @router.get("/{user_id}/ontology")
 async def get_user_ontology(
@@ -37,24 +55,25 @@ async def get_user_ontology(
 
     Returns the configured entity types and edge types that Zep uses
     for extracting information from conversations.
+
+    This called `graph.get_ontology`, which zep-cloud does not have, so it
+    answered 500 every time. The listing is `graph.list_entity_types`.
     """
     verify_user_access(user, user_id)
     logger.info("📋 Fetching ontology for user: %s", user_id)
 
     try:
-        ontology = await client.graph.get_ontology(user_id=user_id)
+        ontology = await client.graph.list_entity_types(user_id=user_id)
 
-        if ontology:
+        entity_types = list(getattr(ontology, "entity_types", None) or [])
+        edge_types = list(getattr(ontology, "edge_types", None) or [])
+        if entity_types or edge_types:
             return {
                 "user_id": user_id,
                 "entity_types": [
-                    {"name": e.name, "description": e.description}
-                    for e in (ontology.entity_types or [])
+                    {"name": e.name, "description": e.description} for e in entity_types
                 ],
-                "edge_types": [
-                    {"name": e.name, "description": e.description}
-                    for e in (ontology.edge_types or [])
-                ],
+                "edge_types": [{"name": e.name, "description": e.description} for e in edge_types],
             }
         # Return defaults if no ontology configured
         return {
@@ -105,6 +124,9 @@ async def set_user_ontology(
             user_ids=[user_id],
         )
 
+        # So the agent's session start does not put its defaults back over it.
+        await _mark_ontology(client, user_id, CUSTOM_ONTOLOGY)
+
         logger.info(
             "📋 Ontology set: %s entity types, %s edge types",
             len(ontology.entity_types),
@@ -144,6 +166,9 @@ async def reset_user_ontology(
             edges=edges,
             user_ids=[user_id],
         )
+        # No longer custom: the agent's current defaults apply from the next
+        # conversation, with its source and target constraints.
+        await _mark_ontology(client, user_id, None)
 
         return {
             "success": True,
