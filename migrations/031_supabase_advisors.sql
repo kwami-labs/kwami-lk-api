@@ -174,6 +174,21 @@ ALTER POLICY "Users can manage own wallet transactions" ON wallet_transactions
     WITH CHECK (((select auth.uid()) = user_id));
 
 
+-- Migration 030 (jarvis_site_access) came to dev beside this one. Where it is there,
+-- its policy gets the same treatment.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_policies
+         WHERE schemaname = 'public'
+           AND tablename = 'jarvis_site_rules'
+           AND policyname = 'Users can view own site rules'
+    ) THEN
+        ALTER POLICY "Users can view own site rules" ON jarvis_site_rules
+            USING (((select auth.uid()) = user_id));
+    END IF;
+END $$;
+
 -- Foreign keys with no index.
 CREATE INDEX IF NOT EXISTS idx_brain_jobs_agent_id ON brain_jobs(agent_id);
 CREATE INDEX IF NOT EXISTS idx_brain_jobs_kwami_id ON brain_jobs(kwami_id);
