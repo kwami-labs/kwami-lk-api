@@ -361,10 +361,12 @@ async def update_edge(
     user: Annotated[AuthUser, Depends(require_auth)],
     client: AsyncZep = Depends(get_zep_client),
 ):
-    """Update a specific edge (fact/relationship) in the knowledge graph.
+    """Update a fact in place: its text, relation name or validity window.
 
-    Strategy: fetch existing edge, delete it, recreate via add_fact_triple
-    with the updated fields. Only provided fields are changed.
+    Zep updates an edge where it stands, so it keeps its uuid, its episodes and
+    its attributes. Only moving a fact to other nodes still means recreating it,
+    since an edge's endpoints cannot change: the new edge is written first and
+    the old one removed after, so a failure leaves the fact where it was.
     """
     verify_user_access(user, user_id)
     await require_edge(client, user_id, edge_uuid)
@@ -377,7 +379,6 @@ async def update_edge(
     logger.info("✏️ Updating edge %s for user: %s", edge_uuid, user_id)
 
     try:
-        # 1. Fetch the existing edge
         try:
             old_edge = await client.graph.edge.get(uuid_=edge_uuid)
         except Exception as e:
@@ -385,75 +386,64 @@ async def update_edge(
                 raise HTTPException(status_code=404, detail=f"Edge {edge_uuid} not found") from e
             raise
 
-        # 2. Build the updated fields (merge old + new)
-        new_fact = body.fact if body.fact is not None else (old_edge.fact or "related")
-        new_name = body.name if body.name is not None else (old_edge.name or "RELATED_TO")
-        new_source = (
-            body.source_node_uuid
-            if body.source_node_uuid is not None
-            else old_edge.source_node_uuid
-        )
-        new_target = (
-            body.target_node_uuid
-            if body.target_node_uuid is not None
-            else old_edge.target_node_uuid
-        )
-        new_valid_at = (
-            body.valid_at
-            if body.valid_at is not None
-            else (
-                str(old_edge.valid_at)
-                if hasattr(old_edge, "valid_at") and old_edge.valid_at
-                else None
-            )
-        )
-        new_invalid_at = (
-            body.invalid_at
-            if body.invalid_at is not None
-            else (
-                str(old_edge.invalid_at)
-                if hasattr(old_edge, "invalid_at") and old_edge.invalid_at
-                else None
-            )
-        )
-
+        old_source = getattr(old_edge, "source_node_uuid", None)
+        old_target = getattr(old_edge, "target_node_uuid", None)
+        new_source = body.source_node_uuid or old_source
+        new_target = body.target_node_uuid or old_target
         if not new_source or not new_target:
             raise HTTPException(
                 status_code=400, detail="Edge must have both source and target node UUIDs"
             )
 
-        # 3. Delete the old edge
-        await client.graph.edge.delete(uuid_=edge_uuid)
-        logger.info("✏️ Deleted old edge: %s", edge_uuid)
+        changes = {
+            name: value
+            for name, value in (
+                ("fact", body.fact),
+                ("name", body.name),
+                ("valid_at", body.valid_at),
+                ("invalid_at", body.invalid_at),
+            )
+            if value is not None
+        }
 
-        # 4. Recreate via add_fact_triple
+        if (new_source, new_target) == (old_source, old_target):
+            updated = await client.graph.edge.update(uuid_=edge_uuid, **changes)
+            logger.info("✏️ Updated edge in place: %s", edge_uuid)
+            return {
+                "success": True,
+                "old_edge_uuid": edge_uuid,
+                "new_edge_uuid": edge_uuid,
+                "fact": getattr(updated, "fact", None) or changes.get("fact", old_edge.fact),
+                "name": getattr(updated, "name", None) or changes.get("name", old_edge.name),
+                "source_node_uuid": new_source,
+                "target_node_uuid": new_target,
+            }
+
         triple_kwargs = {
-            "fact": new_fact,
-            "fact_name": new_name,
+            "fact": changes.get("fact", getattr(old_edge, "fact", None) or "related"),
+            "fact_name": changes.get("name", getattr(old_edge, "name", None) or "RELATED_TO"),
             "source_node_uuid": new_source,
             "target_node_uuid": new_target,
             "user_id": user_id,
         }
-        if new_valid_at:
-            triple_kwargs["valid_at"] = new_valid_at
-        if new_invalid_at:
-            triple_kwargs["invalid_at"] = new_invalid_at
+        for field in ("valid_at", "invalid_at"):
+            value = changes.get(field) or getattr(old_edge, field, None)
+            if value:
+                triple_kwargs[field] = str(value)
+        attributes = getattr(old_edge, "attributes", None)
+        if attributes:
+            triple_kwargs["edge_attributes"] = dict(attributes)
 
         result = await client.graph.add_fact_triple(**triple_kwargs)
-
-        new_edge_uuid = None
-        if result and hasattr(result, "edge_uuid"):
-            new_edge_uuid = result.edge_uuid
-        elif result and hasattr(result, "uuid_"):
-            new_edge_uuid = result.uuid_
-
-        logger.info("✏️ Recreated edge as: %s", new_edge_uuid)
+        new_edge_uuid = getattr(result, "edge_uuid", None) or getattr(result, "uuid_", None)
+        await client.graph.edge.delete(uuid_=edge_uuid)
+        logger.info("✏️ Moved edge %s to %s", edge_uuid, new_edge_uuid)
         return {
             "success": True,
             "old_edge_uuid": edge_uuid,
             "new_edge_uuid": new_edge_uuid,
-            "fact": new_fact,
-            "name": new_name,
+            "fact": triple_kwargs["fact"],
+            "name": triple_kwargs["fact_name"],
             "source_node_uuid": new_source,
             "target_node_uuid": new_target,
         }
@@ -473,117 +463,45 @@ async def update_node(
     user: Annotated[AuthUser, Depends(require_auth)],
     client: AsyncZep = Depends(get_zep_client),
 ):
-    """Update a specific node (entity) in the knowledge graph.
+    """Rename an entity, rewrite its summary or change its labels, in place.
 
-    Strategy: fetch existing node and its edges, delete the node (which also
-    deletes connected edges), then recreate node + all edges via add_fact_triple
-    with the updated node fields.
+    This used to delete the node and rebuild its edges from
+    `graph.node.get_edges` -- which under-reports badly (0 of a live node's 9
+    edges), so renaming an entity silently destroyed most of its facts and gave
+    it a new uuid the app did not know about. Zep updates a node where it
+    stands, edges and all. Labels were accepted and ignored; they now apply.
     """
     verify_user_access(user, user_id)
     await require_node(client, user_id, node_uuid)
     logger.info("✏️ Updating node %s for user: %s", node_uuid, user_id)
 
-    try:
-        # 1. Fetch the existing node
-        try:
-            old_node = await client.graph.node.get(uuid_=node_uuid)
-        except Exception as e:
-            if "404" in str(e):
-                raise HTTPException(status_code=404, detail=f"Node {node_uuid} not found") from e
-            raise
-
-        # 2. Fetch all edges connected to this node
-        try:
-            connected_edges = await client.graph.node.get_edges(node_uuid=node_uuid)
-        except Exception:
-            connected_edges = []
-
-        # 3. Build updated node fields
-        new_name = body.name if body.name is not None else (old_node.name or "Unknown")
-        new_summary = (
-            body.summary if body.summary is not None else getattr(old_node, "summary", None)
+    changes = {
+        name: value
+        for name, value in (
+            ("name", body.name),
+            ("summary", body.summary),
+            ("labels", body.labels),
         )
+        if value is not None
+    }
+    if not changes:
+        raise HTTPException(status_code=400, detail="Nothing to update")
 
-        # 4. Delete the old node (this cascades to edges)
-        await client.graph.node.delete(uuid_=node_uuid)
-        logger.info("✏️ Deleted old node: %s (had %s edges)", node_uuid, len(connected_edges or []))
-
-        # 5. Recreate the node + edges via add_fact_triple
-        new_node_uuid = None
-        recreated_edges = 0
-
-        if connected_edges:
-            for edge in connected_edges:
-                edge_source = getattr(edge, "source_node_uuid", None)
-                edge_target = getattr(edge, "target_node_uuid", None)
-                edge_fact = getattr(edge, "fact", "related")
-                edge_name = getattr(edge, "name", "RELATED_TO")
-
-                triple_kwargs = {
-                    "fact": edge_fact or "related",
-                    "fact_name": edge_name or "RELATED_TO",
-                    "user_id": user_id,
-                }
-
-                # Determine which side of the edge is the updated node
-                if edge_source == node_uuid:
-                    triple_kwargs["source_node_name"] = new_name
-                    if new_summary:
-                        triple_kwargs["source_node_summary"] = new_summary
-                    triple_kwargs["target_node_uuid"] = edge_target
-                elif edge_target == node_uuid:
-                    triple_kwargs["source_node_uuid"] = edge_source
-                    triple_kwargs["target_node_name"] = new_name
-                    if new_summary:
-                        triple_kwargs["target_node_summary"] = new_summary
-                else:
-                    continue
-
-                # Add temporal data if available
-                if hasattr(edge, "valid_at") and edge.valid_at:
-                    triple_kwargs["valid_at"] = str(edge.valid_at)
-                if hasattr(edge, "invalid_at") and edge.invalid_at:
-                    triple_kwargs["invalid_at"] = str(edge.invalid_at)
-
-                try:
-                    result = await client.graph.add_fact_triple(**triple_kwargs)
-                    recreated_edges += 1
-                    # Capture the new node UUID from the first recreated edge
-                    if new_node_uuid is None and result:
-                        if edge_source == node_uuid and hasattr(result, "source_node_uuid"):
-                            new_node_uuid = result.source_node_uuid
-                        elif edge_target == node_uuid and hasattr(result, "target_node_uuid"):
-                            new_node_uuid = result.target_node_uuid
-                except Exception as triple_err:
-                    logger.warning("✏️ Failed to recreate edge: %s", triple_err)
-        else:
-            # Node has no edges, create a standalone fact to recreate it
-            try:
-                result = await client.graph.add_fact_triple(
-                    fact=f"{new_name} exists",
-                    fact_name="EXISTS",
-                    source_node_name=new_name,
-                    source_node_summary=new_summary or "",
-                    target_node_name=new_name,
-                    user_id=user_id,
-                )
-                if result and hasattr(result, "source_node_uuid"):
-                    new_node_uuid = result.source_node_uuid
-            except Exception as triple_err:
-                logger.warning("✏️ Failed to recreate standalone node: %s", triple_err)
-
-        logger.info("✏️ Recreated node as: %s with %s edges", new_node_uuid, recreated_edges)
-        return {
-            "success": True,
-            "old_node_uuid": node_uuid,
-            "new_node_uuid": new_node_uuid,
-            "name": new_name,
-            "summary": new_summary,
-            "recreated_edges": recreated_edges,
-        }
-
-    except HTTPException:
-        raise
+    try:
+        updated = await client.graph.node.update(uuid_=node_uuid, **changes)
     except Exception as e:
+        if "404" in str(e):
+            raise HTTPException(status_code=404, detail=f"Node {node_uuid} not found") from e
         logger.exception("Failed to update node")
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+    logger.info("✏️ Updated node in place: %s", node_uuid)
+    return {
+        "success": True,
+        "old_node_uuid": node_uuid,
+        "new_node_uuid": node_uuid,
+        "name": getattr(updated, "name", None) or changes.get("name"),
+        "summary": getattr(updated, "summary", None) or changes.get("summary"),
+        "labels": list(getattr(updated, "labels", None) or changes.get("labels") or []),
+        "recreated_edges": 0,
+    }
