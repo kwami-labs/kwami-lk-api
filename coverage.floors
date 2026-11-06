@@ -185,3 +185,7 @@ src/services/oauth_return.py                 100
 src/services/pc_service.py                   100
 src/services/provider_keys_service.py        100
 src/services/voice_preview.py                100
+
+# The brain from the app: work on the PC or in the cloud, the user's agents, sync.
+src/api/routes/brain.py                      100
+src/services/brain_service.py                100

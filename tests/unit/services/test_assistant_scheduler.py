@@ -455,6 +455,40 @@ class TestScheduledWork:
         assert jobs[0]["task"] == "Resume cómo han abierto mis posiciones."
         assert fake_supabase.db.rows("kwami_assistant_notifications") == []
 
+    async def test_the_agent_and_where_it_runs_go_with_the_job(self, fake_supabase, tenant):
+        _task(
+            fake_supabase,
+            tenant,
+            kind="work",
+            title="Facturas",
+            notes="Revisa las facturas.",
+            recurrence="daily",
+            local_time="08:00",
+            agent_id="agent-1",
+            target="cloud",
+        )
+        _task(
+            fake_supabase,
+            tenant,
+            kind="work",
+            title="Sin agente",
+            notes="Haz algo.",
+            recurrence="daily",
+            local_time="08:00",
+            target="auto",
+        )
+
+        assert await sched.tick(MONDAY) == 2
+
+        jobs = {j["title"]: j for j in fake_supabase.db.rows("brain_jobs")}
+        assert (jobs["Facturas"]["agent_id"], jobs["Facturas"]["target"]) == ("agent-1", "cloud")
+        # The defaults are left to the database, so it queues before migration 029 too.
+        assert "agent_id" not in jobs["Sin agente"] and "target" not in jobs["Sin agente"]
+
+    async def test_work_asked_from_the_app_is_notified_too(self, fake_supabase, tenant):
+        self._job(fake_supabase, tenant, source="app")
+        assert await sched.notify_finished_work() == 1
+
     def _job(self, fake_supabase, tenant, **extra) -> dict:
         return fake_supabase.db.seed(
             "brain_jobs",
