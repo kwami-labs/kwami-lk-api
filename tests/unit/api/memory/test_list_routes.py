@@ -220,27 +220,24 @@ class TestNodes:
 
 
 class TestOntology:
-    """`graph.get_ontology` does not exist on the installed Zep client.
+    """`GET /ontology` asked for `graph.get_ontology`, which zep-cloud does not
+    have, and answered 500 every time; it reads `graph.list_entity_types`.
 
-    `AsyncGraphClient` exposes `set_ontology` but no getter, so `GET /ontology`
-    raises AttributeError, the broad `except Exception` catches it, "404" is not
-    in the message, and every caller gets a 500. The route cannot succeed today;
-    `test_the_getter_does_not_exist_on_the_real_client_known_bug` pins that, and
-    the rest of these cover the handler through the fake so the reshaping logic
-    is still exercised and stays correct once the getter is restored.
+    Setting an ontology marks it "custom" on the user's Zep metadata, which the
+    agent never overwrites with its defaults; a reset clears the mark.
     """
 
     PATH = f"/memory/{USER_ID}/ontology"
 
-    async def test_the_getter_does_not_exist_on_the_real_client_known_bug(self):
+    async def test_the_real_client_has_the_listing_the_route_uses(self):
         from zep_cloud.client import AsyncZep
 
         graph = AsyncZep(api_key="x").graph
-        assert not hasattr(graph, "get_ontology"), "invert this test when it returns"
-        assert hasattr(graph, "set_ontology"), "the setter does exist, which is the asymmetry"
+        assert hasattr(graph, "list_entity_types")
+        assert not hasattr(graph, "get_ontology")
 
     async def test_a_configured_ontology_is_returned(self, mem, zep):
-        zep.graph.get_ontology.result = SimpleNamespace(
+        zep.graph.list_entity_types.result = SimpleNamespace(
             entity_types=[SimpleNamespace(name="Preference", description="d")],
             edge_types=[SimpleNamespace(name="KNOWS", description="k")],
         )
@@ -248,27 +245,35 @@ class TestOntology:
         assert body["entity_types"] == [{"name": "Preference", "description": "d"}]
         assert body["edge_types"] == [{"name": "KNOWS", "description": "k"}]
         assert "is_default" not in body
+        assert zep.graph.list_entity_types.last == {"user_id": USER_ID}
 
-    async def test_an_ontology_with_null_type_lists(self, mem, zep):
-        zep.graph.get_ontology.result = SimpleNamespace(entity_types=None, edge_types=None)
+    async def test_an_ontology_with_null_type_lists_is_the_default(self, mem, zep):
+        zep.graph.list_entity_types.result = SimpleNamespace(entity_types=None, edge_types=None)
+        body = (await mem.get(self.PATH)).json()
+        assert body["is_default"] is True
+
+    async def test_only_edge_types_is_still_configured(self, mem, zep):
+        zep.graph.list_entity_types.result = SimpleNamespace(
+            entity_types=None, edge_types=[SimpleNamespace(name="KNOWS", description="k")]
+        )
         body = (await mem.get(self.PATH)).json()
         assert body["entity_types"] == []
-        assert body["edge_types"] == []
+        assert body["edge_types"] == [{"name": "KNOWS", "description": "k"}]
 
     async def test_no_ontology_falls_back_to_the_defaults(self, mem, zep):
-        zep.graph.get_ontology.result = None
+        zep.graph.list_entity_types.result = None
         body = (await mem.get(self.PATH)).json()
         assert body["is_default"] is True
         assert body["entity_types"] == DEFAULT_ENTITY_TYPES
 
     async def test_a_404_also_falls_back_to_the_defaults(self, mem, zep):
-        zep.graph.get_ontology.error = RuntimeError("status 404")
+        zep.graph.list_entity_types.error = RuntimeError("status 404")
         body = (await mem.get(self.PATH)).json()
         assert body["is_default"] is True
         assert body["edge_types"] == DEFAULT_EDGE_TYPES
 
     async def test_another_failure_is_a_500(self, mem, zep, caplog):
-        zep.graph.get_ontology.error = RuntimeError("zep down")
+        zep.graph.list_entity_types.error = RuntimeError("zep down")
         with caplog.at_level("ERROR", logger="kwami-api.memory"):
             assert (await mem.get(self.PATH)).status_code == 500
         assert "Failed to fetch ontology" in caplog.text
@@ -289,6 +294,22 @@ class TestOntology:
         assert call["user_ids"] == [USER_ID]
         assert "Preference" in call["entities"]
         assert "KNOWS" in call["edges"]
+
+    async def test_a_set_ontology_is_marked_custom_keeping_other_metadata(self, mem, zep):
+        """The agent applies its defaults at session start unless this mark is there."""
+        zep.user.get.result = SimpleNamespace(metadata={"kwami_id": "k-1"})
+        await mem.put(self.PATH, json={"entity_types": [], "edge_types": []})
+        assert zep.user.update.last == {
+            "user_id": USER_ID,
+            "metadata": {"kwami_id": "k-1", "kwami_ontology": "custom"},
+        }
+
+    async def test_a_failed_mark_does_not_fail_the_change(self, mem, zep, caplog):
+        zep.user.update.error = RuntimeError("zep busy")
+        with caplog.at_level("WARNING", logger="kwami-api.memory"):
+            r = await mem.put(self.PATH, json={"entity_types": [], "edge_types": []})
+        assert r.status_code == 200
+        assert "Could not mark the ontology" in caplog.text
 
     async def test_setting_an_empty_ontology(self, mem, zep):
         r = await mem.put(self.PATH, json={"entity_types": [], "edge_types": []})
@@ -312,6 +333,7 @@ class TestOntology:
         assert set(zep.graph.set_ontology.last["entities"]) == {
             e["name"] for e in DEFAULT_ENTITY_TYPES
         }
+        assert zep.user.update.last["metadata"]["kwami_ontology"] is None
 
     async def test_a_reset_failure_is_a_500(self, mem, zep, caplog):
         zep.graph.set_ontology.error = RuntimeError("rejected")
