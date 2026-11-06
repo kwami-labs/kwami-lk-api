@@ -20,18 +20,17 @@ from src.api.routes.memory.schemas import (
 from src.core.security import AuthUser
 from src.services.memory import (
     _fetch_graph_raw,
+    find_orphans,
     get_zep_client,
+    has_edges,
     require_nodes,
     verify_user_access,
 )
+from src.services.memory import merge as merge_services
+from src.services.memory.analysis import find_duplicate_pairs
 
 logger = logging.getLogger("kwami-api.memory")
 router = APIRouter()
-
-# How many records are pulled from Zep before slicing a "page" in Python.
-# Endpoints fetch this many regardless of the requested page size, so `total`
-# saturates here and `has_more` is wrong beyond it.
-ZEP_FETCH_LIMIT = 1000
 
 
 @router.post("/{user_id}/ingest")
@@ -189,78 +188,20 @@ async def detect_duplicates(
     """Detect potential duplicate nodes using fuzzy string matching on names.
 
     Returns pairs of nodes that look like duplicates with similarity scores.
+    Names are compared without case, accents or extra spacing.
     """
     verify_user_access(user, user_id)
     logger.info("🔍 Detecting duplicates for user: %s (threshold=%s)", user_id, threshold)
 
     try:
-        from thefuzz import fuzz
-
         nodes_list, edges_list = await _fetch_graph_raw(client, user_id)
 
         if len(nodes_list) < 2:
             return {"duplicates": [], "count": 0}
 
-        # Count edges per node for "importance" ranking
-        edge_count: dict[str, int] = {}
-        for e in edges_list:
-            src, tgt = e["source_node_uuid"], e["target_node_uuid"]
-            if src:
-                edge_count[src] = edge_count.get(src, 0) + 1
-            if tgt:
-                edge_count[tgt] = edge_count.get(tgt, 0) + 1
-
-        # Compare all pairs
-        duplicates = []
-        seen = set()
-
-        for i, a in enumerate(nodes_list):
-            for b in nodes_list[i + 1 :]:
-                if not a["name"] or not b["name"]:
-                    continue
-
-                # Fuzzy match on name
-                name_score = fuzz.ratio(a["name"].lower(), b["name"].lower())
-                # Also check token sort ratio for reordered words
-                token_score = fuzz.token_sort_ratio(a["name"].lower(), b["name"].lower())
-                score = max(name_score, token_score)
-
-                if score >= threshold:
-                    pair_key = tuple(sorted([a["uuid"], b["uuid"]]))
-                    if pair_key in seen:
-                        continue
-                    seen.add(pair_key)
-
-                    # Suggest which to keep (more edges = more important)
-                    a_edges = edge_count.get(a["uuid"], 0)
-                    b_edges = edge_count.get(b["uuid"], 0)
-                    if a_edges >= b_edges:
-                        keep, remove = a, b
-                    else:
-                        keep, remove = b, a
-
-                    duplicates.append(
-                        {
-                            "score": score,
-                            "keep": {
-                                "uuid": keep["uuid"],
-                                "name": keep["name"],
-                                "summary": keep["summary"],
-                                "labels": keep["labels"],
-                                "edge_count": edge_count.get(keep["uuid"], 0),
-                            },
-                            "remove": {
-                                "uuid": remove["uuid"],
-                                "name": remove["name"],
-                                "summary": remove["summary"],
-                                "labels": remove["labels"],
-                                "edge_count": edge_count.get(remove["uuid"], 0),
-                            },
-                        }
-                    )
-
-        # Sort by score descending
-        duplicates.sort(key=lambda x: -x["score"])
+        duplicates = await anyio.to_thread.run_sync(
+            partial(find_duplicate_pairs, nodes_list, edges_list, threshold)
+        )
 
         logger.info("🔍 Found %s duplicate candidates", len(duplicates))
         return {"duplicates": duplicates, "count": len(duplicates)}
@@ -277,12 +218,11 @@ async def merge_nodes(
     user: Annotated[AuthUser, Depends(require_auth)],
     client: AsyncZep = Depends(get_zep_client),
 ):
-    """Merge two duplicate nodes by re-pointing all edges to the kept node and deleting the duplicate.
+    """Merge two duplicate nodes: move every fact of the duplicate onto the kept
+    node, then delete the duplicate.
 
-    Steps:
-    1. Fetch all edges of the node being removed
-    2. Recreate each edge pointing to the kept node via add_fact_triple
-    3. Delete the duplicate node (cascades its old edges)
+    The duplicate is deleted only once every fact has moved; otherwise it stays,
+    with its facts, and the route answers 502 with what went wrong.
     """
     verify_user_access(user, user_id)
     await require_nodes(client, user_id, [body.keep_uuid, body.remove_uuid])
@@ -294,7 +234,6 @@ async def merge_nodes(
     )
 
     try:
-        # 1. Fetch the kept node info
         try:
             keep_node = await client.graph.node.get(uuid_=body.keep_uuid)
         except Exception:
@@ -303,71 +242,32 @@ async def merge_nodes(
             ) from None
 
         keep_name = getattr(keep_node, "name", "Unknown")
-
-        # 2. Fetch all edges connected to the node being removed
-        try:
-            remove_edges = await client.graph.node.get_edges(node_uuid=body.remove_uuid)
-        except Exception:
-            remove_edges = []
-
-        # 3. Recreate edges pointing to the kept node
-        recreated = 0
-        for edge in remove_edges or []:
-            edge_source = getattr(edge, "source_node_uuid", None)
-            edge_target = getattr(edge, "target_node_uuid", None)
-            edge_fact = getattr(edge, "fact", "related")
-            edge_name = getattr(edge, "name", "RELATED_TO")
-
-            # Skip self-loops and edges between the two merging nodes
-            if edge_source == body.keep_uuid or edge_target == body.keep_uuid:
-                continue
-
-            triple_kwargs = {
-                "fact": edge_fact or "related",
-                "fact_name": edge_name or "RELATED_TO",
-                "user_id": user_id,
-            }
-
-            # Redirect the edge to point to the kept node
-            if edge_source == body.remove_uuid:
-                triple_kwargs["source_node_uuid"] = body.keep_uuid
-                triple_kwargs["target_node_uuid"] = edge_target
-            elif edge_target == body.remove_uuid:
-                triple_kwargs["source_node_uuid"] = edge_source
-                triple_kwargs["target_node_uuid"] = body.keep_uuid
-            else:
-                continue
-
-            # Preserve temporal data
-            if hasattr(edge, "valid_at") and edge.valid_at:
-                triple_kwargs["valid_at"] = str(edge.valid_at)
-            if hasattr(edge, "invalid_at") and edge.invalid_at:
-                triple_kwargs["invalid_at"] = str(edge.invalid_at)
-
-            try:
-                await client.graph.add_fact_triple(**triple_kwargs)
-                recreated += 1
-            except Exception as te:
-                logger.warning("🔗 Failed to recreate edge during merge: %s", te)
-
-        # 4. Delete the duplicate node (this also removes its old edges)
-        try:
-            await client.graph.node.delete(uuid_=body.remove_uuid)
-        except Exception as de:
-            logger.warning("🔗 Failed to delete merged node: %s", de)
+        outcome = await merge_services.merge_nodes(
+            client, user_id, body.keep_uuid, body.remove_uuid
+        )
+        if not outcome.removed:
+            logger.warning("🔗 Merge left %s in place: %s", body.remove_uuid, outcome.errors)
+            # A string detail, because that is what the app shows the user.
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"Merge stopped after moving {outcome.moved} facts, so nothing was "
+                    f"deleted: {outcome.errors[0]}"
+                ),
+            )
 
         logger.info(
-            "🔗 Merge complete: kept %s, removed %s, recreated %s edges",
+            "🔗 Merge complete: kept %s, removed %s, moved %s edges",
             body.keep_uuid,
             body.remove_uuid,
-            recreated,
+            outcome.moved,
         )
         return {
             "success": True,
             "keep_uuid": body.keep_uuid,
             "keep_name": keep_name,
             "removed_uuid": body.remove_uuid,
-            "recreated_edges": recreated,
+            "recreated_edges": outcome.moved,
         }
 
     except HTTPException:
@@ -392,108 +292,24 @@ async def reorganize_preview(
     logger.info("🔍 Reorganize preview for user: %s", user_id)
 
     try:
-        from thefuzz import fuzz
-
         nodes_list, edges_list = await _fetch_graph_raw(client, user_id)
 
         if not nodes_list:
             return {"orphans": [], "duplicates": [], "communities_estimate": 0}
 
-        # --- Detect orphan nodes ---
-        node_uuids_with_edges = set()
-        for e in edges_list:
-            if e["source_node_uuid"]:
-                node_uuids_with_edges.add(e["source_node_uuid"])
-            if e["target_node_uuid"]:
-                node_uuids_with_edges.add(e["target_node_uuid"])
-
-        orphans = []
-        for n in nodes_list:
-            nid = n["uuid"]
-            name_lower = (n["name"] or "").lower()
-            if not nid or nid in node_uuids_with_edges:
-                continue
-            if "kwami_" in name_lower or name_lower == "user":
-                continue
-            orphans.append(
-                {
-                    "uuid": nid,
-                    "name": n["name"],
-                    "summary": n["summary"],
-                    "labels": n["labels"],
-                }
-            )
-
-        # --- Detect duplicate pairs ---
-        edge_count: dict[str, int] = {}
-        for e in edges_list:
-            src, tgt = e["source_node_uuid"], e["target_node_uuid"]
-            if src:
-                edge_count[src] = edge_count.get(src, 0) + 1
-            if tgt:
-                edge_count[tgt] = edge_count.get(tgt, 0) + 1
-
-        duplicates = []
-        seen = set()
-        for i, a in enumerate(nodes_list):
-            if not a["name"]:
-                continue
-            for b in nodes_list[i + 1 :]:
-                if not b["name"]:
-                    continue
-                score = max(
-                    fuzz.ratio(a["name"].lower(), b["name"].lower()),
-                    fuzz.token_sort_ratio(a["name"].lower(), b["name"].lower()),
-                )
-                if score >= duplicate_threshold:
-                    pair_key = tuple(sorted([a["uuid"], b["uuid"]]))
-                    if pair_key in seen:
-                        continue
-                    seen.add(pair_key)
-
-                    a_edges = edge_count.get(a["uuid"], 0)
-                    b_edges = edge_count.get(b["uuid"], 0)
-                    keep = a if a_edges >= b_edges else b
-                    remove = b if keep == a else a
-
-                    duplicates.append(
-                        {
-                            "score": score,
-                            "keep": {
-                                "uuid": keep["uuid"],
-                                "name": keep["name"],
-                                "summary": keep["summary"],
-                                "edge_count": edge_count.get(keep["uuid"], 0),
-                            },
-                            "remove": {
-                                "uuid": remove["uuid"],
-                                "name": remove["name"],
-                                "summary": remove["summary"],
-                                "edge_count": edge_count.get(remove["uuid"], 0),
-                            },
-                        }
-                    )
-
-        duplicates.sort(key=lambda x: -x["score"])
-
-        # --- Estimate communities ---
-        import networkx as nx
-        from community import community_louvain
-
-        graph = nx.Graph()
-        for n in nodes_list:
-            if n["uuid"]:
-                graph.add_node(n["uuid"])
-        for e in edges_list:
-            src, tgt = e["source_node_uuid"], e["target_node_uuid"]
-            if src and tgt and graph.has_node(src) and graph.has_node(tgt):
-                graph.add_edge(src, tgt)
-        communities_estimate = 0
-        if graph.number_of_nodes() > 0:
-            partition = await anyio.to_thread.run_sync(
-                partial(community_louvain.best_partition, graph)
-            )
-            communities_estimate = len(set(partition.values()))
+        orphans = [
+            {
+                "uuid": n["uuid"],
+                "name": n["name"],
+                "summary": n["summary"],
+                "labels": n["labels"],
+            }
+            for n in find_orphans(nodes_list, edges_list)
+        ]
+        duplicates = await anyio.to_thread.run_sync(
+            partial(find_duplicate_pairs, nodes_list, edges_list, duplicate_threshold)
+        )
+        communities_estimate = await _count_communities(nodes_list, edges_list)
 
         logger.info(
             "🔍 Preview: %s orphans, %s duplicates, %s communities",
@@ -510,6 +326,40 @@ async def reorganize_preview(
     except Exception as e:
         logger.exception("Failed reorganize preview")
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+async def _count_communities(nodes_list: list[dict], edges_list: list[dict]) -> int:
+    import networkx as nx
+    from community import community_louvain
+
+    graph = nx.Graph()
+    for n in nodes_list:
+        if n["uuid"]:
+            graph.add_node(n["uuid"])
+    for e in edges_list:
+        src, tgt = e["source_node_uuid"], e["target_node_uuid"]
+        if src and tgt and graph.has_node(src) and graph.has_node(tgt):
+            graph.add_edge(src, tgt)
+    if graph.number_of_nodes() == 0:
+        return 0
+    partition = await anyio.to_thread.run_sync(partial(community_louvain.best_partition, graph))
+    return len(set(partition.values()))
+
+
+async def _remove_orphan(client: AsyncZep, user_id: str, node_uuid: str, report: dict) -> None:
+    """Delete a node the caller believes has no edges -- after asking Zep again.
+
+    A preview can be minutes old, and a conversation in between can have given
+    the node a fact; deleting it then would take that fact with it.
+    """
+    try:
+        if await has_edges(client, user_id, node_uuid):
+            report["orphans_kept"] += 1
+            return
+        await client.graph.node.delete(uuid_=node_uuid)
+        report["orphans_removed"] += 1
+    except Exception as de:
+        report["errors"].append(f"Failed to remove orphan {node_uuid}: {str(de)[:80]}")
 
 
 @router.post("/{user_id}/reorganize/apply")
@@ -542,56 +392,18 @@ async def reorganize_apply(
     )
 
     try:
-        report = {"orphans_removed": 0, "merges_performed": 0, "errors": []}
+        report = {"orphans_removed": 0, "orphans_kept": 0, "merges_performed": 0, "errors": []}
 
-        # --- Remove selected orphans ---
         for orphan_uuid in body.orphan_uuids:
-            try:
-                await client.graph.node.delete(uuid_=orphan_uuid)
-                report["orphans_removed"] += 1
-            except Exception as de:
-                report["errors"].append(f"Failed to remove orphan {orphan_uuid}: {str(de)[:80]}")
+            await _remove_orphan(client, user_id, orphan_uuid, report)
 
-        # --- Merge selected pairs ---
         for pair in body.merge_pairs:
-            try:
-                # Fetch edges of the node being removed
-                try:
-                    remove_edges = await client.graph.node.get_edges(node_uuid=pair.remove_uuid)
-                except Exception:
-                    remove_edges = []
-
-                # Re-point edges to the kept node
-                for edge in remove_edges or []:
-                    es = getattr(edge, "source_node_uuid", None)
-                    et = getattr(edge, "target_node_uuid", None)
-                    if es == pair.keep_uuid or et == pair.keep_uuid:
-                        continue
-
-                    triple_kwargs = {
-                        "fact": getattr(edge, "fact", "related") or "related",
-                        "fact_name": getattr(edge, "name", "RELATED_TO") or "RELATED_TO",
-                        "user_id": user_id,
-                    }
-                    if es == pair.remove_uuid:
-                        triple_kwargs["source_node_uuid"] = pair.keep_uuid
-                        triple_kwargs["target_node_uuid"] = et
-                    elif et == pair.remove_uuid:
-                        triple_kwargs["source_node_uuid"] = es
-                        triple_kwargs["target_node_uuid"] = pair.keep_uuid
-                    else:
-                        continue
-
-                    try:
-                        await client.graph.add_fact_triple(**triple_kwargs)
-                    except Exception as te:
-                        report["errors"].append(f"Edge recreate failed: {str(te)[:80]}")
-
-                # Delete the duplicate node
-                await client.graph.node.delete(uuid_=pair.remove_uuid)
+            outcome = await merge_services.merge_nodes(
+                client, user_id, pair.keep_uuid, pair.remove_uuid
+            )
+            report["errors"].extend(outcome.errors)
+            if outcome.removed:
                 report["merges_performed"] += 1
-            except Exception as me:
-                report["errors"].append(f"Merge failed for {pair.remove_uuid}: {str(me)[:80]}")
 
         logger.info("🧹 Apply complete: %s", report)
         return {"success": True, "report": report}
@@ -614,20 +426,17 @@ async def reorganize_graph(
     and detect communities.
 
     Steps:
-    1. Remove orphan nodes (0 edges, not the user node)
-    2. Auto-merge nodes with very high name similarity (>= threshold)
+    1. Remove orphan nodes (no edges, not the user node), each re-checked with Zep first
+    2. Auto-merge nodes with very high name similarity (>= threshold) whose types agree
     3. Run community detection on the cleaned graph
     """
     verify_user_access(user, user_id)
     logger.info("🧹 Reorganizing graph for user: %s (threshold=%s)", user_id, auto_merge_threshold)
 
     try:
-        import networkx as nx
-        from community import community_louvain
-        from thefuzz import fuzz
-
         report = {
             "orphans_removed": 0,
+            "orphans_kept": 0,
             "merges_performed": 0,
             "communities_found": 0,
             "errors": [],
@@ -639,126 +448,36 @@ async def reorganize_graph(
             return {"success": True, "report": report}
 
         # --- Step 1: Remove orphan nodes ---
-        node_uuids_with_edges = set()
-        for e in edges_list:
-            if e["source_node_uuid"]:
-                node_uuids_with_edges.add(e["source_node_uuid"])
-            if e["target_node_uuid"]:
-                node_uuids_with_edges.add(e["target_node_uuid"])
-
-        for n in nodes_list:
-            nid = n["uuid"]
-            name_lower = (n["name"] or "").lower()
-            # Skip the user node and nodes with connections
-            if not nid or nid in node_uuids_with_edges:
-                continue
-            if "kwami_" in name_lower or name_lower == "user":
-                continue
-
-            try:
-                await client.graph.node.delete(uuid_=nid)
-                report["orphans_removed"] += 1
-                logger.info("🧹 Removed orphan node: %s (%s)", n["name"], nid)
-            except Exception as de:
-                report["errors"].append(f"Failed to remove orphan {nid}: {str(de)}")
+        for n in find_orphans(nodes_list, edges_list):
+            await _remove_orphan(client, user_id, n["uuid"], report)
 
         # Refresh data after orphan removal
         if report["orphans_removed"] > 0:
             nodes_list, edges_list = await _fetch_graph_raw(client, user_id)
 
         # --- Step 2: Auto-merge high-confidence duplicates ---
-        merged_uuids = set()
-        edge_count: dict[str, int] = {}
-        for e in edges_list:
-            src, tgt = e["source_node_uuid"], e["target_node_uuid"]
-            if src:
-                edge_count[src] = edge_count.get(src, 0) + 1
-            if tgt:
-                edge_count[tgt] = edge_count.get(tgt, 0) + 1
-
-        for i, a in enumerate(nodes_list):
-            if a["uuid"] in merged_uuids or not a["name"]:
+        pairs = await anyio.to_thread.run_sync(
+            partial(find_duplicate_pairs, nodes_list, edges_list, auto_merge_threshold)
+        )
+        touched: set[str] = set()
+        for pair in pairs:
+            keep, remove = pair["keep"]["uuid"], pair["remove"]["uuid"]
+            # A node already merged away, or already absorbing another, is left
+            # for the next pass: the pair was scored against the graph as it was.
+            if not pair["compatible"] or keep in touched or remove in touched:
                 continue
-            for b in nodes_list[i + 1 :]:
-                if b["uuid"] in merged_uuids or not b["name"]:
-                    continue
-
-                score = max(
-                    fuzz.ratio(a["name"].lower(), b["name"].lower()),
-                    fuzz.token_sort_ratio(a["name"].lower(), b["name"].lower()),
-                )
-
-                if score >= auto_merge_threshold:
-                    # Decide which to keep
-                    a_edges = edge_count.get(a["uuid"], 0)
-                    b_edges = edge_count.get(b["uuid"], 0)
-                    keep = a if a_edges >= b_edges else b
-                    remove = b if keep == a else a
-
-                    keep_node_obj = await client.graph.node.get(uuid_=keep["uuid"])
-                    keep_name = getattr(keep_node_obj, "name", keep["name"])
-
-                    # Fetch and re-point edges
-                    try:
-                        remove_edges = await client.graph.node.get_edges(node_uuid=remove["uuid"])
-                    except Exception:
-                        remove_edges = []
-
-                    for edge in remove_edges or []:
-                        es = getattr(edge, "source_node_uuid", None)
-                        et = getattr(edge, "target_node_uuid", None)
-                        if es == keep["uuid"] or et == keep["uuid"]:
-                            continue
-
-                        triple_kwargs = {
-                            "fact": getattr(edge, "fact", "related") or "related",
-                            "fact_name": getattr(edge, "name", "RELATED_TO") or "RELATED_TO",
-                            "user_id": user_id,
-                        }
-                        if es == remove["uuid"]:
-                            triple_kwargs["source_node_uuid"] = keep["uuid"]
-                            triple_kwargs["target_node_uuid"] = et
-                        elif et == remove["uuid"]:
-                            triple_kwargs["source_node_uuid"] = es
-                            triple_kwargs["target_node_uuid"] = keep["uuid"]
-                        else:
-                            continue
-
-                        try:
-                            await client.graph.add_fact_triple(**triple_kwargs)
-                        except Exception as te:
-                            report["errors"].append(f"Edge recreate failed: {str(te)[:80]}")
-
-                    # Delete the duplicate
-                    try:
-                        await client.graph.node.delete(uuid_=remove["uuid"])
-                        merged_uuids.add(remove["uuid"])
-                        report["merges_performed"] += 1
-                        logger.info("🧹 Auto-merged: '%s' -> '%s'", remove["name"], keep_name)
-                    except Exception as de:
-                        report["errors"].append(
-                            f"Delete failed for {remove['uuid']}: {str(de)[:80]}"
-                        )
+            outcome = await merge_services.merge_nodes(client, user_id, keep, remove)
+            report["errors"].extend(outcome.errors)
+            touched.update((keep, remove))
+            if outcome.removed:
+                report["merges_performed"] += 1
+                logger.info("🧹 Auto-merged: '%s' -> '%s'", pair["remove"]["name"], keep)
 
         # --- Step 3: Community detection on cleaned graph ---
         if report["orphans_removed"] > 0 or report["merges_performed"] > 0:
             nodes_list, edges_list = await _fetch_graph_raw(client, user_id)
 
-        graph = nx.Graph()
-        for n in nodes_list:
-            if n["uuid"]:
-                graph.add_node(n["uuid"])
-        for e in edges_list:
-            src, tgt = e["source_node_uuid"], e["target_node_uuid"]
-            if src and tgt and graph.has_node(src) and graph.has_node(tgt):
-                graph.add_edge(src, tgt)
-
-        if graph.number_of_nodes() > 0:
-            partition = await anyio.to_thread.run_sync(
-                partial(community_louvain.best_partition, graph)
-            )
-            num_communities = len(set(partition.values()))
-            report["communities_found"] = num_communities
+        report["communities_found"] = await _count_communities(nodes_list, edges_list)
 
         logger.info("🧹 Reorganization complete: %s", report)
         return {"success": True, "report": report}

@@ -26,11 +26,6 @@ from src.services.memory import (
 logger = logging.getLogger("kwami-api.memory")
 router = APIRouter()
 
-# How many records are pulled from Zep before slicing a "page" in Python.
-# Endpoints fetch this many regardless of the requested page size, so `total`
-# saturates here and `has_more` is wrong beyond it.
-ZEP_FETCH_LIMIT = 1000
-
 
 @router.get("/{user_id}/ontology")
 async def get_user_ontology(

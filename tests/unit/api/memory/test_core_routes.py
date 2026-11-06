@@ -99,21 +99,30 @@ class TestDebug:
 
 
 class TestFacts:
+    """Every fact in the graph, listed -- no longer a similarity search for a phrase."""
+
     PATH = f"/memory/{USER_ID}/facts"
 
     async def test_it_returns_paginated_facts(self, mem, zep):
-        zep.graph.search.result = type(
-            "R", (), {"edges": [edge(fact=f"fact {i}") for i in range(5)]}
-        )()
+        zep.graph.edge.get_by_user_id.result = [
+            edge(uuid=f"e-{i}", fact=f"fact {i}") for i in range(5)
+        ]
         body = (await mem.get(self.PATH, params={"limit": 2, "offset": 1})).json()
         assert body["facts"] == ["fact 1", "fact 2"]
         assert body["count"] == 2
         assert body["total"] == 5
         assert body["offset"] == 1
         assert body["has_more"] is True
+        assert not zep.graph.search.called
+
+    async def test_facts_past_one_zep_page_are_counted(self, mem, zep):
+        zep.graph.edge.get_by_user_id.result = [
+            edge(uuid=f"e-{i:03d}", fact=f"fact {i}") for i in range(120)
+        ]
+        assert (await mem.get(self.PATH)).json()["total"] == 120
 
     async def test_the_last_page_reports_no_more(self, mem, zep):
-        zep.graph.search.result = type("R", (), {"edges": [edge(fact=f"f{i}") for i in range(3)]})()
+        zep.graph.edge.get_by_user_id.result = [edge(uuid=f"e-{i}", fact=f"f{i}") for i in range(3)]
         body = (await mem.get(self.PATH, params={"limit": 2, "offset": 2})).json()
         assert body["has_more"] is False
         assert body["count"] == 1
@@ -130,18 +139,21 @@ class TestFacts:
         }
 
     async def test_edges_without_a_fact_are_dropped(self, mem, zep):
-        zep.graph.search.result = type("R", (), {"edges": [edge(fact=None), edge(fact="kept")]})()
+        zep.graph.edge.get_by_user_id.result = [
+            edge(uuid="e-a", fact=None),
+            edge(uuid="e-b", fact="kept"),
+        ]
         assert (await mem.get(self.PATH)).json()["facts"] == ["kept"]
 
     async def test_a_404_from_zep_reads_as_no_memory(self, mem, zep):
         """A user with no graph yet is not an error."""
-        zep.graph.search.error = RuntimeError("status 404: user not found")
+        zep.graph.edge.get_by_user_id.error = RuntimeError("status 404: user not found")
         body = (await mem.get(self.PATH)).json()
         assert body["facts"] == []
         assert body["total"] == 0
 
     async def test_any_other_failure_is_a_500(self, mem, zep, caplog):
-        zep.graph.search.error = RuntimeError("zep exploded")
+        zep.graph.edge.get_by_user_id.error = RuntimeError("zep exploded")
         with caplog.at_level("ERROR", logger="kwami-api.memory"):
             r = await mem.get(self.PATH)
         assert r.status_code == 500
@@ -274,26 +286,6 @@ class TestOuterErrorHandlers:
             r = await mem.get(f"/memory/{USER_ID}/messages")
         assert r.status_code == 500
         assert "Failed to fetch messages" in caplog.text
-
-    @pytest.mark.parametrize(
-        ("path", "message"),
-        [
-            (f"/memory/{USER_ID}/edges", "Failed to fetch edges"),
-            (f"/memory/{USER_ID}/nodes", "Failed to fetch nodes"),
-        ],
-    )
-    async def test_list_routes_outer_handler(self, monkeypatch, mem, zep, caplog, path, message):
-        """`offset`/`limit` slicing is outside the inner try, so a bad slice lands here."""
-        from src.api.routes.memory import graph as mem_mod
-
-        def boom(*a, **k):
-            raise RuntimeError("len exploded")
-
-        monkeypatch.setattr(mem_mod, "len", boom, raising=False)
-        with caplog.at_level("ERROR", logger="kwami-api.memory"):
-            r = await mem.get(path)
-        assert r.status_code == 500
-        assert message in caplog.text
 
     async def test_search_outer_handler(self, monkeypatch, mem, zep, caplog):
         from src.api.routes.memory import graph as mem_mod

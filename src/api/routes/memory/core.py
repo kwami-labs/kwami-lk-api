@@ -23,14 +23,10 @@ from src.services.memory import (
     thread_belongs_to,
     verify_user_access,
 )
+from src.services.memory.paging import collect
 
 logger = logging.getLogger("kwami-api.memory")
 router = APIRouter()
-
-# How many records are pulled from Zep before slicing a "page" in Python.
-# Endpoints fetch this many regardless of the requested page size, so `total`
-# saturates here and `has_more` is wrong beyond it.
-ZEP_FETCH_LIMIT = 1000
 
 
 @router.get("/debug/{user_id}")
@@ -114,48 +110,34 @@ async def get_user_facts(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
-    """Get facts stored for a user via graph search (Zep v3) with pagination."""
+    """Get every fact stored for a user, with pagination.
+
+    This used to be a graph search for "user information facts preferences",
+    which returns the 50 edges most similar to that phrase -- not the user's
+    facts. It now lists the graph.
+    """
     verify_user_access(user, user_id)
     try:
-        # Zep v3 stores facts on graph edges - search for them
-        facts_response = await client.graph.search(
-            user_id=user_id,
-            query="user information facts preferences",
-            scope="edges",
-            limit=ZEP_FETCH_LIMIT,
-        )
-        all_facts = []
-        if facts_response and facts_response.edges:
-            all_facts = [
-                edge.fact for edge in facts_response.edges if hasattr(edge, "fact") and edge.fact
-            ]
-
-        # Apply pagination
-        total = len(all_facts)
-        paginated = all_facts[offset : offset + limit]
-        has_more = (offset + limit) < total
-
-        return {
-            "facts": paginated,
-            "count": len(paginated),
-            "total": total,
-            "offset": offset,
-            "limit": limit,
-            "has_more": has_more,
-        }
+        edges = await collect(client.graph.edge.get_by_user_id, user_id)
     except Exception as e:
-        # Check for 404 (user not found)
+        # A user Zep has never seen has no facts yet.
         if "404" in str(e):
-            return {
-                "facts": [],
-                "count": 0,
-                "total": 0,
-                "offset": offset,
-                "limit": limit,
-                "has_more": False,
-            }
-        logger.exception("Failed to fetch facts")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+            edges = []
+        else:
+            logger.exception("Failed to fetch facts")
+            raise HTTPException(status_code=500, detail=str(e)) from e
+
+    all_facts = [fact for edge in edges if (fact := getattr(edge, "fact", None))]
+    total = len(all_facts)
+    paginated = all_facts[offset : offset + limit]
+    return {
+        "facts": paginated,
+        "count": len(paginated),
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": (offset + limit) < total,
+    }
 
 
 @router.delete("/{user_id}")
