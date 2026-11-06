@@ -127,40 +127,33 @@ class TestGraph:
         assert len(body["nodes"]) == 1
         assert body["nodes"][0]["uuid"] is None
 
-    async def test_it_falls_back_to_search_for_edges(self, mem, zep, caplog):
+    async def test_more_than_one_zep_page_is_drawn(self, mem, zep):
+        """Zep returns 50 per call; the graph view used to stop there."""
         zep.graph.node.get_by_user_id.result = [
-            node(uuid="n-1", labels=["Person"]),
-            node(uuid="n-2", labels=["Person"]),
+            node(uuid=f"n-{i:03d}", labels=["Person"]) for i in range(80)
         ]
-        zep.graph.edge.get_by_user_id.error = RuntimeError("edge api down")
-        zep.graph.search.result = SimpleNamespace(
-            edges=[edge(source="n-1", target="n-2", name="KNOWS")]
-        )
-        with caplog.at_level("WARNING", logger="kwami-api.memory"):
-            body = (await mem.get(self.PATH)).json()
-        assert len(body["edges"]) == 1
-        assert "graph.edge failed" in caplog.text
+        zep.graph.edge.get_by_user_id.result = [
+            edge(uuid=f"e-{i:03d}", source=f"n-{i:03d}", target=f"n-{i + 1:03d}") for i in range(79)
+        ]
+        body = (await mem.get(self.PATH)).json()
+        assert len(body["nodes"]) == 80
+        assert len(body["edges"]) == 79
 
-    async def test_both_edge_paths_failing_still_returns_nodes(self, mem, zep, caplog):
-        zep.graph.node.get_by_user_id.result = [node(uuid="n-1", labels=["Person"])]
-        zep.graph.edge.get_by_user_id.error = RuntimeError("down")
-        zep.graph.search.error = RuntimeError("also down")
-        with caplog.at_level("WARNING", logger="kwami-api.memory"):
-            body = (await mem.get(self.PATH)).json()
-        assert len(body["nodes"]) == 1
-        assert "graph.search edges also failed" in caplog.text
+    async def test_the_limit_caps_each_walk(self, mem, zep):
+        zep.graph.node.get_by_user_id.result = [
+            node(uuid=f"n-{i:03d}", labels=["Person"]) for i in range(80)
+        ]
+        body = (await mem.get(self.PATH, params={"limit": 60})).json()
+        assert len(body["nodes"]) == 60
 
-    async def test_a_failing_node_fetch_yields_an_empty_graph(self, mem, zep, caplog):
-        zep.graph.node.get_by_user_id.error = RuntimeError("nodes down")
+    @pytest.mark.parametrize("failing", ["edge", "node"])
+    async def test_a_failing_listing_is_a_502_not_an_empty_graph(self, mem, zep, caplog, failing):
+        """An empty graph and a memory service that is down must not look alike."""
+        getattr(zep.graph, failing).get_by_user_id.error = RuntimeError("down")
         with caplog.at_level("WARNING", logger="kwami-api.memory"):
-            body = (await mem.get(self.PATH)).json()
-        assert body["nodes"] == []
-        assert "graph.node failed" in caplog.text
-
-    async def test_an_empty_search_fallback(self, mem, zep):
-        zep.graph.edge.get_by_user_id.error = RuntimeError("down")
-        zep.graph.search.result = SimpleNamespace(edges=[])
-        assert (await mem.get(self.PATH)).json()["edges"] == []
+            r = await mem.get(self.PATH)
+        assert r.status_code == 502
+        assert "graph listing failed" in caplog.text
 
     @pytest.mark.parametrize("limit", [0, 5001])
     async def test_an_out_of_range_limit_is_a_422(self, mem, limit):

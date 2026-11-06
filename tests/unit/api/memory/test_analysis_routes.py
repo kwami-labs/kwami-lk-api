@@ -225,6 +225,12 @@ class TestDuplicates:
 
 
 class TestMerge:
+    """Every fact of the duplicate moves to the kept node before it is deleted.
+
+    The facts come from the connected-node edge listing (`zep.ownership.edges`
+    in the fake), not `graph.node.get_edges`, which under-reports.
+    """
+
     PATH = f"/memory/{USER_ID}/merge"
 
     def _body(self, keep="n-keep", remove="n-remove"):
@@ -232,7 +238,7 @@ class TestMerge:
 
     async def test_edges_are_repointed_and_the_duplicate_deleted(self, mem, zep):
         zep.graph.node.get.result = node(uuid="n-keep", name="Barcelona")
-        zep.graph.node.get_edges.result = [
+        zep.ownership.edges["n-remove"] = [
             edge(uuid="e1", source="n-remove", target="n-other", fact="is in", name="LOCATED_IN")
         ]
         body = (await mem.post(self.PATH, json=self._body())).json()
@@ -244,9 +250,24 @@ class TestMerge:
         assert triple["target_node_uuid"] == "n-other"
         assert zep.graph.node.delete.last["uuid_"] == "n-remove"
 
+    async def test_get_edges_is_not_asked(self, mem, zep):
+        """It returned 0 of a live node's 9 edges; the duplicate's facts went with it."""
+        zep.graph.node.get.result = node(uuid="n-keep")
+        await mem.post(self.PATH, json=self._body())
+        assert not zep.graph.node.get_edges.called
+
+    async def test_every_edge_moves_past_one_zep_page(self, mem, zep):
+        zep.graph.node.get.result = node(uuid="n-keep")
+        zep.ownership.edges["n-remove"] = [
+            edge(uuid=f"e-{i:03d}", source="n-remove", target=f"n-{i}") for i in range(75)
+        ]
+        body = (await mem.post(self.PATH, json=self._body())).json()
+        assert body["recreated_edges"] == 75
+        assert len(zep.graph.add_fact_triple.calls) == 75
+
     async def test_an_incoming_edge_is_repointed_on_the_target_side(self, mem, zep):
         zep.graph.node.get.result = node(uuid="n-keep")
-        zep.graph.node.get_edges.result = [edge(source="n-other", target="n-remove")]
+        zep.ownership.edges["n-remove"] = [edge(source="n-other", target="n-remove")]
         await mem.post(self.PATH, json=self._body())
         triple = zep.graph.add_fact_triple.last
         assert triple["source_node_uuid"] == "n-other"
@@ -255,36 +276,56 @@ class TestMerge:
     async def test_an_edge_between_the_two_merging_nodes_is_dropped(self, mem, zep):
         """Repointing it would create a self-loop on the kept node."""
         zep.graph.node.get.result = node(uuid="n-keep")
-        zep.graph.node.get_edges.result = [edge(source="n-remove", target="n-keep")]
+        zep.ownership.edges["n-remove"] = [edge(source="n-remove", target="n-keep")]
         body = (await mem.post(self.PATH, json=self._body())).json()
         assert body["recreated_edges"] == 0
         assert not zep.graph.add_fact_triple.called
 
-    async def test_an_unrelated_edge_is_skipped(self, mem, zep):
+    async def test_a_self_loop_on_the_duplicate_is_dropped(self, mem, zep):
         zep.graph.node.get.result = node(uuid="n-keep")
-        zep.graph.node.get_edges.result = [edge(source="n-7", target="n-8")]
-        assert (await mem.post(self.PATH, json=self._body())).json()["recreated_edges"] == 0
+        zep.ownership.edges["n-remove"] = [
+            edge(uuid="e-loop", source="n-remove", target="n-remove")
+        ]
+        body = (await mem.post(self.PATH, json=self._body())).json()
+        assert body["recreated_edges"] == 0
 
-    async def test_temporal_fields_survive_the_merge(self, mem, zep):
+    async def test_an_unrelated_edge_is_skipped(self, mem, zep):
+        """A listing that ignored its filter must not move edges it never touched."""
         zep.graph.node.get.result = node(uuid="n-keep")
-        zep.graph.node.get_edges.result = [
+        zep.ownership.edges["n-remove"] = [
+            edge(uuid="e-mine", source="n-remove", target="n-x"),
+            edge(uuid="e-other", source="n-7", target="n-8"),
+        ]
+        assert (await mem.post(self.PATH, json=self._body())).json()["recreated_edges"] == 1
+
+    async def test_temporal_fields_and_attributes_survive_the_merge(self, mem, zep):
+        zep.graph.node.get.result = node(uuid="n-keep")
+        zep.ownership.edges["n-remove"] = [
             edge(
-                source="n-remove", target="n-other", valid_at="2026-01-01", invalid_at="2026-02-01"
+                source="n-remove",
+                target="n-other",
+                valid_at="2026-01-01",
+                invalid_at="2026-02-01",
+                expired_at="2026-03-01",
+                attributes={"role": "cto"},
             )
         ]
         await mem.post(self.PATH, json=self._body())
         triple = zep.graph.add_fact_triple.last
         assert triple["valid_at"] == "2026-01-01"
         assert triple["invalid_at"] == "2026-02-01"
+        assert triple["expired_at"] == "2026-03-01"
+        assert triple["edge_attributes"] == {"role": "cto"}
 
     async def test_an_edge_without_a_fact_gets_defaults(self, mem, zep):
         zep.graph.node.get.result = node(uuid="n-keep")
-        zep.graph.node.get_edges.result = [
+        zep.ownership.edges["n-remove"] = [
             edge(source="n-remove", target="n-other", fact=None, name=None)
         ]
         await mem.post(self.PATH, json=self._body())
         assert zep.graph.add_fact_triple.last["fact"] == "related"
         assert zep.graph.add_fact_triple.last["fact_name"] == "RELATED_TO"
+        assert "edge_attributes" not in zep.graph.add_fact_triple.last
 
     async def test_an_unknown_keep_node_is_a_404(self, mem, zep):
         zep.graph.node.get.error = RuntimeError("not found")
@@ -292,31 +333,45 @@ class TestMerge:
         assert r.status_code == 404
         assert not zep.graph.node.delete.called
 
-    async def test_a_failing_edge_lookup_still_deletes_the_duplicate(self, mem, zep):
+    async def test_a_failing_edge_lookup_deletes_nothing(self, mem, zep):
+        """Unknown facts cannot be moved, so the duplicate keeps them."""
         zep.graph.node.get.result = node(uuid="n-keep")
-        zep.graph.node.get_edges.error = RuntimeError("edges unavailable")
-        body = (await mem.post(self.PATH, json=self._body())).json()
-        assert body["recreated_edges"] == 0
-        assert zep.graph.node.delete.called
+        calls = []
 
-    async def test_a_failing_recreate_does_not_abort_the_merge(self, mem, zep, caplog):
+        async def listing(**kwargs):
+            calls.append(kwargs)
+            if len(calls) > 1:
+                raise RuntimeError("edges unavailable")
+            return [
+                edge(uuid="e-a", source="n-keep", target="n-x"),
+                edge(uuid="e-b", source="n-remove", target="n-x"),
+            ]
+
+        zep.graph.edge.get_by_user_id = listing
+        r = await mem.post(self.PATH, json=self._body())
+        assert r.status_code == 502
+        assert "Could not list the facts" in r.json()["detail"]
+        assert not zep.graph.node.delete.called
+
+    async def test_a_failing_recreate_deletes_nothing(self, mem, zep, caplog):
+        """Deleting now would take the fact that failed to move with it."""
         zep.graph.node.get.result = node(uuid="n-keep")
-        zep.graph.node.get_edges.result = [edge(source="n-remove", target="n-other")]
+        zep.ownership.edges["n-remove"] = [edge(source="n-remove", target="n-other")]
         zep.graph.add_fact_triple.error = RuntimeError("triple rejected")
         with caplog.at_level("WARNING", logger="kwami-api.memory"):
-            body = (await mem.post(self.PATH, json=self._body())).json()
-        assert body["success"] is True
-        assert body["recreated_edges"] == 0
-        assert "Failed to recreate edge during merge" in caplog.text
+            r = await mem.post(self.PATH, json=self._body())
+        assert r.status_code == 502
+        assert "after moving 0 facts" in r.json()["detail"]
+        assert "Edge recreate failed" in r.json()["detail"]
+        assert not zep.graph.node.delete.called
+        assert "Merge left n-remove in place" in caplog.text
 
-    async def test_a_failing_delete_still_reports_success(self, mem, zep, caplog):
-        """The edges are already repointed; the orphaned node is the lesser problem."""
+    async def test_a_failing_delete_is_reported(self, mem, zep):
         zep.graph.node.get.result = node(uuid="n-keep")
         zep.graph.node.delete.error = RuntimeError("delete refused")
-        with caplog.at_level("WARNING", logger="kwami-api.memory"):
-            body = (await mem.post(self.PATH, json=self._body())).json()
-        assert body["success"] is True
-        assert "Failed to delete merged node" in caplog.text
+        r = await mem.post(self.PATH, json=self._body())
+        assert r.status_code == 502
+        assert "Delete failed for n-remove" in r.json()["detail"]
 
     async def test_a_node_without_a_name(self, mem, zep):
         bare = node(uuid="n-keep")
@@ -326,8 +381,11 @@ class TestMerge:
 
     async def test_no_edges_at_all(self, mem, zep):
         zep.graph.node.get.result = node(uuid="n-keep")
-        zep.graph.node.get_edges.result = None
-        assert (await mem.post(self.PATH, json=self._body())).json()["recreated_edges"] == 0
+        zep.ownership.edgeless.add("n-remove")
+        zep.graph.node.get_by_user_id.result = [node(uuid="n-remove", degree=0)]
+        body = (await mem.post(self.PATH, json=self._body())).json()
+        assert body["recreated_edges"] == 0
+        assert zep.graph.node.delete.last["uuid_"] == "n-remove"
 
     async def test_another_users_graph_is_a_403(self, mem, zep):
         r = await mem.post("/memory/someone-else/merge", json=self._body())

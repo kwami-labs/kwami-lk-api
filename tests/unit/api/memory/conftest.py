@@ -121,8 +121,18 @@ class Ownership:
     def __init__(self):
         self.foreign: set[str] = set()
         self.edgeless: set[str] = set()
+        #: The edges a node has, as the connected-node listing reports them.
+        #: A node not named here has one edge, to the user node.
+        self.edges: dict[str, list[Any]] = {}
         self.probes: list[dict] = []
         self.error: Exception | None = None
+
+    def edges_of(self, uuid: str) -> list[Any]:
+        if uuid in self.foreign or uuid in self.edgeless:
+            return []
+        if uuid in self.edges:
+            return list(self.edges[uuid])
+        return [edge(uuid=f"e-{uuid}", source=uuid, target="n-user")]
 
     def answer(self, filters: Any) -> list[Any]:
         if self.error is not None:
@@ -130,11 +140,12 @@ class Ownership:
         edge_uuids = getattr(filters, "edge_uuids", None) or []
         connected = getattr(filters, "connected_node_uuids", None) or []
         found = [edge(uuid=uuid) for uuid in edge_uuids if uuid not in self.foreign]
-        found += [
-            edge(uuid=f"e-{uuid}", source=uuid, target="n-user")
-            for uuid in connected
-            if uuid not in self.foreign and uuid not in self.edgeless
-        ]
+        seen: set[str] = set()
+        for uuid in connected:
+            for record in self.edges_of(uuid):
+                if _uuid(record) not in seen:
+                    seen.add(_uuid(record))
+                    found.append(record)
         return found
 
 
@@ -205,10 +216,19 @@ class FakeZep:
         self.thread = SimpleNamespace(
             list_all=Recorder(SimpleNamespace(threads=[], total_count=0)),
             get_context=Recorder(SimpleNamespace(context="ctx")),
+            get_user_context=Recorder(SimpleNamespace(context="ctx")),
+            get_summary=Recorder(
+                SimpleNamespace(
+                    summary="They talked about the trip.",
+                    last_summarized_at="2026-03-02T00:00:00Z",
+                    created_at="2026-03-01T00:00:00Z",
+                )
+            ),
             delete=Recorder(None),
             get=Recorder(SimpleNamespace(messages=[])),
         )
         self.user = SimpleNamespace(
+            get_threads=Recorder([]),
             delete=Recorder(None),
             get=Recorder(SimpleNamespace(first_name=None, last_name=None, email=None, metadata={})),
             update=Recorder(None),

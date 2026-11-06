@@ -13,6 +13,7 @@ import logging
 from zep_cloud.client import AsyncZep
 
 from src.core.security import AuthUser
+from src.services.memory.paging import MAX_GRAPH_ITEMS, collect, uuid_of
 
 logger = logging.getLogger("kwami-api.memory")
 
@@ -328,46 +329,66 @@ def _extract_user_display_name(
     return "User"
 
 
-async def _fetch_graph_raw(client: AsyncZep, user_id: str, limit: int = 200):
-    """Helper: fetch raw nodes and edges from Zep for graph analysis."""
-    nodes_list = []
-    edges_list = []
+async def _fetch_graph_raw(client: AsyncZep, user_id: str, max_items: int = MAX_GRAPH_ITEMS):
+    """Every node and edge of the user's graph, for the analysis passes.
 
-    try:
-        nodes_response = await client.graph.node.get_by_user_id(user_id=user_id, limit=limit)
-        if nodes_response:
-            for n in nodes_response:
-                nodes_list.append(
-                    {
-                        "uuid": getattr(n, "uuid_", None) or getattr(n, "uuid", None),
-                        "name": getattr(n, "name", "Unknown"),
-                        "summary": getattr(n, "summary", None),
-                        "labels": list(n.labels) if hasattr(n, "labels") and n.labels else [],
-                    }
-                )
-    except Exception as e:
-        logger.warning("Failed to fetch nodes for analysis: %s", e)
+    This read one listing call each with `limit=200`, and Zep answers at most 50,
+    so a graph past 50 edges looked to these passes as if most of its nodes had
+    no edges. The reorganizer deletes nodes with no edges.
 
-    try:
-        edges_response = await client.graph.edge.get_by_user_id(user_id=user_id, limit=limit)
-        if edges_response:
-            for e in edges_response:
-                edges_list.append(
-                    {
-                        "uuid": getattr(e, "uuid_", None) or getattr(e, "uuid", None),
-                        "source_node_uuid": getattr(e, "source_node_uuid", None),
-                        "target_node_uuid": getattr(e, "target_node_uuid", None),
-                        "fact": getattr(e, "fact", None),
-                        "name": getattr(e, "name", None),
-                        "valid_at": str(e.valid_at)
-                        if hasattr(e, "valid_at") and e.valid_at
-                        else None,
-                        "invalid_at": str(e.invalid_at)
-                        if hasattr(e, "invalid_at") and e.invalid_at
-                        else None,
-                    }
-                )
-    except Exception as e:
-        logger.warning("Failed to fetch edges for analysis: %s", e)
-
+    A listing that fails raises rather than returning what it had: these passes
+    delete what they think is orphaned, and an empty edge list makes every node
+    look orphaned.
+    """
+    nodes = await collect(client.graph.node.get_by_user_id, user_id, max_items=max_items)
+    edges = await collect(client.graph.edge.get_by_user_id, user_id, max_items=max_items)
+    nodes_list = [
+        {
+            "uuid": uuid_of(n),
+            "name": getattr(n, "name", "Unknown"),
+            "summary": getattr(n, "summary", None),
+            "labels": list(getattr(n, "labels", None) or []),
+            "degree": getattr(n, "degree", None),
+        }
+        for n in nodes
+    ]
+    edges_list = [
+        {
+            "uuid": uuid_of(e),
+            "source_node_uuid": getattr(e, "source_node_uuid", None),
+            "target_node_uuid": getattr(e, "target_node_uuid", None),
+            "fact": getattr(e, "fact", None),
+            "name": getattr(e, "name", None),
+            "valid_at": str(e.valid_at) if getattr(e, "valid_at", None) else None,
+            "invalid_at": str(e.invalid_at) if getattr(e, "invalid_at", None) else None,
+        }
+        for e in edges
+    ]
     return nodes_list, edges_list
+
+
+def is_user_node(node: dict) -> bool:
+    """The node Zep keeps for the user themselves, which is never an orphan."""
+    name = (node.get("name") or "").lower()
+    labels = {label.lower() for label in node.get("labels") or []}
+    return "kwami_" in name or name == "user" or "user" in labels
+
+
+def find_orphans(nodes_list: list[dict], edges_list: list[dict]) -> list[dict]:
+    """Nodes with no edge at all, the user node aside.
+
+    Zep reports a node's `degree` (its live edges); when it does, a node is an
+    orphan only if that is 0 *and* no edge in the listing touches it, so
+    neither source alone can condemn a node.
+    """
+    touched = set()
+    for e in edges_list:
+        touched.update(uuid for uuid in (e["source_node_uuid"], e["target_node_uuid"]) if uuid)
+    return [
+        n
+        for n in nodes_list
+        if n["uuid"]
+        and n["uuid"] not in touched
+        and not (n.get("degree") or 0) > 0
+        and not is_user_node(n)
+    ]

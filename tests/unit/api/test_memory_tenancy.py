@@ -103,7 +103,17 @@ def zep_with_two_tenants(app_instance):
             total_count=3,
         )
     )
+    # The per-user listing is asked to return the other tenants' threads too, so
+    # the anchored check behind it is still what keeps them out.
+    client.user.get_threads = AsyncMock(
+        return_value=[
+            thread("t-mine", "test-user-id"),
+            thread("t-theirs", "some-other-tenant"),
+            thread("t-lookalike", "test-user-id-2"),
+        ]
+    )
     client.thread.get_context = AsyncMock(return_value=SimpleNamespace(context="ctx"))
+    client.thread.get_user_context = AsyncMock(return_value=SimpleNamespace(context="ctx"))
     client.graph.search = AsyncMock(return_value=SimpleNamespace(edges=[]))
     client.graph.node.get_by_user_id = AsyncMock(return_value=[])
     client.user.get = AsyncMock(return_value=SimpleNamespace(user_id="test-user-id"))

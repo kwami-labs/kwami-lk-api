@@ -178,7 +178,7 @@ class TestReorganizeApply:
         assert response.status_code == 404
         assert not zep.graph.node.delete.called
 
-    async def test_all_uuids_are_checked_in_one_probe(self, mem, zep):
+    async def test_all_uuids_are_checked_in_one_probe_first(self, mem, zep):
         await mem.post(
             f"{BASE}/reorganize/apply",
             json={
@@ -186,7 +186,6 @@ class TestReorganizeApply:
                 "merge_pairs": [{"keep_uuid": "n-3", "remove_uuid": "n-4"}],
             },
         )
-        assert len(zep.ownership.probes) == 1
         assert zep.ownership.probes[0]["filters"].connected_node_uuids == [
             "n-1",
             "n-2",
