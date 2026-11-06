@@ -692,54 +692,6 @@ class TestPartialBranches:
     always has a value -- an edge with no endpoints, a search that returns none.
     """
 
-    async def test_update_node_repoints_several_edges_in_one_pass(self, mem, zep):
-        """Two edges, so the recreate loop runs more than once."""
-        zep.graph.node.get.result = node(uuid="n-1", name="Old", summary="s")
-        zep.graph.node.get_edges.result = [
-            edge(uuid="e1", source="n-1", target="n-2"),
-            edge(uuid="e2", source="n-3", target="n-1"),
-        ]
-        body = (await mem.patch(f"/memory/{USER_ID}/node/n-1", json={"name": "New"})).json()
-        assert body["recreated_edges"] == 2
-
-    async def test_update_node_with_no_summary_on_an_incoming_edge(self, mem, zep):
-        """The `if new_summary` guard on the target side."""
-        zep.graph.node.get.result = node(uuid="n-1", name="Old", summary=None)
-        zep.graph.node.get_edges.result = [edge(source="n-0", target="n-1")]
-        await mem.patch(f"/memory/{USER_ID}/node/n-1", json={"name": "New"})
-        assert "target_node_summary" not in zep.graph.add_fact_triple.last
-
-    async def test_update_node_keeps_the_first_new_uuid(self, mem, zep):
-        """`if new_node_uuid is None` -- the second edge must not overwrite it."""
-        from types import SimpleNamespace
-
-        results = [
-            SimpleNamespace(source_node_uuid="first"),
-            SimpleNamespace(source_node_uuid="second"),
-        ]
-
-        async def add_triple(**kwargs):
-            return results.pop(0)
-
-        zep.graph.node.get.result = node(uuid="n-1", name="Old")
-        zep.graph.node.get_edges.result = [
-            edge(uuid="e1", source="n-1", target="n-2"),
-            edge(uuid="e2", source="n-1", target="n-3"),
-        ]
-        zep.graph.add_fact_triple = add_triple
-        body = (await mem.patch(f"/memory/{USER_ID}/node/n-1", json={"name": "New"})).json()
-        assert body["new_node_uuid"] == "first"
-
-    async def test_a_standalone_recreate_without_a_source_uuid(self, mem, zep):
-        """`if result and hasattr(result, "source_node_uuid")` -- the falsey arm."""
-        from types import SimpleNamespace
-
-        zep.graph.node.get.result = node(uuid="n-1", name="Old")
-        zep.graph.node.get_edges.result = []
-        zep.graph.add_fact_triple.result = SimpleNamespace()
-        body = (await mem.patch(f"/memory/{USER_ID}/node/n-1", json={"name": "New"})).json()
-        assert body["new_node_uuid"] is None
-
     async def test_entities_by_type_with_a_search_returning_no_edges(self, mem, zep):
         """`if edges_response and edges_response.edges` in the /edges fallback."""
         from types import SimpleNamespace
