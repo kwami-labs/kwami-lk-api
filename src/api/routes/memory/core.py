@@ -24,6 +24,7 @@ from src.services.memory import (
     verify_user_access,
 )
 from src.services.memory.paging import collect
+from src.services.memory.threads import message_row, messages_of, thread_id_of, user_threads
 
 logger = logging.getLogger("kwami-api.memory")
 router = APIRouter()
@@ -75,20 +76,19 @@ async def debug_user_memory(
     except Exception as e:
         result["errors"].append(f"graph.node: {str(e)}")
 
-    # Threads belonging to this user only.
+    # Threads belonging to this user only, from the user's own listing.
     #
     # This endpoint used to return `result["all_threads"]` -- every thread in the
     # Zep project, with its owner's user_id -- to any authenticated caller. That
-    # was a cross-tenant enumeration of the entire user base.
+    # was a cross-tenant enumeration of the entire user base. It also asked for
+    # `thread.get_context`, which zep-cloud does not have, so every thread
+    # carried a `context_error`; the call is `get_user_context`.
     try:
-        async for thread in iter_all_threads(client):
-            thread_id = getattr(thread, "thread_id", None) or getattr(thread, "uuid_", None)
-            thread_user = getattr(thread, "user_id", None)
-            if not thread_belongs_to(thread_id, thread_user, user_id):
-                continue
-            info = {"thread_id": thread_id, "user_id": thread_user}
+        for thread in await user_threads(client, user_id):
+            thread_id = thread_id_of(thread)
+            info = {"thread_id": thread_id, "user_id": getattr(thread, "user_id", None)}
             try:
-                ctx = await client.thread.get_context(thread_id=thread_id)
+                ctx = await client.thread.get_user_context(thread_id=thread_id)
                 if ctx and ctx.context:
                     info["context"] = (
                         ctx.context[:500] + "..." if len(ctx.context) > 500 else ctx.context
@@ -97,7 +97,7 @@ async def debug_user_memory(
                 info["context_error"] = str(ctx_err)[:100]
             result["threads"].append(info)
     except Exception as e:
-        result["errors"].append(f"thread.list_all: {str(e)}")
+        result["errors"].append(f"user.get_threads: {str(e)}")
 
     return result
 
@@ -214,89 +214,54 @@ async def get_user_messages(
     client: AsyncZep = Depends(get_zep_client),
     limit: int = Query(100, ge=1, le=500),
 ):
-    """Get conversation messages for a user from their threads/sessions.
+    """The user's most recent messages across sessions, newest first.
 
-    This retrieves actual conversation history stored in Zep threads,
-    which is where chat messages are stored via memory.add().
+    Reads the user's own threads (`user.get_threads`) rather than every thread
+    in the project, newest session first, and stops once it holds `limit`
+    messages: an older session cannot hold a newer message. Each thread's
+    *last* messages are read; this used to read each thread's first `limit`,
+    so a long session showed its opening and hid how it ended.
+
+    `GET /{user_id}/sessions` keeps sessions apart, which is what the panel wants.
     """
     verify_user_access(user, user_id)
     logger.info("💬 Fetching messages for user: %s", user_id)
     try:
-        messages = []
-        sessions = []
-
-        # Get all threads and find ones belonging to this user
-        try:
-            async for t in iter_all_threads(client):
-                thread_id = getattr(t, "thread_id", None) or getattr(t, "uuid_", None)
-                thread_user = getattr(t, "user_id", None)
-
-                # Exact ownership: the substring test returned other tenants'
-                # messages whenever their thread id happened to contain this id.
-                if thread_belongs_to(thread_id, thread_user, user_id):
-                    sessions.append(
-                        {
-                            "thread_id": thread_id,
-                            "user_id": thread_user,
-                            "created_at": str(t.created_at)
-                            if hasattr(t, "created_at") and t.created_at
-                            else None,
-                        }
-                    )
-
-                    # Get messages from this thread (Zep v3: thread.get returns messages)
-                    try:
-                        msgs_response = await client.thread.get(
-                            thread_id=thread_id,
-                            limit=limit,
-                        )
-                        # MessageListResponse has a .messages attribute
-                        msg_list = None
-                        if msgs_response:
-                            if hasattr(msgs_response, "messages"):
-                                msg_list = msgs_response.messages
-                            elif isinstance(msgs_response, list):
-                                msg_list = msgs_response
-
-                        if msg_list:
-                            for msg in msg_list:
-                                messages.append(
-                                    {
-                                        "uuid": msg.uuid if hasattr(msg, "uuid") else None,
-                                        "content": msg.content if hasattr(msg, "content") else None,
-                                        "role": msg.role
-                                        if hasattr(msg, "role")
-                                        else (msg.role_type if hasattr(msg, "role_type") else None),
-                                        "role_type": msg.role_type
-                                        if hasattr(msg, "role_type")
-                                        else None,
-                                        "created_at": str(msg.created_at)
-                                        if hasattr(msg, "created_at") and msg.created_at
-                                        else None,
-                                        "thread_id": thread_id,
-                                    }
-                                )
-                    except Exception as msg_err:
-                        logger.warning(
-                            "💬 Failed to get messages from thread %s: %s", thread_id, msg_err
-                        )
-        except Exception as e:
-            logger.warning("💬 thread.list_all failed: %s", e)
-
-        # Sort messages by created_at (newest first)
-        messages.sort(key=lambda x: x.get("created_at") or "", reverse=True)
-
-        logger.info("💬 Found %s messages across %s sessions", len(messages), len(sessions))
-        return {
-            "messages": messages[:limit],  # Limit total messages
-            "message_count": len(messages),
-            "sessions": sessions,
-            "session_count": len(sessions),
-        }
-
+        threads = await user_threads(client, user_id)
     except Exception as e:
-        logger.exception("Failed to fetch messages")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.warning("💬 user.get_threads failed: %s", e)
+        threads = []
+
+    messages: list[dict] = []
+    sessions = []
+    for thread in threads:
+        thread_id = thread_id_of(thread)
+        sessions.append(
+            {
+                "thread_id": thread_id,
+                "user_id": getattr(thread, "user_id", None),
+                "created_at": str(thread.created_at)
+                if getattr(thread, "created_at", None)
+                else None,
+            }
+        )
+        if len(messages) >= limit:
+            continue
+        try:
+            response = await client.thread.get(thread_id=thread_id, lastn=limit)
+        except Exception as msg_err:
+            logger.warning("💬 Failed to get messages from thread %s: %s", thread_id, msg_err)
+            continue
+        messages.extend(message_row(message, thread_id) for message in messages_of(response))
+
+    messages.sort(key=lambda m: m.get("created_at") or "", reverse=True)
+    logger.info("💬 Found %s messages across %s sessions", len(messages), len(sessions))
+    return {
+        "messages": messages[:limit],
+        "message_count": len(messages),
+        "sessions": sessions,
+        "session_count": len(sessions),
+    }
 
 
 @router.delete("/{user_id}/edge/{edge_uuid}")

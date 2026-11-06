@@ -22,7 +22,7 @@ class TestDebug:
     async def test_it_reports_facts_nodes_and_threads(self, mem, zep):
         zep.graph.search.result = type("R", (), {"edges": [edge(fact="likes pizza")]})()
         zep.graph.node.get_by_user_id.result = [node(name="Ada")]
-        zep.thread.list_all.result = type("R", (), {"threads": [thread("t-1")], "total_count": 1})()
+        zep.user.get_threads.result = [thread("t-1")]
 
         body = (await mem.get(self.PATH)).json()
 
@@ -50,33 +50,37 @@ class TestDebug:
         assert any("graph.node" in e for e in body["errors"])
 
     async def test_a_thread_listing_failure_is_collected(self, mem, zep):
-        zep.thread.list_all.error = RuntimeError("threads down")
+        zep.user.get_threads.error = RuntimeError("threads down")
         body = (await mem.get(self.PATH)).json()
-        assert any("thread.list_all" in e for e in body["errors"])
+        assert any("user.get_threads" in e for e in body["errors"])
+
+    async def test_it_never_scans_the_whole_project(self, mem, zep):
+        zep.user.get_threads.result = [thread("t-1")]
+        await mem.get(self.PATH)
+        assert not zep.thread.list_all.called
+        assert zep.user.get_threads.last == {"_args": (USER_ID,)}
 
     async def test_a_context_failure_is_recorded_on_the_thread(self, mem, zep):
-        zep.thread.list_all.result = type("R", (), {"threads": [thread("t-1")], "total_count": 1})()
-        zep.thread.get_context.error = RuntimeError("context unavailable")
+        zep.user.get_threads.result = [thread("t-1")]
+        zep.thread.get_user_context.error = RuntimeError("context unavailable")
         body = (await mem.get(self.PATH)).json()
         assert "context_error" in body["threads"][0]
 
     async def test_another_tenants_threads_are_not_listed(self, mem, zep):
         """This endpoint used to return every thread in the project."""
-        zep.thread.list_all.result = type(
-            "R", (), {"threads": [thread("t-other", user_id="someone-else")], "total_count": 1}
-        )()
+        zep.user.get_threads.result = [thread("t-other", user_id="someone-else")]
         assert (await mem.get(self.PATH)).json()["threads"] == []
 
     async def test_a_long_context_is_truncated(self, mem, zep):
-        zep.thread.list_all.result = type("R", (), {"threads": [thread("t-1")], "total_count": 1})()
-        zep.thread.get_context.result = type("C", (), {"context": "x" * 600})()
+        zep.user.get_threads.result = [thread("t-1")]
+        zep.thread.get_user_context.result = type("C", (), {"context": "x" * 600})()
         context = (await mem.get(self.PATH)).json()["threads"][0]["context"]
         assert context.endswith("...")
         assert len(context) == 503
 
     async def test_an_empty_context_is_omitted(self, mem, zep):
-        zep.thread.list_all.result = type("R", (), {"threads": [thread("t-1")], "total_count": 1})()
-        zep.thread.get_context.result = type("C", (), {"context": ""})()
+        zep.user.get_threads.result = [thread("t-1")]
+        zep.thread.get_user_context.result = type("C", (), {"context": ""})()
         assert "context" not in (await mem.get(self.PATH)).json()["threads"][0]
 
     async def test_an_edge_without_a_fact_is_skipped(self, mem, zep):
@@ -273,19 +277,6 @@ class TestOuterErrorHandlers:
             r = await mem.delete(f"/memory/{USER_ID}")
         # The inner handlers absorb the listing failure, so this still answers 200.
         assert r.status_code == 200
-
-    async def test_messages_outer_handler(self, monkeypatch, mem, zep, caplog):
-        """The sort and the slice sit outside the inner try/except."""
-        from src.api.routes.memory import core as mem_mod
-
-        def boom(*a, **k):
-            raise RuntimeError("len exploded")
-
-        monkeypatch.setattr(mem_mod, "len", boom, raising=False)
-        with caplog.at_level("ERROR", logger="kwami-api.memory"):
-            r = await mem.get(f"/memory/{USER_ID}/messages")
-        assert r.status_code == 500
-        assert "Failed to fetch messages" in caplog.text
 
     async def test_search_outer_handler(self, monkeypatch, mem, zep, caplog):
         from src.api.routes.memory import graph as mem_mod
