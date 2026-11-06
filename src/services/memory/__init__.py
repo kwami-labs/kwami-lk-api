@@ -19,6 +19,11 @@ from src.services.memory.ontology import (
     DEFAULT_ENTITY_TYPES,
     _build_ontology_models,
 )
+from src.services.memory.ownership import (
+    require_edge,
+    require_node,
+    require_nodes,
+)
 from src.services.memory.tenancy import (
     iter_all_threads,
     thread_belongs_to,
@@ -35,6 +40,9 @@ __all__ = [
     "close_zep_client",
     "get_zep_client",
     "iter_all_threads",
+    "require_edge",
+    "require_node",
+    "require_nodes",
     "thread_belongs_to",
     "verify_user_access",
 ]
