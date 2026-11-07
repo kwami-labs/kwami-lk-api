@@ -96,6 +96,22 @@ erDiagram
 | 015 | `livekit_sessions` | room ownership |
 | 016 | `wallet_funding_repair` | funding idempotency repair |
 | 017 | `payment_event_idempotency` | `payment_events` unique `(provider, event_id)` |
+| 018 | `browser_contexts` | which persisted cloud-browser profile is whose |
+| 019 | `schema_migrations_rls` | RLS on the migration registry; closed to `anon` / `authenticated` |
+| 020 | `kwami_assistant` | reminders and follow-ups, report settings, notifications, Google link, send audit |
+| 021 | `brain_thread` | `brain_jobs` queue, `brain_runners`, `brain_claim_job` (`SKIP LOCKED`) |
+| 022 | `user_app_settings_ui` | `user_app_settings.ui`: panel layout across devices |
+| 023 | `credit_function_grants` | credit and sign-up functions closed to the public roles |
+| 024 | `mind_control` | `brain_jobs.mode`, `brain_runners.claude_login`, `kwami_provider_keys` |
+| 025 | `google_accounts_many` | several Google accounts per user, `needs_reconnect_at` |
+| 026 | `voice_provider_keys` | voice providers allowed in `kwami_provider_keys` |
+| 027 | `brain_orders` | `merge` and `login` orders for the PC |
+| 028 | `brain_site_orders` | `site` orders, `brain_sites`: the sites signed in to in Jarvis's Chrome |
+| 030 | `jarvis_site_access` | `jarvis_site_rules`: where Jarvis may go and what it may do |
+
+029 (`brain_cloud`, the brain working in the cloud) is still in review.
+`migrate.py` runs every version not yet recorded, so a gap filled later still
+applies.
 
 Do not edit an applied file. `make migrate-verify` checksums the bytes
 against `schema_migrations`. A change in place is a new migration.
