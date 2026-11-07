@@ -110,6 +110,18 @@ class TestConfigureLogging:
         assert len(logging.getLogger().handlers) == 1
 
 
+class TestGetRequestId:
+    def test_it_is_none_outside_a_request(self):
+        assert get_request_id() is None
+
+    def test_it_reads_the_context(self):
+        token = request_id_var.set("abc")
+        try:
+            assert get_request_id() == "abc"
+        finally:
+            request_id_var.reset(token)
+
+
 class TestTextFormatter:
     """A value a caller sent cannot start a record of its own."""
 
@@ -134,15 +146,3 @@ class TestTextFormatter:
         first, *rest = text.split("\n")
         assert first == "ERROR | failed"
         assert any("RuntimeError: boom" in line for line in rest)
-
-
-class TestGetRequestId:
-    def test_it_is_none_outside_a_request(self):
-        assert get_request_id() is None
-
-    def test_it_reads_the_context(self):
-        token = request_id_var.set("abc")
-        try:
-            assert get_request_id() == "abc"
-        finally:
-            request_id_var.reset(token)
