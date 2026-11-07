@@ -268,7 +268,7 @@ async def search_graph(
 
     except Exception as e:
         logger.exception("Failed to search graph")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to search graph") from e
 
 
 @router.get("/{user_id}/entities/{entity_type}")
@@ -455,4 +455,4 @@ async def get_memory_graph(
         raise
     except Exception as e:
         logger.exception("Failed to fetch memory graph")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to fetch memory graph") from e

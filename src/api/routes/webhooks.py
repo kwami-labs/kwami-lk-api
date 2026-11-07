@@ -62,7 +62,8 @@ async def twilio_voice_webhook(request: Request):
 
     channel = await find_channel_by_address(called)
     if not channel:
-        logger.warning("Inbound voice call to unknown number: %s", called)
+        # Not the number: whose it is, is the caller's business, not the log's.
+        logger.warning("Inbound voice call to a number no channel has")
         return Response("<Response><Reject/></Response>", media_type="application/xml")
 
     contact = await ensure_contact(

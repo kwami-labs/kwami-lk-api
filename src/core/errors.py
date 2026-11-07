@@ -154,6 +154,17 @@ class InvalidEmailAddressError(ValidationFailedError):
     code = "invalid_email_address"
 
 
+def failure_kind(exc: BaseException) -> str:
+    """What a response may say about a failure that is not ours: its kind, never its text.
+
+    A provider's or a library's message can carry hosts, ids, keys or a traceback, and
+    sending it on is what CodeQL calls stack-trace exposure. The whole error belongs in
+    the log; the client gets the exception's class, which still tells a timeout from a
+    refusal.
+    """
+    return type(exc).__name__
+
+
 def error_body(code: str, message: str, details: Any = None) -> dict[str, Any]:
     """The error envelope, carrying the request id when there is one.
 

@@ -17,6 +17,7 @@ from src.api.routes.memory.schemas import (
     MergeNodesRequest,
     ReorganizeApplyRequest,
 )
+from src.core.errors import failure_kind
 from src.core.security import AuthUser
 from src.services.memory import (
     _fetch_graph_raw,
@@ -80,7 +81,7 @@ async def ingest_data(
 
     except Exception as e:
         logger.exception("Failed to ingest data")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to ingest data") from e
 
 
 @router.get("/{user_id}/communities")
@@ -173,7 +174,7 @@ async def detect_communities(
 
     except Exception as e:
         logger.exception("Failed to detect communities")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to detect communities") from e
 
 
 @router.get("/{user_id}/duplicates")
@@ -208,7 +209,7 @@ async def detect_duplicates(
 
     except Exception as e:
         logger.exception("Failed to detect duplicates")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to detect duplicates") from e
 
 
 @router.post("/{user_id}/merge")
@@ -274,7 +275,7 @@ async def merge_nodes(
         raise
     except Exception as e:
         logger.exception("Failed to merge nodes")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to merge nodes") from e
 
 
 @router.post("/{user_id}/reorganize/preview")
@@ -325,7 +326,7 @@ async def reorganize_preview(
 
     except Exception as e:
         logger.exception("Failed reorganize preview")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed reorganize preview") from e
 
 
 async def _count_communities(nodes_list: list[dict], edges_list: list[dict]) -> int:
@@ -359,7 +360,8 @@ async def _remove_orphan(client: AsyncZep, user_id: str, node_uuid: str, report:
         await client.graph.node.delete(uuid_=node_uuid)
         report["orphans_removed"] += 1
     except Exception as de:
-        report["errors"].append(f"Failed to remove orphan {node_uuid}: {str(de)[:80]}")
+        logger.warning("Failed to remove an orphan: %s", de)
+        report["errors"].append(f"Failed to remove orphan {node_uuid}: {failure_kind(de)}")
 
 
 @router.post("/{user_id}/reorganize/apply")
@@ -410,7 +412,7 @@ async def reorganize_apply(
 
     except Exception as e:
         logger.exception("Failed to apply reorganization")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to apply reorganization") from e
 
 
 @router.post("/{user_id}/reorganize")
@@ -484,7 +486,7 @@ async def reorganize_graph(
 
     except Exception as e:
         logger.exception("Failed to reorganize graph")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to reorganize graph") from e
 
 
 @router.post("/{user_id}/connect")
@@ -560,4 +562,4 @@ async def connect_nodes(
         raise
     except Exception as e:
         logger.exception("Failed to connect nodes")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to connect nodes") from e

@@ -13,6 +13,7 @@ from src.api.routes.memory.schemas import (
     UpdateEdgeRequest,
     UpdateNodeRequest,
 )
+from src.core.errors import failure_kind
 from src.core.security import AuthUser
 from src.services.memory import (
     get_zep_client,
@@ -65,7 +66,8 @@ async def debug_user_memory(
                 if hasattr(edge, "fact")
             ]
     except Exception as e:
-        result["errors"].append(f"graph.search: {str(e)}")
+        logger.warning("Memory debug: graph.search failed: %s", e)
+        result["errors"].append(f"graph.search: {failure_kind(e)}")
 
     # Try graph nodes API
     try:
@@ -74,7 +76,8 @@ async def debug_user_memory(
         if nodes:
             result["node_names"] = [n.name for n in nodes if hasattr(n, "name")]
     except Exception as e:
-        result["errors"].append(f"graph.node: {str(e)}")
+        logger.warning("Memory debug: graph.node failed: %s", e)
+        result["errors"].append(f"graph.node: {failure_kind(e)}")
 
     # Threads belonging to this user only, from the user's own listing.
     #
@@ -94,10 +97,12 @@ async def debug_user_memory(
                         ctx.context[:500] + "..." if len(ctx.context) > 500 else ctx.context
                     )
             except Exception as ctx_err:
-                info["context_error"] = str(ctx_err)[:100]
+                logger.warning("Memory debug: context of %s failed: %s", thread_id, ctx_err)
+                info["context_error"] = failure_kind(ctx_err)
             result["threads"].append(info)
     except Exception as e:
-        result["errors"].append(f"user.get_threads: {str(e)}")
+        logger.warning("Memory debug: user.get_threads failed: %s", e)
+        result["errors"].append(f"user.get_threads: {failure_kind(e)}")
 
     return result
 
@@ -125,7 +130,7 @@ async def get_user_facts(
             edges = []
         else:
             logger.exception("Failed to fetch facts")
-            raise HTTPException(status_code=500, detail=str(e)) from e
+            raise HTTPException(status_code=500, detail="Failed to fetch facts") from e
 
     all_facts = [fact for edge in edges if (fact := getattr(edge, "fact", None))]
     total = len(all_facts)
@@ -177,9 +182,13 @@ async def delete_user_memory(
                     deleted["threads"] += 1
                     logger.info("🗑️ Deleted thread: %s", thread_id)
                 except Exception as e:
-                    deleted["errors"].append(f"Failed to delete thread {thread_id}: {str(e)}")
+                    logger.warning("Failed to delete thread %s: %s", thread_id, e)
+                    deleted["errors"].append(
+                        f"Failed to delete thread {thread_id}: {failure_kind(e)}"
+                    )
         except Exception as e:
-            deleted["errors"].append(f"Failed to list threads: {str(e)}")
+            logger.warning("Failed to list threads: %s", e)
+            deleted["errors"].append(f"Failed to list threads: {failure_kind(e)}")
 
         # 2. Delete the user (this also deletes associated graph data in Zep)
         try:
@@ -191,7 +200,8 @@ async def delete_user_memory(
             if "404" in error_msg:
                 deleted["errors"].append(f"User {user_id} not found")
             else:
-                deleted["errors"].append(f"Failed to delete user: {error_msg}")
+                logger.warning("Failed to delete user: %s", e)
+                deleted["errors"].append(f"Failed to delete user: {failure_kind(e)}")
 
         logger.info("🗑️ Deletion complete: %s threads, user=%s", deleted["threads"], deleted["user"])
         return {
@@ -204,7 +214,7 @@ async def delete_user_memory(
 
     except Exception as e:
         logger.exception("Failed to delete user memory")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to delete user memory") from e
 
 
 @router.get("/{user_id}/messages")
@@ -288,7 +298,7 @@ async def delete_edge(
         if "404" in error_msg:
             raise HTTPException(status_code=404, detail=f"Edge {edge_uuid} not found") from e
         logger.exception("Failed to delete edge")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to delete edge") from e
 
 
 @router.delete("/{user_id}/node/{node_uuid}")
@@ -315,7 +325,7 @@ async def delete_node(
         if "404" in error_msg:
             raise HTTPException(status_code=404, detail=f"Node {node_uuid} not found") from e
         logger.exception("Failed to delete node")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to delete node") from e
 
 
 @router.patch("/{user_id}/edge/{edge_uuid}")
@@ -417,7 +427,7 @@ async def update_edge(
         raise
     except Exception as e:
         logger.exception("Failed to update edge")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to update edge") from e
 
 
 @router.patch("/{user_id}/node/{node_uuid}")
@@ -458,7 +468,7 @@ async def update_node(
         if "404" in str(e):
             raise HTTPException(status_code=404, detail=f"Node {node_uuid} not found") from e
         logger.exception("Failed to update node")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to update node") from e
 
     logger.info("✏️ Updated node in place: %s", node_uuid)
     return {

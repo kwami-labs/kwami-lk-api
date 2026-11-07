@@ -49,6 +49,18 @@ class TestDebug:
         body = (await mem.get(self.PATH)).json()
         assert any("graph.node" in e for e in body["errors"])
 
+    async def test_a_collected_error_names_the_failure_not_its_text(self, mem, zep):
+        zep.graph.search.error = RuntimeError("zep at 10.0.0.7 refused key sk-123")
+        body = (await mem.get(self.PATH)).json()
+        assert "graph.search: RuntimeError" in body["errors"]
+        assert "sk-123" not in str(body)
+
+    async def test_a_context_failure_is_named_on_its_thread(self, mem, zep):
+        zep.user.get_threads.result = [thread("t-1")]
+        zep.thread.get_user_context.error = RuntimeError("context at 10.0.0.7")
+        body = (await mem.get(self.PATH)).json()
+        assert body["threads"][0]["context_error"] == "RuntimeError"
+
     async def test_a_thread_listing_failure_is_collected(self, mem, zep):
         zep.user.get_threads.error = RuntimeError("threads down")
         body = (await mem.get(self.PATH)).json()
@@ -162,6 +174,9 @@ class TestFacts:
             r = await mem.get(self.PATH)
         assert r.status_code == 500
         assert "Failed to fetch facts" in caplog.text
+        # What failed, said by us; what Zep said stays in the log.
+        assert r.json()["detail"] == "Failed to fetch facts"
+        assert "zep exploded" not in r.text
 
     @pytest.mark.parametrize("params", [{"limit": 0}, {"limit": 501}, {"offset": -1}])
     async def test_out_of_range_pagination_is_a_422(self, mem, params):

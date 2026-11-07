@@ -94,7 +94,7 @@ async def get_user_ontology(
                 "is_default": True,
             }
         logger.exception("Failed to fetch ontology")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to fetch ontology") from e
 
 
 @router.put("/{user_id}/ontology")
@@ -142,7 +142,7 @@ async def set_user_ontology(
 
     except Exception as e:
         logger.exception("Failed to set ontology")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to set ontology") from e
 
 
 @router.post("/{user_id}/ontology/reset")
@@ -180,7 +180,7 @@ async def reset_user_ontology(
 
     except Exception as e:
         logger.exception("Failed to reset ontology")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to reset ontology") from e
 
 
 @router.get("/{user_id}/fact-rating")
@@ -237,7 +237,7 @@ async def get_fact_rating(
 
     except Exception as e:
         logger.exception("Failed to get fact rating")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to get fact rating") from e
 
 
 @router.put("/{user_id}/fact-rating")
@@ -283,7 +283,7 @@ async def set_fact_rating(
 
     except Exception as e:
         logger.exception("Failed to set fact rating")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to set fact rating") from e
 
 
 @router.get("/{user_id}/instructions")
@@ -317,7 +317,7 @@ async def get_custom_instructions(
 
     except Exception as e:
         logger.exception("Failed to get custom instructions")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to get custom instructions") from e
 
 
 @router.post("/{user_id}/instructions")
@@ -355,7 +355,7 @@ async def add_custom_instructions(
 
     except Exception as e:
         logger.exception("Failed to add custom instructions")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to add custom instructions") from e
 
 
 @router.delete("/{user_id}/instructions")
@@ -390,4 +390,4 @@ async def delete_custom_instructions(
 
     except Exception as e:
         logger.exception("Failed to delete custom instructions")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to delete custom instructions") from e

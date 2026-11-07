@@ -17,11 +17,15 @@ has been moved.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 
 from zep_cloud.client import AsyncZep
 
+from src.core.errors import failure_kind
 from src.services.memory.ownership import edges_of_node
+
+logger = logging.getLogger("kwami-api.memory")
 
 #: Edge timestamps carried over to the re-pointed fact.
 _TIMESTAMPS = ("valid_at", "invalid_at", "expired_at")
@@ -75,7 +79,8 @@ async def merge_nodes(
     try:
         edges = await edges_of_node(client, user_id, remove_uuid)
     except Exception as e:
-        outcome.errors.append(f"Could not list the facts of {remove_uuid}: {str(e)[:80]}")
+        logger.warning("Could not list the facts of a duplicate: %s", e)
+        outcome.errors.append(f"Could not list the facts of {remove_uuid}: {failure_kind(e)}")
         return outcome
 
     for edge in edges:
@@ -86,7 +91,8 @@ async def merge_nodes(
             await client.graph.add_fact_triple(**kwargs)
             outcome.moved += 1
         except Exception as e:
-            outcome.errors.append(f"Edge recreate failed: {str(e)[:80]}")
+            logger.warning("Edge recreate failed: %s", e)
+            outcome.errors.append(f"Edge recreate failed: {failure_kind(e)}")
 
     if outcome.errors:
         return outcome
@@ -94,5 +100,6 @@ async def merge_nodes(
         await client.graph.node.delete(uuid_=remove_uuid)
         outcome.removed = True
     except Exception as e:
-        outcome.errors.append(f"Delete failed for {remove_uuid}: {str(e)[:80]}")
+        logger.warning("Delete of a duplicate failed: %s", e)
+        outcome.errors.append(f"Delete failed for {remove_uuid}: {failure_kind(e)}")
     return outcome
