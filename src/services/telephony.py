@@ -286,10 +286,9 @@ async def create_outbound_call(
             ) from exc
 
     logger.info(
-        "Created outbound SIP participant and agent dispatch for kwami=%s room=%s to=%s dispatch_id=%s",
+        "Created outbound SIP participant and agent dispatch for kwami=%s room=%s dispatch_id=%s",
         kwami_id,
         room_name,
-        phone_number,
         getattr(dispatch, "id", None),
     )
     return {

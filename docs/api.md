@@ -14,7 +14,8 @@ in production, or `APP_PUBLIC_URL`). Local default is `http://127.0.0.1:8080`.
 | Agent | `X-API-Key` or `X-Kwami-API-Key` | Usage report, `/internal/*` |
 | Admin | `X-Admin-API-Key` or allowlisted JWT | `/admin/reconciliation/*` |
 | Webhook | Provider signature | Stripe, Twilio, SendGrid, wallet |
-| Public | none | Health, catalogs |
+| Work thread | `X-Kwami-Work-Token` | `POST /google/work-thread` |
+| Public | none | Health, catalogs, OAuth callbacks |
 
 JWTs are verified against the Supabase JWKS
 (`{SUPABASE_URL}/auth/v1/.well-known/jwks.json`), algorithm from the token
@@ -72,8 +73,14 @@ Upstream exception text is not forwarded.
 | `/wallets` | user + webhook | Solana custody wallets, funding intents. |
 | `/email` | user | Smart Hub inbox, send, username. |
 | `/calendar` | user | Per-kwami events. |
+| `/assistant` | user | Reminders and follow-ups, report settings, notifications, the record of messages sent on the user's express order. |
+| `/google` | user + work thread | The user's linked Google accounts: Gmail, Calendar, Drive, Docs, Sheets, Slides, Contacts, Tasks. |
+| `/pc` | user | The user's PC: whether its work thread is on, Claude's sign-in, sites to sign in to in Jarvis's Chrome. |
+| `/providers` | user | Model and voice keys the user connects for their own use (OpenRouter by consent). |
+| `/access` | user | The sites Jarvis may visit, the level on each, and its pending requests. |
+| `/brain` | user | Work for the brain asked from the app, the cloud setting, the user's agents, what the cloud made. |
 | `/internal` | agent | Runtime config, channel lookup by address. |
-| `/webhooks` | signature | Twilio voice/WhatsApp, SendGrid inbound. |
+| `/webhooks` | signature | Twilio voice/WhatsApp, SendGrid inbound, LiveKit room events. |
 | `/admin/reconciliation` | admin | Provider invoice import and findings. |
 
 ### Token
@@ -117,6 +124,70 @@ Outbound telephony is authenticated (`/channels/calls/outbound`,
 returns TwiML that either `<Reject/>` or dials `LIVEKIT_SIP_INBOUND_URI`.
 
 SendGrid inbound parse posts to `/webhooks/email/inbound`.
+
+LiveKit Cloud posts room events to `/webhooks/livekit`, signed with the
+project's `LIVEKIT_API_KEY`/`LIVEKIT_API_SECRET` over the SHA-256 of the body
+(anything that does not verify is a 401). They keep `livekit_sessions` honest:
+`room_started`, `participant_joined` and `track_published` make a room `active`,
+`participant_left` and `track_unpublished` move `last_seen_at`, and
+`room_finished` sets `ended` and `ended_at`. `ended` and `abandoned` are final, so
+a late or redelivered event never reopens a room; rooms this API did not issue
+are acknowledged and ignored. A database failure answers 503 so LiveKit retries
+(every update is idempotent). Enable it in the LiveKit project's settings
+(Settings → Webhooks) with the URL `https://<api host>/webhooks/livekit`.
+
+### Linking Google and OpenRouter
+
+`POST /google/connect` and `POST /providers/openrouter/connect` return a consent
+link. The provider sends the browser to `GET /google/callback` or
+`GET /providers/openrouter/callback`, which are public and connect nothing: a
+consent link can be opened by someone else. They pass the code on to the app that
+started it (`src/services/oauth_return.py`: an exact CORS origin, or
+`kwami://connect/callback` for the desktop app), in the URL fragment so it stays
+out of logs. The app, signed in, posts it to `/google/complete` or
+`/providers/openrouter/complete`, and the API refuses it (403) unless the user is
+the one who started.
+
+Every Google call takes `account`, the address of the link to use; without it, the
+oldest. A link Google stops honouring is marked `needs_reconnect_at` and the app
+says so.
+
+### The work thread's Google
+
+The work thread on the user's PC has no user JWT. `POST /google/work-thread/token`
+(user) mints a token for that user alone, valid 90 days; the thread sends it as
+`X-Kwami-Work-Token` to `POST /google/work-thread`, and the user is taken from the
+token, never from the request.
+
+### PC and access
+
+`/pc/claude` and `/pc/sites` queue an order for the PC's work thread (opening
+Claude's sign-in, a site in Jarvis's Chrome); `GET /pc/orders/{order_id}` follows
+it. `/access` keeps one rule per site plus `*` for the rest; `GET /access/check`
+answers for an address, and `POST /access/requests/{rule_id}` answers a request
+Jarvis made for a site it had no rule for.
+
+### Brain
+
+The work the brain does, asked from the app, on the user's PC or in the cloud
+(migration 029). Every route answers 503 until that migration is in the database.
+
+| Method | Path | What |
+|--------|------|------|
+| `GET` | `/brain/where` | Whether the PC and the cloud are there, the user's cloud setting, what waits to come home, and where `auto` work would go now |
+| `PUT` | `/brain/cloud` | `{enabled}`: allow or stop the cloud taking this user's work |
+| `GET` | `/brain/jobs` | The latest jobs, up to 50 |
+| `POST` | `/brain/jobs` | Queue work: `kwami_id`, `task`, optional `title`, `target` (`auto` / `pc` / `cloud`), `difficulty`, `agent_id` |
+| `POST` | `/brain/jobs/{job_id}/cancel` | A queued job here; a running one on its worker's next look |
+| `GET` `POST` | `/brain/agents` | The user's agents; define one (up to 30) |
+| `PUT` `DELETE` | `/brain/agents/{agent_id}` | Change or remove one |
+| `POST` | `/brain/agents/{agent_id}/run` | Queue a job for that agent |
+| `GET` | `/brain/sync` | What the cloud made and its way home to the PC |
+| `POST` | `/brain/sync/{sync_id}/discard` | Leave one in Storage instead of bringing it home, while it waits |
+
+A user has at most 20 jobs queued from the app at once; past that, queueing is a
+429 until some start or are cancelled. A kwami that is not the caller's is a 400
+("Kwami not found"), an agent that is not theirs a 404.
 
 ### Internal
 

@@ -73,7 +73,8 @@ class TestVoiceWebhook:
         with caplog.at_level("WARNING", logger="kwami-api.webhooks"):
             r = await post_twilio(client, VOICE, payload)
         assert "<Reject/>" in r.text
-        assert "unknown number" in caplog.text
+        assert "a number no channel has" in caplog.text
+        assert "5559999" not in caplog.text, "whose number it is stays out of the log"
 
     async def test_a_known_destination_records_the_call(
         self, client, sms_channel, fake_supabase, monkeypatch

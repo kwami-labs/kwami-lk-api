@@ -15,7 +15,7 @@ path the application and the tests already use.
 
 from fastapi import APIRouter
 
-from src.api.routes.memory import analysis, core, graph, ontology
+from src.api.routes.memory import analysis, core, graph, ontology, sessions
 from src.services.memory import (
     DEFAULT_EDGE_TYPES,
     DEFAULT_ENTITY_TYPES,
@@ -31,6 +31,7 @@ router.include_router(core.router)
 router.include_router(graph.router)
 router.include_router(ontology.router)
 router.include_router(analysis.router)
+router.include_router(sessions.router)
 
 __all__ = [
     "DEFAULT_EDGE_TYPES",

@@ -13,21 +13,22 @@ from src.api.routes.memory.schemas import (
     UpdateEdgeRequest,
     UpdateNodeRequest,
 )
+from src.core.errors import failure_kind
 from src.core.security import AuthUser
 from src.services.memory import (
     get_zep_client,
     iter_all_threads,
+    require_edge,
+    require_node,
+    require_nodes,
     thread_belongs_to,
     verify_user_access,
 )
+from src.services.memory.paging import collect
+from src.services.memory.threads import message_row, messages_of, thread_id_of, user_threads
 
 logger = logging.getLogger("kwami-api.memory")
 router = APIRouter()
-
-# How many records are pulled from Zep before slicing a "page" in Python.
-# Endpoints fetch this many regardless of the requested page size, so `total`
-# saturates here and `has_more` is wrong beyond it.
-ZEP_FETCH_LIMIT = 1000
 
 
 @router.get("/debug/{user_id}")
@@ -65,7 +66,8 @@ async def debug_user_memory(
                 if hasattr(edge, "fact")
             ]
     except Exception as e:
-        result["errors"].append(f"graph.search: {str(e)}")
+        logger.warning("Memory debug: graph.search failed: %s", e)
+        result["errors"].append(f"graph.search: {failure_kind(e)}")
 
     # Try graph nodes API
     try:
@@ -74,31 +76,33 @@ async def debug_user_memory(
         if nodes:
             result["node_names"] = [n.name for n in nodes if hasattr(n, "name")]
     except Exception as e:
-        result["errors"].append(f"graph.node: {str(e)}")
+        logger.warning("Memory debug: graph.node failed: %s", e)
+        result["errors"].append(f"graph.node: {failure_kind(e)}")
 
-    # Threads belonging to this user only.
+    # Threads belonging to this user only, from the user's own listing.
     #
     # This endpoint used to return `result["all_threads"]` -- every thread in the
     # Zep project, with its owner's user_id -- to any authenticated caller. That
-    # was a cross-tenant enumeration of the entire user base.
+    # was a cross-tenant enumeration of the entire user base. It also asked for
+    # `thread.get_context`, which zep-cloud does not have, so every thread
+    # carried a `context_error`; the call is `get_user_context`.
     try:
-        async for thread in iter_all_threads(client):
-            thread_id = getattr(thread, "thread_id", None) or getattr(thread, "uuid_", None)
-            thread_user = getattr(thread, "user_id", None)
-            if not thread_belongs_to(thread_id, thread_user, user_id):
-                continue
-            info = {"thread_id": thread_id, "user_id": thread_user}
+        for thread in await user_threads(client, user_id):
+            thread_id = thread_id_of(thread)
+            info = {"thread_id": thread_id, "user_id": getattr(thread, "user_id", None)}
             try:
-                ctx = await client.thread.get_context(thread_id=thread_id)
+                ctx = await client.thread.get_user_context(thread_id=thread_id)
                 if ctx and ctx.context:
                     info["context"] = (
                         ctx.context[:500] + "..." if len(ctx.context) > 500 else ctx.context
                     )
             except Exception as ctx_err:
-                info["context_error"] = str(ctx_err)[:100]
+                logger.warning("Memory debug: context of %s failed: %s", thread_id, ctx_err)
+                info["context_error"] = failure_kind(ctx_err)
             result["threads"].append(info)
     except Exception as e:
-        result["errors"].append(f"thread.list_all: {str(e)}")
+        logger.warning("Memory debug: user.get_threads failed: %s", e)
+        result["errors"].append(f"user.get_threads: {failure_kind(e)}")
 
     return result
 
@@ -111,48 +115,34 @@ async def get_user_facts(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
-    """Get facts stored for a user via graph search (Zep v3) with pagination."""
+    """Get every fact stored for a user, with pagination.
+
+    This used to be a graph search for "user information facts preferences",
+    which returns the 50 edges most similar to that phrase -- not the user's
+    facts. It now lists the graph.
+    """
     verify_user_access(user, user_id)
     try:
-        # Zep v3 stores facts on graph edges - search for them
-        facts_response = await client.graph.search(
-            user_id=user_id,
-            query="user information facts preferences",
-            scope="edges",
-            limit=ZEP_FETCH_LIMIT,
-        )
-        all_facts = []
-        if facts_response and facts_response.edges:
-            all_facts = [
-                edge.fact for edge in facts_response.edges if hasattr(edge, "fact") and edge.fact
-            ]
-
-        # Apply pagination
-        total = len(all_facts)
-        paginated = all_facts[offset : offset + limit]
-        has_more = (offset + limit) < total
-
-        return {
-            "facts": paginated,
-            "count": len(paginated),
-            "total": total,
-            "offset": offset,
-            "limit": limit,
-            "has_more": has_more,
-        }
+        edges = await collect(client.graph.edge.get_by_user_id, user_id)
     except Exception as e:
-        # Check for 404 (user not found)
+        # A user Zep has never seen has no facts yet.
         if "404" in str(e):
-            return {
-                "facts": [],
-                "count": 0,
-                "total": 0,
-                "offset": offset,
-                "limit": limit,
-                "has_more": False,
-            }
-        logger.exception("Failed to fetch facts")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+            edges = []
+        else:
+            logger.exception("Failed to fetch facts")
+            raise HTTPException(status_code=500, detail="Failed to fetch facts") from e
+
+    all_facts = [fact for edge in edges if (fact := getattr(edge, "fact", None))]
+    total = len(all_facts)
+    paginated = all_facts[offset : offset + limit]
+    return {
+        "facts": paginated,
+        "count": len(paginated),
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": (offset + limit) < total,
+    }
 
 
 @router.delete("/{user_id}")
@@ -192,9 +182,13 @@ async def delete_user_memory(
                     deleted["threads"] += 1
                     logger.info("🗑️ Deleted thread: %s", thread_id)
                 except Exception as e:
-                    deleted["errors"].append(f"Failed to delete thread {thread_id}: {str(e)}")
+                    logger.warning("Failed to delete thread %s: %s", thread_id, e)
+                    deleted["errors"].append(
+                        f"Failed to delete thread {thread_id}: {failure_kind(e)}"
+                    )
         except Exception as e:
-            deleted["errors"].append(f"Failed to list threads: {str(e)}")
+            logger.warning("Failed to list threads: %s", e)
+            deleted["errors"].append(f"Failed to list threads: {failure_kind(e)}")
 
         # 2. Delete the user (this also deletes associated graph data in Zep)
         try:
@@ -206,7 +200,8 @@ async def delete_user_memory(
             if "404" in error_msg:
                 deleted["errors"].append(f"User {user_id} not found")
             else:
-                deleted["errors"].append(f"Failed to delete user: {error_msg}")
+                logger.warning("Failed to delete user: %s", e)
+                deleted["errors"].append(f"Failed to delete user: {failure_kind(e)}")
 
         logger.info("🗑️ Deletion complete: %s threads, user=%s", deleted["threads"], deleted["user"])
         return {
@@ -219,7 +214,7 @@ async def delete_user_memory(
 
     except Exception as e:
         logger.exception("Failed to delete user memory")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to delete user memory") from e
 
 
 @router.get("/{user_id}/messages")
@@ -229,89 +224,54 @@ async def get_user_messages(
     client: AsyncZep = Depends(get_zep_client),
     limit: int = Query(100, ge=1, le=500),
 ):
-    """Get conversation messages for a user from their threads/sessions.
+    """The user's most recent messages across sessions, newest first.
 
-    This retrieves actual conversation history stored in Zep threads,
-    which is where chat messages are stored via memory.add().
+    Reads the user's own threads (`user.get_threads`) rather than every thread
+    in the project, newest session first, and stops once it holds `limit`
+    messages: an older session cannot hold a newer message. Each thread's
+    *last* messages are read; this used to read each thread's first `limit`,
+    so a long session showed its opening and hid how it ended.
+
+    `GET /{user_id}/sessions` keeps sessions apart, which is what the panel wants.
     """
     verify_user_access(user, user_id)
     logger.info("💬 Fetching messages for user: %s", user_id)
     try:
-        messages = []
-        sessions = []
-
-        # Get all threads and find ones belonging to this user
-        try:
-            async for t in iter_all_threads(client):
-                thread_id = getattr(t, "thread_id", None) or getattr(t, "uuid_", None)
-                thread_user = getattr(t, "user_id", None)
-
-                # Exact ownership: the substring test returned other tenants'
-                # messages whenever their thread id happened to contain this id.
-                if thread_belongs_to(thread_id, thread_user, user_id):
-                    sessions.append(
-                        {
-                            "thread_id": thread_id,
-                            "user_id": thread_user,
-                            "created_at": str(t.created_at)
-                            if hasattr(t, "created_at") and t.created_at
-                            else None,
-                        }
-                    )
-
-                    # Get messages from this thread (Zep v3: thread.get returns messages)
-                    try:
-                        msgs_response = await client.thread.get(
-                            thread_id=thread_id,
-                            limit=limit,
-                        )
-                        # MessageListResponse has a .messages attribute
-                        msg_list = None
-                        if msgs_response:
-                            if hasattr(msgs_response, "messages"):
-                                msg_list = msgs_response.messages
-                            elif isinstance(msgs_response, list):
-                                msg_list = msgs_response
-
-                        if msg_list:
-                            for msg in msg_list:
-                                messages.append(
-                                    {
-                                        "uuid": msg.uuid if hasattr(msg, "uuid") else None,
-                                        "content": msg.content if hasattr(msg, "content") else None,
-                                        "role": msg.role
-                                        if hasattr(msg, "role")
-                                        else (msg.role_type if hasattr(msg, "role_type") else None),
-                                        "role_type": msg.role_type
-                                        if hasattr(msg, "role_type")
-                                        else None,
-                                        "created_at": str(msg.created_at)
-                                        if hasattr(msg, "created_at") and msg.created_at
-                                        else None,
-                                        "thread_id": thread_id,
-                                    }
-                                )
-                    except Exception as msg_err:
-                        logger.warning(
-                            "💬 Failed to get messages from thread %s: %s", thread_id, msg_err
-                        )
-        except Exception as e:
-            logger.warning("💬 thread.list_all failed: %s", e)
-
-        # Sort messages by created_at (newest first)
-        messages.sort(key=lambda x: x.get("created_at") or "", reverse=True)
-
-        logger.info("💬 Found %s messages across %s sessions", len(messages), len(sessions))
-        return {
-            "messages": messages[:limit],  # Limit total messages
-            "message_count": len(messages),
-            "sessions": sessions,
-            "session_count": len(sessions),
-        }
-
+        threads = await user_threads(client, user_id)
     except Exception as e:
-        logger.exception("Failed to fetch messages")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.warning("💬 user.get_threads failed: %s", e)
+        threads = []
+
+    messages: list[dict] = []
+    sessions = []
+    for thread in threads:
+        thread_id = thread_id_of(thread)
+        sessions.append(
+            {
+                "thread_id": thread_id,
+                "user_id": getattr(thread, "user_id", None),
+                "created_at": str(thread.created_at)
+                if getattr(thread, "created_at", None)
+                else None,
+            }
+        )
+        if len(messages) >= limit:
+            continue
+        try:
+            response = await client.thread.get(thread_id=thread_id, lastn=limit)
+        except Exception as msg_err:
+            logger.warning("💬 Failed to get messages from thread %s: %s", thread_id, msg_err)
+            continue
+        messages.extend(message_row(message, thread_id) for message in messages_of(response))
+
+    messages.sort(key=lambda m: m.get("created_at") or "", reverse=True)
+    logger.info("💬 Found %s messages across %s sessions", len(messages), len(sessions))
+    return {
+        "messages": messages[:limit],
+        "message_count": len(messages),
+        "sessions": sessions,
+        "session_count": len(sessions),
+    }
 
 
 @router.delete("/{user_id}/edge/{edge_uuid}")
@@ -326,6 +286,7 @@ async def delete_edge(
     This permanently removes the fact/relationship from memory.
     """
     verify_user_access(user, user_id)
+    await require_edge(client, user_id, edge_uuid)
     logger.info("🗑️ Deleting edge %s for user: %s", edge_uuid, user_id)
 
     try:
@@ -337,7 +298,7 @@ async def delete_edge(
         if "404" in error_msg:
             raise HTTPException(status_code=404, detail=f"Edge {edge_uuid} not found") from e
         logger.exception("Failed to delete edge")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to delete edge") from e
 
 
 @router.delete("/{user_id}/node/{node_uuid}")
@@ -352,6 +313,7 @@ async def delete_node(
     Note: This will also delete all edges connected to this node.
     """
     verify_user_access(user, user_id)
+    await require_node(client, user_id, node_uuid)
     logger.info("🗑️ Deleting node %s for user: %s", node_uuid, user_id)
 
     try:
@@ -363,7 +325,7 @@ async def delete_node(
         if "404" in error_msg:
             raise HTTPException(status_code=404, detail=f"Node {node_uuid} not found") from e
         logger.exception("Failed to delete node")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to delete node") from e
 
 
 @router.patch("/{user_id}/edge/{edge_uuid}")
@@ -374,16 +336,24 @@ async def update_edge(
     user: Annotated[AuthUser, Depends(require_auth)],
     client: AsyncZep = Depends(get_zep_client),
 ):
-    """Update a specific edge (fact/relationship) in the knowledge graph.
+    """Update a fact in place: its text, relation name or validity window.
 
-    Strategy: fetch existing edge, delete it, recreate via add_fact_triple
-    with the updated fields. Only provided fields are changed.
+    Zep updates an edge where it stands, so it keeps its uuid, its episodes and
+    its attributes. Only moving a fact to other nodes still means recreating it,
+    since an edge's endpoints cannot change: the new edge is written first and
+    the old one removed after, so a failure leaves the fact where it was.
     """
     verify_user_access(user, user_id)
+    await require_edge(client, user_id, edge_uuid)
+    # The new endpoints are written into this user's graph, so they must be its own.
+    await require_nodes(
+        client,
+        user_id,
+        [uuid for uuid in (body.source_node_uuid, body.target_node_uuid) if uuid],
+    )
     logger.info("✏️ Updating edge %s for user: %s", edge_uuid, user_id)
 
     try:
-        # 1. Fetch the existing edge
         try:
             old_edge = await client.graph.edge.get(uuid_=edge_uuid)
         except Exception as e:
@@ -391,75 +361,64 @@ async def update_edge(
                 raise HTTPException(status_code=404, detail=f"Edge {edge_uuid} not found") from e
             raise
 
-        # 2. Build the updated fields (merge old + new)
-        new_fact = body.fact if body.fact is not None else (old_edge.fact or "related")
-        new_name = body.name if body.name is not None else (old_edge.name or "RELATED_TO")
-        new_source = (
-            body.source_node_uuid
-            if body.source_node_uuid is not None
-            else old_edge.source_node_uuid
-        )
-        new_target = (
-            body.target_node_uuid
-            if body.target_node_uuid is not None
-            else old_edge.target_node_uuid
-        )
-        new_valid_at = (
-            body.valid_at
-            if body.valid_at is not None
-            else (
-                str(old_edge.valid_at)
-                if hasattr(old_edge, "valid_at") and old_edge.valid_at
-                else None
-            )
-        )
-        new_invalid_at = (
-            body.invalid_at
-            if body.invalid_at is not None
-            else (
-                str(old_edge.invalid_at)
-                if hasattr(old_edge, "invalid_at") and old_edge.invalid_at
-                else None
-            )
-        )
-
+        old_source = getattr(old_edge, "source_node_uuid", None)
+        old_target = getattr(old_edge, "target_node_uuid", None)
+        new_source = body.source_node_uuid or old_source
+        new_target = body.target_node_uuid or old_target
         if not new_source or not new_target:
             raise HTTPException(
                 status_code=400, detail="Edge must have both source and target node UUIDs"
             )
 
-        # 3. Delete the old edge
-        await client.graph.edge.delete(uuid_=edge_uuid)
-        logger.info("✏️ Deleted old edge: %s", edge_uuid)
+        changes = {
+            name: value
+            for name, value in (
+                ("fact", body.fact),
+                ("name", body.name),
+                ("valid_at", body.valid_at),
+                ("invalid_at", body.invalid_at),
+            )
+            if value is not None
+        }
 
-        # 4. Recreate via add_fact_triple
+        if (new_source, new_target) == (old_source, old_target):
+            updated = await client.graph.edge.update(uuid_=edge_uuid, **changes)
+            logger.info("✏️ Updated edge in place: %s", edge_uuid)
+            return {
+                "success": True,
+                "old_edge_uuid": edge_uuid,
+                "new_edge_uuid": edge_uuid,
+                "fact": getattr(updated, "fact", None) or changes.get("fact", old_edge.fact),
+                "name": getattr(updated, "name", None) or changes.get("name", old_edge.name),
+                "source_node_uuid": new_source,
+                "target_node_uuid": new_target,
+            }
+
         triple_kwargs = {
-            "fact": new_fact,
-            "fact_name": new_name,
+            "fact": changes.get("fact", getattr(old_edge, "fact", None) or "related"),
+            "fact_name": changes.get("name", getattr(old_edge, "name", None) or "RELATED_TO"),
             "source_node_uuid": new_source,
             "target_node_uuid": new_target,
             "user_id": user_id,
         }
-        if new_valid_at:
-            triple_kwargs["valid_at"] = new_valid_at
-        if new_invalid_at:
-            triple_kwargs["invalid_at"] = new_invalid_at
+        for field in ("valid_at", "invalid_at"):
+            value = changes.get(field) or getattr(old_edge, field, None)
+            if value:
+                triple_kwargs[field] = str(value)
+        attributes = getattr(old_edge, "attributes", None)
+        if attributes:
+            triple_kwargs["edge_attributes"] = dict(attributes)
 
         result = await client.graph.add_fact_triple(**triple_kwargs)
-
-        new_edge_uuid = None
-        if result and hasattr(result, "edge_uuid"):
-            new_edge_uuid = result.edge_uuid
-        elif result and hasattr(result, "uuid_"):
-            new_edge_uuid = result.uuid_
-
-        logger.info("✏️ Recreated edge as: %s", new_edge_uuid)
+        new_edge_uuid = getattr(result, "edge_uuid", None) or getattr(result, "uuid_", None)
+        await client.graph.edge.delete(uuid_=edge_uuid)
+        logger.info("✏️ Moved edge %s to %s", edge_uuid, new_edge_uuid)
         return {
             "success": True,
             "old_edge_uuid": edge_uuid,
             "new_edge_uuid": new_edge_uuid,
-            "fact": new_fact,
-            "name": new_name,
+            "fact": triple_kwargs["fact"],
+            "name": triple_kwargs["fact_name"],
             "source_node_uuid": new_source,
             "target_node_uuid": new_target,
         }
@@ -468,7 +427,7 @@ async def update_edge(
         raise
     except Exception as e:
         logger.exception("Failed to update edge")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to update edge") from e
 
 
 @router.patch("/{user_id}/node/{node_uuid}")
@@ -479,116 +438,45 @@ async def update_node(
     user: Annotated[AuthUser, Depends(require_auth)],
     client: AsyncZep = Depends(get_zep_client),
 ):
-    """Update a specific node (entity) in the knowledge graph.
+    """Rename an entity, rewrite its summary or change its labels, in place.
 
-    Strategy: fetch existing node and its edges, delete the node (which also
-    deletes connected edges), then recreate node + all edges via add_fact_triple
-    with the updated node fields.
+    This used to delete the node and rebuild its edges from
+    `graph.node.get_edges` -- which under-reports badly (0 of a live node's 9
+    edges), so renaming an entity silently destroyed most of its facts and gave
+    it a new uuid the app did not know about. Zep updates a node where it
+    stands, edges and all. Labels were accepted and ignored; they now apply.
     """
     verify_user_access(user, user_id)
+    await require_node(client, user_id, node_uuid)
     logger.info("✏️ Updating node %s for user: %s", node_uuid, user_id)
 
-    try:
-        # 1. Fetch the existing node
-        try:
-            old_node = await client.graph.node.get(uuid_=node_uuid)
-        except Exception as e:
-            if "404" in str(e):
-                raise HTTPException(status_code=404, detail=f"Node {node_uuid} not found") from e
-            raise
-
-        # 2. Fetch all edges connected to this node
-        try:
-            connected_edges = await client.graph.node.get_edges(node_uuid=node_uuid)
-        except Exception:
-            connected_edges = []
-
-        # 3. Build updated node fields
-        new_name = body.name if body.name is not None else (old_node.name or "Unknown")
-        new_summary = (
-            body.summary if body.summary is not None else getattr(old_node, "summary", None)
+    changes = {
+        name: value
+        for name, value in (
+            ("name", body.name),
+            ("summary", body.summary),
+            ("labels", body.labels),
         )
+        if value is not None
+    }
+    if not changes:
+        raise HTTPException(status_code=400, detail="Nothing to update")
 
-        # 4. Delete the old node (this cascades to edges)
-        await client.graph.node.delete(uuid_=node_uuid)
-        logger.info("✏️ Deleted old node: %s (had %s edges)", node_uuid, len(connected_edges or []))
-
-        # 5. Recreate the node + edges via add_fact_triple
-        new_node_uuid = None
-        recreated_edges = 0
-
-        if connected_edges:
-            for edge in connected_edges:
-                edge_source = getattr(edge, "source_node_uuid", None)
-                edge_target = getattr(edge, "target_node_uuid", None)
-                edge_fact = getattr(edge, "fact", "related")
-                edge_name = getattr(edge, "name", "RELATED_TO")
-
-                triple_kwargs = {
-                    "fact": edge_fact or "related",
-                    "fact_name": edge_name or "RELATED_TO",
-                    "user_id": user_id,
-                }
-
-                # Determine which side of the edge is the updated node
-                if edge_source == node_uuid:
-                    triple_kwargs["source_node_name"] = new_name
-                    if new_summary:
-                        triple_kwargs["source_node_summary"] = new_summary
-                    triple_kwargs["target_node_uuid"] = edge_target
-                elif edge_target == node_uuid:
-                    triple_kwargs["source_node_uuid"] = edge_source
-                    triple_kwargs["target_node_name"] = new_name
-                    if new_summary:
-                        triple_kwargs["target_node_summary"] = new_summary
-                else:
-                    continue
-
-                # Add temporal data if available
-                if hasattr(edge, "valid_at") and edge.valid_at:
-                    triple_kwargs["valid_at"] = str(edge.valid_at)
-                if hasattr(edge, "invalid_at") and edge.invalid_at:
-                    triple_kwargs["invalid_at"] = str(edge.invalid_at)
-
-                try:
-                    result = await client.graph.add_fact_triple(**triple_kwargs)
-                    recreated_edges += 1
-                    # Capture the new node UUID from the first recreated edge
-                    if new_node_uuid is None and result:
-                        if edge_source == node_uuid and hasattr(result, "source_node_uuid"):
-                            new_node_uuid = result.source_node_uuid
-                        elif edge_target == node_uuid and hasattr(result, "target_node_uuid"):
-                            new_node_uuid = result.target_node_uuid
-                except Exception as triple_err:
-                    logger.warning("✏️ Failed to recreate edge: %s", triple_err)
-        else:
-            # Node has no edges, create a standalone fact to recreate it
-            try:
-                result = await client.graph.add_fact_triple(
-                    fact=f"{new_name} exists",
-                    fact_name="EXISTS",
-                    source_node_name=new_name,
-                    source_node_summary=new_summary or "",
-                    target_node_name=new_name,
-                    user_id=user_id,
-                )
-                if result and hasattr(result, "source_node_uuid"):
-                    new_node_uuid = result.source_node_uuid
-            except Exception as triple_err:
-                logger.warning("✏️ Failed to recreate standalone node: %s", triple_err)
-
-        logger.info("✏️ Recreated node as: %s with %s edges", new_node_uuid, recreated_edges)
-        return {
-            "success": True,
-            "old_node_uuid": node_uuid,
-            "new_node_uuid": new_node_uuid,
-            "name": new_name,
-            "summary": new_summary,
-            "recreated_edges": recreated_edges,
-        }
-
-    except HTTPException:
-        raise
+    try:
+        updated = await client.graph.node.update(uuid_=node_uuid, **changes)
     except Exception as e:
+        if "404" in str(e):
+            raise HTTPException(status_code=404, detail=f"Node {node_uuid} not found") from e
         logger.exception("Failed to update node")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to update node") from e
+
+    logger.info("✏️ Updated node in place: %s", node_uuid)
+    return {
+        "success": True,
+        "old_node_uuid": node_uuid,
+        "new_node_uuid": node_uuid,
+        "name": getattr(updated, "name", None) or changes.get("name"),
+        "summary": getattr(updated, "summary", None) or changes.get("summary"),
+        "labels": list(getattr(updated, "labels", None) or changes.get("labels") or []),
+        "recreated_edges": 0,
+    }

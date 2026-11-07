@@ -12,9 +12,13 @@ than assumed:
 * the set of routes is unchanged -- nothing was dropped or duplicated;
 * every pair of paths that can match the same request keeps its relative order.
 
-The only such pair is `GET /debug/{user_id}` and `GET /{user_id}/facts`, which
-both match `/debug/facts`. Everything else differs in segment count or in a
-literal segment, so their order cannot change what matches.
+The overlapping pairs are `GET /debug/{user_id}` with `GET /{user_id}/facts`,
+which both match `/debug/facts`, and with `GET /{user_id}/status`, which both
+match `/debug/status`; the debug route is first in both. Everything else differs
+in segment count or in a literal segment, so their order cannot change what
+matches.
+
+The session routes were added after the split, at the end.
 """
 
 from __future__ import annotations
@@ -65,6 +69,10 @@ EXPECTED = [
     ("POST", "/{user_id}/reorganize/apply"),
     ("POST", "/{user_id}/reorganize"),
     ("POST", "/{user_id}/connect"),
+    ("GET", "/{user_id}/sessions"),
+    ("GET", "/{user_id}/sessions/{thread_id}/messages"),
+    ("GET", "/{user_id}/sessions/{thread_id}/summary"),
+    ("GET", "/{user_id}/status"),
 ]
 
 
@@ -74,7 +82,7 @@ def test_every_route_is_still_mounted():
 
 def test_none_were_lost_or_duplicated():
     table = _flatten(router)
-    assert len(table) == 29
+    assert len(table) == 33
     assert len(set(table)) == len(table)
 
 
@@ -87,6 +95,7 @@ def test_the_overlapping_pair_keeps_its_order():
     `/debug/facts`, and whichever is registered first wins."""
     table = _flatten(router)
     assert table.index(("GET", "/debug/{user_id}")) < table.index(("GET", "/{user_id}/facts"))
+    assert table.index(("GET", "/debug/{user_id}")) < table.index(("GET", "/{user_id}/status"))
 
 
 @pytest.mark.anyio

@@ -102,22 +102,98 @@ class Recorder:
         return bool(self.calls)
 
 
+#: What Zep returns per listing call at most, whatever `limit` asks for.
+ZEP_PAGE = 50
+
+
+def _uuid(record: Any) -> str | None:
+    return getattr(record, "uuid_", None) or getattr(record, "uuid", None)
+
+
+class Ownership:
+    """Which uuids the test user's graph holds, for the routes' ownership probes.
+
+    By default the user owns every uuid, so a test about something else is not
+    tripped by the check. `foreign` uuids belong to another tenant; `edgeless`
+    nodes are the user's but have no edges, so only the node listing finds them.
+    """
+
+    def __init__(self):
+        self.foreign: set[str] = set()
+        self.edgeless: set[str] = set()
+        #: The edges a node has, as the connected-node listing reports them.
+        #: A node not named here has one edge, to the user node.
+        self.edges: dict[str, list[Any]] = {}
+        self.probes: list[dict] = []
+        self.error: Exception | None = None
+
+    def edges_of(self, uuid: str) -> list[Any]:
+        if uuid in self.foreign or uuid in self.edgeless:
+            return []
+        if uuid in self.edges:
+            return list(self.edges[uuid])
+        return [edge(uuid=f"e-{uuid}", source=uuid, target="n-user")]
+
+    def answer(self, filters: Any) -> list[Any]:
+        if self.error is not None:
+            raise self.error
+        edge_uuids = getattr(filters, "edge_uuids", None) or []
+        connected = getattr(filters, "connected_node_uuids", None) or []
+        found = [edge(uuid=uuid) for uuid in edge_uuids if uuid not in self.foreign]
+        seen: set[str] = set()
+        for uuid in connected:
+            for record in self.edges_of(uuid):
+                if _uuid(record) not in seen:
+                    seen.add(_uuid(record))
+                    found.append(record)
+        return found
+
+
+class Listing(Recorder):
+    """`graph.{node,edge}.get_by_user_id`: Zep's paging over a scripted list.
+
+    Like Zep, a call returns at most 50 records and continues after the record
+    named by `uuid_cursor`. A call with `filters` is an ownership probe and is
+    answered by `Ownership` instead, recorded apart so tests that count listing
+    calls do not see it.
+    """
+
+    def __init__(self, ownership: Ownership):
+        super().__init__([])
+        self.ownership = ownership
+
+    async def __call__(self, *args, **kwargs):
+        if kwargs.get("filters") is not None:
+            self.ownership.probes.append(kwargs)
+            records = self.ownership.answer(kwargs["filters"])
+        else:
+            records = await super().__call__(*args, **kwargs)
+        if not isinstance(records, list):
+            return records
+        cursor = kwargs.get("uuid_cursor")
+        if cursor:
+            after = next((i for i, r in enumerate(records) if _uuid(r) == cursor), None)
+            records = [] if after is None else records[after + 1 :]
+        return records[:ZEP_PAGE]
+
+
 class FakeZep:
     """Only the surface `memory.py` actually touches."""
 
     def __init__(self):
+        self.ownership = Ownership()
         self.graph = SimpleNamespace(
             search=Recorder(SimpleNamespace(edges=[], nodes=[], episodes=[])),
             add=Recorder(SimpleNamespace(uuid_="ep-1")),
             node=SimpleNamespace(
-                get_by_user_id=Recorder([]),
+                get_by_user_id=Listing(self.ownership),
                 get_edges=Recorder([]),
                 get=Recorder(node()),
                 delete=Recorder(None),
                 update=Recorder(None),
             ),
             edge=SimpleNamespace(
-                get_by_user_id=Recorder([]),
+                get_by_user_id=Listing(self.ownership),
                 get=Recorder(edge()),
                 delete=Recorder(None),
                 update=Recorder(None),
@@ -140,10 +216,19 @@ class FakeZep:
         self.thread = SimpleNamespace(
             list_all=Recorder(SimpleNamespace(threads=[], total_count=0)),
             get_context=Recorder(SimpleNamespace(context="ctx")),
+            get_user_context=Recorder(SimpleNamespace(context="ctx")),
+            get_summary=Recorder(
+                SimpleNamespace(
+                    summary="They talked about the trip.",
+                    last_summarized_at="2026-03-02T00:00:00Z",
+                    created_at="2026-03-01T00:00:00Z",
+                )
+            ),
             delete=Recorder(None),
             get=Recorder(SimpleNamespace(messages=[])),
         )
         self.user = SimpleNamespace(
+            get_threads=Recorder([]),
             delete=Recorder(None),
             get=Recorder(SimpleNamespace(first_name=None, last_name=None, email=None, metadata={})),
             update=Recorder(None),

@@ -203,9 +203,22 @@ def _extract_domain(address: str) -> str:
 
 
 _AMOUNT_RE = re.compile(r"\$\s?([\d,]+\.?\d{0,2})")
+# A month's name is at most 10 letters ("septiembre"). `\w+` unbounded and unanchored
+# tried every start of a long word to its end: quadratic on a crafted email.
 _DATE_RE = re.compile(
-    r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\w+ \d{1,2},? \d{4})",
+    r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\b\w{3,10} \d{1,2},? \d{4})",
 )
+# Every address, in one pass; the tracking one is picked after. Matching
+# `https?://\S+track\S*` directly backtracked over each address with no "track" in it.
+_URL_RE = re.compile(r"https?://\S+", re.I)
+
+
+def _tracking_url(text: str) -> str | None:
+    """The first address that mentions tracking."""
+    for match in _URL_RE.finditer(text):
+        if "track" in match.group(0).lower():
+            return match.group(0)
+    return None
 
 
 def _extract_card_data(
@@ -238,9 +251,9 @@ def _extract_card_data(
         data["event_name"] = subject[:120]
 
     elif category == SHOPPING:
-        tracking = re.search(r"https?://[^\s]+track[^\s]*", combined, re.I)
+        tracking = _tracking_url(combined)
         if tracking:
-            data["tracking_url"] = tracking.group(0)
+            data["tracking_url"] = tracking
         data["summary"] = subject[:120]
 
     return data

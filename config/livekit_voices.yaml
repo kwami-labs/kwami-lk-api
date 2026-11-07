@@ -1,5 +1,5 @@
 # LiveKit TTS & Realtime Voices Configuration
-# Last updated: 2026-11-02
+# Last updated: 2026-11-06
 #
 # This file contains voice definitions for providers that don't expose
 # voice types in the LiveKit SDK. Cartesia, Deepgram and Rime are everything each
@@ -21,6 +21,16 @@ tts:
   # Cartesia Voices
   # ===========================================================================
   cartesia:
+    # Designed in LiveKit Cloud on Cartesia Sonic 3.5 (a "v_" id, not a Cartesia
+    # UUID). LiveKit Inference speaks it: the agent and the voice sample use
+    # cartesia/sonic-3.5 with no Cartesia key. Jarvis's main voice since 2026-11-06.
+    - id: "v_ZMPWZvfoRpsC"
+      name: "Jarvis - Sonic 3.5"
+      category: "LiveKit"
+      gender: male
+      language: es-ES
+      description: "Voz de Jarvis diseñada en LiveKit Cloud: mayordomo grave, sereno y preciso, en castellano de España."
+
     - id: "d3a5be1f-f963-4c85-bfcc-c3b20903d967"
       name: "Adel - Soft Anchor"
       category: "Male AR"

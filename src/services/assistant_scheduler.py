@@ -270,21 +270,20 @@ async def fire(task: dict[str, Any], now: datetime) -> bool:
         return False
     user_id, kwami_id = task["user_id"], task["kwami_id"]
     if task["kind"] == "work":
-        await (
-            get_supabase_admin()
-            .table("brain_jobs")
-            .insert(
-                {
-                    "user_id": user_id,
-                    "kwami_id": kwami_id,
-                    "source": "schedule",
-                    "schedule_task_id": task["id"],
-                    "title": task["title"],
-                    "task": task["notes"],
-                }
-            )
-            .execute()
-        )
+        job: dict[str, Any] = {
+            "user_id": user_id,
+            "kwami_id": kwami_id,
+            "source": "schedule",
+            "schedule_task_id": task["id"],
+            "title": task["title"],
+            "task": task["notes"],
+        }
+        # Named only when set (migration 029): the rest queues as it always did.
+        if task.get("agent_id"):
+            job["agent_id"] = task["agent_id"]
+        if task.get("target") and task["target"] != "auto":
+            job["target"] = task["target"]
+        await get_supabase_admin().table("brain_jobs").insert(job).execute()
         return True
     if task["kind"] == "report":
         due = datetime.fromisoformat(task["next_run_at"].replace("Z", "+00:00"))
@@ -301,7 +300,10 @@ async def fire(task: dict[str, Any], now: datetime) -> bool:
 
 
 async def notify_finished_work() -> int:
-    """Tell the user how scheduled work ended. Calls speak their own results.
+    """Tell the user how scheduled work, and work asked from the app, ended.
+
+    Calls speak their own results. Work asked from the app has nobody on the line
+    either -- typically it was the phone, with the PC off and the cloud doing it.
 
     Stamped before sending, as `_claim` does: a machine that dies in between loses
     one notice rather than repeating it, and the result stays in the next greeting.
@@ -310,7 +312,7 @@ async def notify_finished_work() -> int:
         get_supabase_admin()
         .table("brain_jobs")
         .select("id, user_id, kwami_id, schedule_task_id, title, status, result")
-        .eq("source", "schedule")
+        .in_("source", ["schedule", "app"])
         .is_("notified_at", "null")
         .in_("status", ["done", "failed"])
         .limit(MAX_DUE_PER_TICK)

@@ -75,6 +75,7 @@ _TABLES_WITH_UUID_PK = frozenset(
         "usage_reports",
         "livekit_sessions",
         "browser_contexts",
+        "jarvis_site_rules",
     }
 )
 
@@ -92,6 +93,7 @@ _TABLES_WITH_UPDATED_AT = frozenset(
         "wallet_funding_intents",
         "wallet_balances_cache",
         "browser_contexts",
+        "jarvis_site_rules",
     }
 )
 
@@ -121,6 +123,7 @@ GENERATED_COLUMNS: dict[str, dict[str, Any]] = {
 # against pg_indexes so the two cannot drift again.
 DEFAULT_UNIQUE_INDEXES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("user_credits", ("user_id",)),
+    ("jarvis_site_rules", ("user_id", "pattern")),
     ("kwami_channels", ("provider", "kind", "phone_number")),
     ("kwami_call_events", ("provider_call_sid",)),
     ("kwami_message_events", ("provider_message_sid",)),

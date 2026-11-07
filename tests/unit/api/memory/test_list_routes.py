@@ -26,8 +26,37 @@ class TestEdges:
         ]
         body = (await mem.get(self.PATH, params={"limit": 2, "offset": 1})).json()
         assert [e["uuid"] for e in body["edges"]] == ["e-1", "e-2"]
-        assert body["total"] == 5
+        # Zep gives no count: until the end is reached `total` is a lower bound.
+        assert body["total"] == 4
+        assert body["total_is_exact"] is False
         assert body["has_more"] is True
+        assert body["next_cursor"] == "e-2"
+
+    async def test_edges_past_one_zep_page_are_returned(self, mem, zep):
+        """Zep answers 50 per call whatever `limit` says; this route stopped there."""
+        zep.graph.edge.get_by_user_id.result = [
+            edge(uuid=f"e-{i:03d}", fact=f"fact {i}") for i in range(120)
+        ]
+        body = (await mem.get(self.PATH, params={"limit": 100})).json()
+        assert len(body["edges"]) == 100
+        assert body["has_more"] is True
+
+    async def test_the_cursor_continues_a_page(self, mem, zep):
+        zep.graph.edge.get_by_user_id.result = [
+            edge(uuid=f"e-{i:03d}", fact=f"fact {i}") for i in range(120)
+        ]
+        first = (await mem.get(self.PATH, params={"limit": 100})).json()
+        second = (
+            await mem.get(
+                self.PATH,
+                params={"limit": 100, "cursor": first["next_cursor"], "offset": 100},
+            )
+        ).json()
+        assert [e["uuid"] for e in second["edges"]] == [f"e-{i}" for i in range(100, 120)]
+        assert second["has_more"] is False
+        assert second["next_cursor"] is None
+        assert second["total"] == 120
+        assert second["total_is_exact"] is True
 
     async def test_every_temporal_field_is_serialised(self, mem, zep):
         zep.graph.edge.get_by_user_id.result = [
@@ -99,12 +128,13 @@ class TestEdges:
         zep.graph.search.result = SimpleNamespace(edges=[bare])
         assert (await mem.get(self.PATH)).json()["edges"][0]["uuid"] is None
 
-    async def test_both_paths_failing_yields_an_empty_result(self, mem, zep, caplog):
+    async def test_both_paths_failing_is_a_502(self, mem, zep, caplog):
+        """Not an empty page: the panel would read that as an empty memory."""
         zep.graph.edge.get_by_user_id.error = RuntimeError("edge api down")
         zep.graph.search.error = RuntimeError("search down")
         with caplog.at_level("WARNING", logger="kwami-api.memory"):
-            body = (await mem.get(self.PATH)).json()
-        assert body["edges"] == []
+            r = await mem.get(self.PATH)
+        assert r.status_code == 502
         assert "Fallback graph.search also failed" in caplog.text
 
     async def test_an_empty_search_fallback(self, mem, zep):
@@ -130,7 +160,18 @@ class TestNodes:
         body = (await mem.get(self.PATH, params={"limit": 2, "offset": 3})).json()
         assert [n["uuid"] for n in body["nodes"]] == ["n-3", "n-4"]
         assert body["total"] == 5
+        assert body["total_is_exact"] is True
         assert body["has_more"] is False
+
+    async def test_nodes_past_one_zep_page_are_returned(self, mem, zep):
+        zep.graph.node.get_by_user_id.result = [node(uuid=f"n-{i:03d}") for i in range(70)]
+        body = (await mem.get(self.PATH, params={"limit": 500})).json()
+        assert len(body["nodes"]) == 70
+        assert body["total"] == 70
+
+    async def test_the_degree_is_passed_through(self, mem, zep):
+        zep.graph.node.get_by_user_id.result = [node(degree=7)]
+        assert (await mem.get(self.PATH)).json()["nodes"][0]["degree"] == 7
 
     async def test_a_node_is_fully_serialised(self, mem, zep):
         zep.graph.node.get_by_user_id.result = [
@@ -163,11 +204,11 @@ class TestNodes:
         zep.graph.node.get_by_user_id.result = [node(created_at=None)]
         assert (await mem.get(self.PATH)).json()["nodes"][0]["created_at"] is None
 
-    async def test_a_failing_fetch_yields_an_empty_result(self, mem, zep, caplog):
+    async def test_a_failing_fetch_is_a_502(self, mem, zep, caplog):
         zep.graph.node.get_by_user_id.error = RuntimeError("nodes down")
         with caplog.at_level("WARNING", logger="kwami-api.memory"):
-            body = (await mem.get(self.PATH)).json()
-        assert body["nodes"] == []
+            r = await mem.get(self.PATH)
+        assert r.status_code == 502
         assert "graph.node.get_by_user_id failed" in caplog.text
 
     async def test_a_none_response(self, mem, zep):
@@ -179,27 +220,24 @@ class TestNodes:
 
 
 class TestOntology:
-    """`graph.get_ontology` does not exist on the installed Zep client.
+    """`GET /ontology` asked for `graph.get_ontology`, which zep-cloud does not
+    have, and answered 500 every time; it reads `graph.list_entity_types`.
 
-    `AsyncGraphClient` exposes `set_ontology` but no getter, so `GET /ontology`
-    raises AttributeError, the broad `except Exception` catches it, "404" is not
-    in the message, and every caller gets a 500. The route cannot succeed today;
-    `test_the_getter_does_not_exist_on_the_real_client_known_bug` pins that, and
-    the rest of these cover the handler through the fake so the reshaping logic
-    is still exercised and stays correct once the getter is restored.
+    Setting an ontology marks it "custom" on the user's Zep metadata, which the
+    agent never overwrites with its defaults; a reset clears the mark.
     """
 
     PATH = f"/memory/{USER_ID}/ontology"
 
-    async def test_the_getter_does_not_exist_on_the_real_client_known_bug(self):
+    async def test_the_real_client_has_the_listing_the_route_uses(self):
         from zep_cloud.client import AsyncZep
 
         graph = AsyncZep(api_key="x").graph
-        assert not hasattr(graph, "get_ontology"), "invert this test when it returns"
-        assert hasattr(graph, "set_ontology"), "the setter does exist, which is the asymmetry"
+        assert hasattr(graph, "list_entity_types")
+        assert not hasattr(graph, "get_ontology")
 
     async def test_a_configured_ontology_is_returned(self, mem, zep):
-        zep.graph.get_ontology.result = SimpleNamespace(
+        zep.graph.list_entity_types.result = SimpleNamespace(
             entity_types=[SimpleNamespace(name="Preference", description="d")],
             edge_types=[SimpleNamespace(name="KNOWS", description="k")],
         )
@@ -207,27 +245,35 @@ class TestOntology:
         assert body["entity_types"] == [{"name": "Preference", "description": "d"}]
         assert body["edge_types"] == [{"name": "KNOWS", "description": "k"}]
         assert "is_default" not in body
+        assert zep.graph.list_entity_types.last == {"user_id": USER_ID}
 
-    async def test_an_ontology_with_null_type_lists(self, mem, zep):
-        zep.graph.get_ontology.result = SimpleNamespace(entity_types=None, edge_types=None)
+    async def test_an_ontology_with_null_type_lists_is_the_default(self, mem, zep):
+        zep.graph.list_entity_types.result = SimpleNamespace(entity_types=None, edge_types=None)
+        body = (await mem.get(self.PATH)).json()
+        assert body["is_default"] is True
+
+    async def test_only_edge_types_is_still_configured(self, mem, zep):
+        zep.graph.list_entity_types.result = SimpleNamespace(
+            entity_types=None, edge_types=[SimpleNamespace(name="KNOWS", description="k")]
+        )
         body = (await mem.get(self.PATH)).json()
         assert body["entity_types"] == []
-        assert body["edge_types"] == []
+        assert body["edge_types"] == [{"name": "KNOWS", "description": "k"}]
 
     async def test_no_ontology_falls_back_to_the_defaults(self, mem, zep):
-        zep.graph.get_ontology.result = None
+        zep.graph.list_entity_types.result = None
         body = (await mem.get(self.PATH)).json()
         assert body["is_default"] is True
         assert body["entity_types"] == DEFAULT_ENTITY_TYPES
 
     async def test_a_404_also_falls_back_to_the_defaults(self, mem, zep):
-        zep.graph.get_ontology.error = RuntimeError("status 404")
+        zep.graph.list_entity_types.error = RuntimeError("status 404")
         body = (await mem.get(self.PATH)).json()
         assert body["is_default"] is True
         assert body["edge_types"] == DEFAULT_EDGE_TYPES
 
     async def test_another_failure_is_a_500(self, mem, zep, caplog):
-        zep.graph.get_ontology.error = RuntimeError("zep down")
+        zep.graph.list_entity_types.error = RuntimeError("zep down")
         with caplog.at_level("ERROR", logger="kwami-api.memory"):
             assert (await mem.get(self.PATH)).status_code == 500
         assert "Failed to fetch ontology" in caplog.text
@@ -248,6 +294,22 @@ class TestOntology:
         assert call["user_ids"] == [USER_ID]
         assert "Preference" in call["entities"]
         assert "KNOWS" in call["edges"]
+
+    async def test_a_set_ontology_is_marked_custom_keeping_other_metadata(self, mem, zep):
+        """The agent applies its defaults at session start unless this mark is there."""
+        zep.user.get.result = SimpleNamespace(metadata={"kwami_id": "k-1"})
+        await mem.put(self.PATH, json={"entity_types": [], "edge_types": []})
+        assert zep.user.update.last == {
+            "user_id": USER_ID,
+            "metadata": {"kwami_id": "k-1", "kwami_ontology": "custom"},
+        }
+
+    async def test_a_failed_mark_does_not_fail_the_change(self, mem, zep, caplog):
+        zep.user.update.error = RuntimeError("zep busy")
+        with caplog.at_level("WARNING", logger="kwami-api.memory"):
+            r = await mem.put(self.PATH, json={"entity_types": [], "edge_types": []})
+        assert r.status_code == 200
+        assert "Could not mark the ontology" in caplog.text
 
     async def test_setting_an_empty_ontology(self, mem, zep):
         r = await mem.put(self.PATH, json={"entity_types": [], "edge_types": []})
@@ -271,6 +333,7 @@ class TestOntology:
         assert set(zep.graph.set_ontology.last["entities"]) == {
             e["name"] for e in DEFAULT_ENTITY_TYPES
         }
+        assert zep.user.update.last["metadata"]["kwami_ontology"] is None
 
     async def test_a_reset_failure_is_a_500(self, mem, zep, caplog):
         zep.graph.set_ontology.error = RuntimeError("rejected")
@@ -423,11 +486,17 @@ class TestEntitiesByType:
         zep.graph.node.get_by_user_id.result = None
         assert (await mem.get(self.path())).json()["total"] == 0
 
-    async def test_a_failing_fetch_is_a_500(self, mem, zep, caplog):
+    async def test_a_failing_fetch_is_a_502(self, mem, zep, caplog):
         zep.graph.node.get_by_user_id.error = RuntimeError("nodes down")
-        with caplog.at_level("ERROR", logger="kwami-api.memory"):
-            assert (await mem.get(self.path())).status_code == 500
-        assert "Failed to fetch entities by type" in caplog.text
+        with caplog.at_level("WARNING", logger="kwami-api.memory"):
+            assert (await mem.get(self.path())).status_code == 502
+        assert "graph.node.get_by_user_id failed" in caplog.text
+
+    async def test_entities_past_one_zep_page_are_found(self, mem, zep):
+        zep.graph.node.get_by_user_id.result = [
+            node(uuid=f"n-{i:03d}", labels=["Person" if i >= 60 else "Topic"]) for i in range(80)
+        ]
+        assert (await mem.get(self.path())).json()["total"] == 20
 
     async def test_another_users_entities_are_a_403(self, mem):
         assert (await mem.get("/memory/someone-else/entities/Person")).status_code == 403

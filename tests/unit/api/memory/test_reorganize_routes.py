@@ -150,33 +150,54 @@ class TestReorganizePreview:
         assert (await mem.post("/memory/someone-else/reorganize/preview")).status_code == 403
 
 
+def _orphans(zep, *uuids):
+    """Nodes that really have no edges: Zep's re-check finds none, and the
+    ownership check finds them in the node listing."""
+    zep.ownership.edgeless.update(uuids)
+    zep.graph.node.get_by_user_id.result = [
+        node(uuid=uuid, name=f"Orphan {uuid}", degree=0) for uuid in uuids
+    ]
+
+
+PAIR = {"merge_pairs": [{"keep_uuid": "n-keep", "remove_uuid": "n-remove"}]}
+
+
 class TestReorganizeApply:
     PATH = f"/memory/{USER_ID}/reorganize/apply"
 
     async def test_nothing_selected_does_nothing(self, mem, zep):
         body = (await mem.post(self.PATH, json={})).json()
-        assert body["report"] == {"orphans_removed": 0, "merges_performed": 0, "errors": []}
+        assert body["report"] == {
+            "orphans_removed": 0,
+            "orphans_kept": 0,
+            "merges_performed": 0,
+            "errors": [],
+        }
         assert not zep.graph.node.delete.called
 
     async def test_selected_orphans_are_deleted(self, mem, zep):
+        _orphans(zep, "n-1", "n-2")
         body = (await mem.post(self.PATH, json={"orphan_uuids": ["n-1", "n-2"]})).json()
         assert body["report"]["orphans_removed"] == 2
         assert len(zep.graph.node.delete.calls) == 2
 
+    async def test_an_orphan_that_gained_a_fact_is_kept(self, mem, zep):
+        """The preview can be minutes old; a fact learned since must not be deleted."""
+        body = (await mem.post(self.PATH, json={"orphan_uuids": ["n-1"]})).json()
+        assert body["report"]["orphans_removed"] == 0
+        assert body["report"]["orphans_kept"] == 1
+        assert not zep.graph.node.delete.called
+
     async def test_a_failing_orphan_delete_is_collected(self, mem, zep):
+        _orphans(zep, "n-1")
         zep.graph.node.delete.error = RuntimeError("delete refused")
         body = (await mem.post(self.PATH, json={"orphan_uuids": ["n-1"]})).json()
         assert body["report"]["orphans_removed"] == 0
         assert any("Failed to remove orphan n-1" in e for e in body["report"]["errors"])
 
     async def test_a_selected_merge_repoints_and_deletes(self, mem, zep):
-        zep.graph.node.get_edges.result = [edge(source="n-remove", target="n-other")]
-        body = (
-            await mem.post(
-                self.PATH,
-                json={"merge_pairs": [{"keep_uuid": "n-keep", "remove_uuid": "n-remove"}]},
-            )
-        ).json()
+        zep.ownership.edges["n-remove"] = [edge(source="n-remove", target="n-other")]
+        body = (await mem.post(self.PATH, json=PAIR)).json()
         assert body["report"]["merges_performed"] == 1
         triple = zep.graph.add_fact_triple.last
         assert triple["source_node_uuid"] == "n-keep"
@@ -184,70 +205,31 @@ class TestReorganizeApply:
         assert zep.graph.node.delete.last["uuid_"] == "n-remove"
 
     async def test_an_incoming_edge_is_repointed_on_the_target_side(self, mem, zep):
-        zep.graph.node.get_edges.result = [edge(source="n-other", target="n-remove")]
-        await mem.post(
-            self.PATH, json={"merge_pairs": [{"keep_uuid": "n-keep", "remove_uuid": "n-remove"}]}
-        )
+        zep.ownership.edges["n-remove"] = [edge(source="n-other", target="n-remove")]
+        await mem.post(self.PATH, json=PAIR)
         triple = zep.graph.add_fact_triple.last
         assert triple["source_node_uuid"] == "n-other"
         assert triple["target_node_uuid"] == "n-keep"
 
     async def test_an_edge_between_the_pair_is_dropped(self, mem, zep):
-        zep.graph.node.get_edges.result = [edge(source="n-remove", target="n-keep")]
-        await mem.post(
-            self.PATH, json={"merge_pairs": [{"keep_uuid": "n-keep", "remove_uuid": "n-remove"}]}
-        )
+        zep.ownership.edges["n-remove"] = [edge(source="n-remove", target="n-keep")]
+        await mem.post(self.PATH, json=PAIR)
         assert not zep.graph.add_fact_triple.called
 
-    async def test_an_unrelated_edge_is_skipped(self, mem, zep):
-        zep.graph.node.get_edges.result = [edge(source="n-7", target="n-8")]
-        await mem.post(
-            self.PATH, json={"merge_pairs": [{"keep_uuid": "n-keep", "remove_uuid": "n-remove"}]}
-        )
-        assert not zep.graph.add_fact_triple.called
-
-    async def test_a_failing_edge_lookup_still_merges(self, mem, zep):
-        zep.graph.node.get_edges.error = RuntimeError("edges unavailable")
-        body = (
-            await mem.post(
-                self.PATH,
-                json={"merge_pairs": [{"keep_uuid": "n-keep", "remove_uuid": "n-remove"}]},
-            )
-        ).json()
-        assert body["report"]["merges_performed"] == 1
-
-    async def test_a_failing_recreate_is_collected(self, mem, zep):
-        zep.graph.node.get_edges.result = [edge(source="n-remove", target="n-other")]
+    async def test_a_failing_recreate_keeps_the_duplicate(self, mem, zep):
+        """Its unmoved fact would go with it; the pair is reported, not merged."""
+        zep.ownership.edges["n-remove"] = [edge(source="n-remove", target="n-other")]
         zep.graph.add_fact_triple.error = RuntimeError("triple rejected")
-        body = (
-            await mem.post(
-                self.PATH,
-                json={"merge_pairs": [{"keep_uuid": "n-keep", "remove_uuid": "n-remove"}]},
-            )
-        ).json()
+        body = (await mem.post(self.PATH, json=PAIR)).json()
         assert any("Edge recreate failed" in e for e in body["report"]["errors"])
-        assert body["report"]["merges_performed"] == 1, "the merge itself still completed"
+        assert body["report"]["merges_performed"] == 0
+        assert not zep.graph.node.delete.called
 
     async def test_a_failing_merge_delete_is_collected(self, mem, zep):
         zep.graph.node.delete.error = RuntimeError("delete refused")
-        body = (
-            await mem.post(
-                self.PATH,
-                json={"merge_pairs": [{"keep_uuid": "n-keep", "remove_uuid": "n-remove"}]},
-            )
-        ).json()
+        body = (await mem.post(self.PATH, json=PAIR)).json()
         assert body["report"]["merges_performed"] == 0
-        assert any("Merge failed for n-remove" in e for e in body["report"]["errors"])
-
-    async def test_no_edges_at_all(self, mem, zep):
-        zep.graph.node.get_edges.result = None
-        body = (
-            await mem.post(
-                self.PATH,
-                json={"merge_pairs": [{"keep_uuid": "n-keep", "remove_uuid": "n-remove"}]},
-            )
-        ).json()
-        assert body["report"]["merges_performed"] == 1
+        assert any("Delete failed for n-remove" in e for e in body["report"]["errors"])
 
     async def test_another_users_graph_is_a_403(self, mem, zep):
         r = await mem.post("/memory/someone-else/reorganize/apply", json={"orphan_uuids": ["n-1"]})
@@ -262,16 +244,40 @@ class TestReorganizeGraph:
         body = (await mem.post(self.PATH)).json()
         assert body["report"] == {
             "orphans_removed": 0,
+            "orphans_kept": 0,
             "merges_performed": 0,
             "communities_found": 0,
             "errors": [],
         }
 
     async def test_orphans_are_removed(self, mem, zep):
-        zep.graph.node.get_by_user_id.result = [node(uuid="n-1", name="Orphan")]
+        _orphans(zep, "n-1")
         body = (await mem.post(self.PATH)).json()
         assert body["report"]["orphans_removed"] == 1
         assert zep.graph.node.delete.last["uuid_"] == "n-1"
+
+    async def test_a_node_whose_edges_are_past_the_first_page_is_not_an_orphan(self, mem, zep):
+        """The bug this pass had: it read 50 edges, called the rest orphans, and deleted them."""
+        zep.graph.node.get_by_user_id.result = [
+            node(uuid=f"n-{i:03d}", name=f"Thing {i}") for i in range(60)
+        ]
+        zep.graph.edge.get_by_user_id.result = [
+            edge(uuid=f"e-{i:03d}", source="n-user", target=f"n-{i:03d}") for i in range(60)
+        ]
+        body = (await mem.post(self.PATH)).json()
+        assert body["report"]["orphans_removed"] == 0
+        assert not zep.graph.node.delete.called
+
+    async def test_a_node_zep_counts_edges_for_is_not_an_orphan(self, mem, zep):
+        zep.graph.node.get_by_user_id.result = [node(uuid="n-1", name="Busy", degree=4)]
+        assert (await mem.post(self.PATH)).json()["report"]["orphans_removed"] == 0
+
+    async def test_an_orphan_is_rechecked_before_it_is_deleted(self, mem, zep):
+        """The listing says no edges; Zep's own answer for that node wins."""
+        zep.graph.node.get_by_user_id.result = [node(uuid="n-1", name="Lonely")]
+        body = (await mem.post(self.PATH)).json()
+        assert body["report"]["orphans_kept"] == 1
+        assert not zep.graph.node.delete.called
 
     @pytest.mark.parametrize("name", ["kwami_abc", "user"])
     async def test_the_user_node_is_never_removed(self, mem, zep, name):
@@ -279,6 +285,11 @@ class TestReorganizeGraph:
         body = (await mem.post(self.PATH)).json()
         assert body["report"]["orphans_removed"] == 0
         assert not zep.graph.node.delete.called
+
+    async def test_a_node_labelled_user_is_never_removed(self, mem, zep):
+        _orphans(zep, "n-1")
+        zep.graph.node.get_by_user_id.result = [node(uuid="n-1", name="Daniel", labels=["User"])]
+        assert (await mem.post(self.PATH)).json()["report"]["orphans_removed"] == 0
 
     async def test_a_node_without_a_uuid_is_skipped(self, mem, zep):
         bare = node(name="NoUuid")
@@ -288,7 +299,7 @@ class TestReorganizeGraph:
         assert (await mem.post(self.PATH)).json()["report"]["orphans_removed"] == 0
 
     async def test_a_failing_orphan_delete_is_collected(self, mem, zep):
-        zep.graph.node.get_by_user_id.result = [node(uuid="n-1", name="Orphan")]
+        _orphans(zep, "n-1")
         zep.graph.node.delete.error = RuntimeError("delete refused")
         body = (await mem.post(self.PATH)).json()
         assert any("Failed to remove orphan n-1" in e for e in body["report"]["errors"])
@@ -301,6 +312,23 @@ class TestReorganizeGraph:
         zep.graph.edge.get_by_user_id.result = [edge(source="n-1", target="n-2", name="SAME_AS")]
         body = (await mem.post(self.PATH)).json()
         assert body["report"]["merges_performed"] == 1
+
+    async def test_names_that_differ_only_in_accents_are_merged(self, mem, zep):
+        zep.graph.node.get_by_user_id.result = [
+            node(uuid="n-1", name="José Pérez"),
+            node(uuid="n-2", name="jose  perez"),
+        ]
+        zep.graph.edge.get_by_user_id.result = [edge(source="n-1", target="n-2")]
+        assert (await mem.post(self.PATH)).json()["report"]["merges_performed"] == 1
+
+    async def test_same_name_different_type_is_not_auto_merged(self, mem, zep):
+        """Apple the company and Apple the fruit."""
+        zep.graph.node.get_by_user_id.result = [
+            node(uuid="n-1", name="Apple", labels=["Organization"]),
+            node(uuid="n-2", name="Apple", labels=["Object"]),
+        ]
+        zep.graph.edge.get_by_user_id.result = [edge(source="n-1", target="n-2")]
+        assert (await mem.post(self.PATH)).json()["report"]["merges_performed"] == 0
 
     async def test_a_low_similarity_pair_is_left_alone(self, mem, zep):
         zep.graph.node.get_by_user_id.result = [
@@ -322,7 +350,7 @@ class TestReorganizeGraph:
         assert r.json()["report"]["merges_performed"] == 1
 
     async def test_a_merged_node_is_not_merged_again(self, mem, zep):
-        """Three identical names must collapse pairwise, not repeatedly."""
+        """Three identical names collapse one pair per pass, never a node twice."""
         zep.graph.node.get_by_user_id.result = [
             node(uuid="n-1", name="Barcelona"),
             node(uuid="n-2", name="Barcelona"),
@@ -333,7 +361,9 @@ class TestReorganizeGraph:
             edge(uuid="e2", source="n-2", target="n-3"),
         ]
         body = (await mem.post(self.PATH)).json()
-        assert body["report"]["merges_performed"] <= 2
+        assert body["report"]["merges_performed"] == 1
+        removed = [call["uuid_"] for call in zep.graph.node.delete.calls]
+        assert len(removed) == len(set(removed)) == 1
 
     async def test_nameless_nodes_are_skipped(self, mem, zep):
         zep.graph.node.get_by_user_id.result = [
@@ -349,20 +379,22 @@ class TestReorganizeGraph:
             node(uuid="n-2", name="Barcelona"),
         ]
         zep.graph.edge.get_by_user_id.result = [edge(source="n-1", target="n-2")]
-        zep.graph.node.get_edges.result = [edge(source="n-2", target="n-1")]
+        zep.ownership.edges["n-2"] = [edge(source="n-2", target="n-1")]
         await mem.post(self.PATH)
         assert not zep.graph.add_fact_triple.called
 
-    async def test_a_failing_recreate_is_collected(self, mem, zep):
+    async def test_a_failing_recreate_keeps_the_duplicate(self, mem, zep):
         zep.graph.node.get_by_user_id.result = [
             node(uuid="n-1", name="Barcelona"),
             node(uuid="n-2", name="Barcelona"),
         ]
         zep.graph.edge.get_by_user_id.result = [edge(source="n-1", target="n-2")]
-        zep.graph.node.get_edges.result = [edge(source="n-2", target="n-other")]
+        zep.ownership.edges["n-2"] = [edge(source="n-2", target="n-other")]
         zep.graph.add_fact_triple.error = RuntimeError("triple rejected")
         body = (await mem.post(self.PATH)).json()
         assert any("Edge recreate failed" in e for e in body["report"]["errors"])
+        assert body["report"]["merges_performed"] == 0
+        assert not zep.graph.node.delete.called
 
     async def test_a_failing_merge_delete_is_collected(self, mem, zep):
         zep.graph.node.get_by_user_id.result = [
@@ -373,25 +405,6 @@ class TestReorganizeGraph:
         zep.graph.node.delete.error = RuntimeError("delete refused")
         body = (await mem.post(self.PATH)).json()
         assert any("Delete failed" in e for e in body["report"]["errors"])
-
-    async def test_a_failing_edge_lookup_during_merge(self, mem, zep):
-        zep.graph.node.get_by_user_id.result = [
-            node(uuid="n-1", name="Barcelona"),
-            node(uuid="n-2", name="Barcelona"),
-        ]
-        zep.graph.edge.get_by_user_id.result = [edge(source="n-1", target="n-2")]
-        zep.graph.node.get_edges.error = RuntimeError("edges unavailable")
-        assert (await mem.post(self.PATH)).json()["report"]["merges_performed"] == 1
-
-    async def test_an_unrelated_edge_is_skipped_during_merge(self, mem, zep):
-        zep.graph.node.get_by_user_id.result = [
-            node(uuid="n-1", name="Barcelona"),
-            node(uuid="n-2", name="Barcelona"),
-        ]
-        zep.graph.edge.get_by_user_id.result = [edge(source="n-1", target="n-2")]
-        zep.graph.node.get_edges.result = [edge(source="n-7", target="n-8")]
-        await mem.post(self.PATH)
-        assert not zep.graph.add_fact_triple.called
 
     async def test_communities_are_counted(self, mem, zep):
         zep.graph.node.get_by_user_id.result = [
@@ -406,6 +419,14 @@ class TestReorganizeGraph:
         zep.graph.edge.get_by_user_id.result = [edge(source="n-1", target="n-missing")]
         assert (await mem.post(self.PATH)).json()["report"]["communities_found"] == 1
 
+    @pytest.mark.parametrize("failing", ["edge", "node"])
+    async def test_a_failing_listing_deletes_nothing(self, mem, zep, failing):
+        """With no edge list every node looks orphaned; the pass must stop instead."""
+        zep.graph.node.get_by_user_id.result = [node(uuid="n-1", name="Kept")]
+        getattr(zep.graph, failing).get_by_user_id.error = RuntimeError("down")
+        assert (await mem.post(self.PATH)).status_code == 500
+        assert not zep.graph.node.delete.called
+
     @pytest.mark.parametrize("threshold", [79, 101])
     async def test_an_out_of_range_threshold_is_a_422(self, mem, threshold):
         r = await mem.post(self.PATH, params={"auto_merge_threshold": threshold})
@@ -414,7 +435,7 @@ class TestReorganizeGraph:
     async def test_a_failure_is_a_500(self, monkeypatch, mem, zep, caplog):
         from src.api.routes.memory import analysis as mem_mod
 
-        async def boom(client, user_id, limit=200):
+        async def boom(client, user_id, max_items=0):
             raise RuntimeError("fetch exploded")
 
         monkeypatch.setattr(mem_mod, "_fetch_graph_raw", boom)
@@ -579,38 +600,22 @@ class TestRemainingErrorPaths:
         assert r.status_code == 500
         assert "Failed to apply reorganization" in caplog.text
 
-    async def test_a_failing_node_fetch_for_analysis_is_logged(self, mem, zep, caplog):
-        zep.graph.node.get_by_user_id.error = RuntimeError("nodes down")
-        with caplog.at_level("WARNING", logger="kwami-api.memory"):
-            await mem.get(f"/memory/{USER_ID}/communities")
-        assert "Failed to fetch nodes for analysis" in caplog.text
-
-    async def test_a_failing_edge_fetch_for_analysis_is_logged(self, mem, zep, caplog):
+    @pytest.mark.parametrize("failing", ["edge", "node"])
+    async def test_a_failing_listing_fails_the_analysis(self, mem, zep, failing):
+        """Half a graph gives wrong communities and, worse, false orphans."""
         zep.graph.node.get_by_user_id.result = [node(uuid="n-1", name="A")]
-        zep.graph.edge.get_by_user_id.error = RuntimeError("edges down")
-        with caplog.at_level("WARNING", logger="kwami-api.memory"):
-            body = (await mem.get(f"/memory/{USER_ID}/communities")).json()
-        assert "Failed to fetch edges for analysis" in caplog.text
-        assert body["count"] == 1, "nodes still analysed without edges"
+        getattr(zep.graph, failing).get_by_user_id.error = RuntimeError("down")
+        assert (await mem.get(f"/memory/{USER_ID}/communities")).status_code == 500
 
-    async def test_duplicates_dedup_a_repeated_pair(self, mem, zep):
-        """The `seen` set: the same pair must not be reported twice."""
+    async def test_a_uuid_listed_twice_is_one_node(self, mem, zep):
+        """A node is not its own duplicate, however often a listing repeats it."""
         zep.graph.node.get_by_user_id.result = [
             node(uuid="n-1", name="Barcelona"),
             node(uuid="n-1", name="Barcelona"),
-            node(uuid="n-1", name="Barcelona"),
         ]
-        body = (await mem.get(f"/memory/{USER_ID}/duplicates")).json()
-        assert body["count"] == 1, "one distinct uuid pair, however many rows"
-
-    async def test_preview_dedups_a_repeated_pair(self, mem, zep):
-        zep.graph.node.get_by_user_id.result = [
-            node(uuid="n-1", name="Barcelona"),
-            node(uuid="n-1", name="Barcelona"),
-            node(uuid="n-1", name="Barcelona"),
-        ]
+        assert (await mem.get(f"/memory/{USER_ID}/duplicates")).json()["count"] == 0
         body = (await mem.post(f"/memory/{USER_ID}/reorganize/preview")).json()
-        assert len(body["duplicates"]) == 1
+        assert body["duplicates"] == []
 
     async def test_reorganize_skips_an_unrelated_edge_during_auto_merge(self, mem, zep):
         """The `else: continue` arm: an edge touching neither merging node."""
@@ -619,9 +624,9 @@ class TestRemainingErrorPaths:
             node(uuid="n-2", name="Barcelona"),
         ]
         zep.graph.edge.get_by_user_id.result = [edge(source="n-1", target="n-2")]
-        zep.graph.node.get_edges.result = [
-            edge(source="n-7", target="n-8"),
-            edge(source="n-2", target="n-other"),
+        zep.ownership.edges["n-2"] = [
+            edge(uuid="e-x", source="n-7", target="n-8"),
+            edge(uuid="e-y", source="n-2", target="n-other"),
         ]
         await mem.post(f"/memory/{USER_ID}/reorganize")
         assert len(zep.graph.add_fact_triple.calls) == 1, "only the related edge"
@@ -655,12 +660,9 @@ class TestFinalBranches:
         """Not a MessageListResponse and not a list -- yields no messages, no crash."""
         from types import SimpleNamespace
 
-        zep.thread.list_all.result = SimpleNamespace(
-            threads=[
-                SimpleNamespace(thread_id="t-1", uuid_="t-1", user_id=USER_ID, created_at=None)
-            ],
-            total_count=1,
-        )
+        zep.user.get_threads.result = [
+            SimpleNamespace(thread_id="t-1", uuid_="t-1", user_id=USER_ID, created_at=None)
+        ]
         zep.thread.get.result = "an unexpected string"
         body = (await mem.get(f"/memory/{USER_ID}/messages")).json()
         assert body["session_count"] == 1
@@ -673,7 +675,7 @@ class TestFinalBranches:
             node(uuid="n-2", name="Barcelona"),
         ]
         zep.graph.edge.get_by_user_id.result = [edge(source="n-1", target="n-2")]
-        zep.graph.node.get_edges.result = [edge(source="n-other", target="n-2")]
+        zep.ownership.edges["n-2"] = [edge(source="n-other", target="n-2")]
         await mem.post(f"/memory/{USER_ID}/reorganize")
         triple = zep.graph.add_fact_triple.last
         assert triple["source_node_uuid"] == "n-other"
@@ -686,54 +688,6 @@ class TestPartialBranches:
     Each needs either a second iteration or a falsey field where the happy path
     always has a value -- an edge with no endpoints, a search that returns none.
     """
-
-    async def test_update_node_repoints_several_edges_in_one_pass(self, mem, zep):
-        """Two edges, so the recreate loop runs more than once."""
-        zep.graph.node.get.result = node(uuid="n-1", name="Old", summary="s")
-        zep.graph.node.get_edges.result = [
-            edge(uuid="e1", source="n-1", target="n-2"),
-            edge(uuid="e2", source="n-3", target="n-1"),
-        ]
-        body = (await mem.patch(f"/memory/{USER_ID}/node/n-1", json={"name": "New"})).json()
-        assert body["recreated_edges"] == 2
-
-    async def test_update_node_with_no_summary_on_an_incoming_edge(self, mem, zep):
-        """The `if new_summary` guard on the target side."""
-        zep.graph.node.get.result = node(uuid="n-1", name="Old", summary=None)
-        zep.graph.node.get_edges.result = [edge(source="n-0", target="n-1")]
-        await mem.patch(f"/memory/{USER_ID}/node/n-1", json={"name": "New"})
-        assert "target_node_summary" not in zep.graph.add_fact_triple.last
-
-    async def test_update_node_keeps_the_first_new_uuid(self, mem, zep):
-        """`if new_node_uuid is None` -- the second edge must not overwrite it."""
-        from types import SimpleNamespace
-
-        results = [
-            SimpleNamespace(source_node_uuid="first"),
-            SimpleNamespace(source_node_uuid="second"),
-        ]
-
-        async def add_triple(**kwargs):
-            return results.pop(0)
-
-        zep.graph.node.get.result = node(uuid="n-1", name="Old")
-        zep.graph.node.get_edges.result = [
-            edge(uuid="e1", source="n-1", target="n-2"),
-            edge(uuid="e2", source="n-1", target="n-3"),
-        ]
-        zep.graph.add_fact_triple = add_triple
-        body = (await mem.patch(f"/memory/{USER_ID}/node/n-1", json={"name": "New"})).json()
-        assert body["new_node_uuid"] == "first"
-
-    async def test_a_standalone_recreate_without_a_source_uuid(self, mem, zep):
-        """`if result and hasattr(result, "source_node_uuid")` -- the falsey arm."""
-        from types import SimpleNamespace
-
-        zep.graph.node.get.result = node(uuid="n-1", name="Old")
-        zep.graph.node.get_edges.result = []
-        zep.graph.add_fact_triple.result = SimpleNamespace()
-        body = (await mem.patch(f"/memory/{USER_ID}/node/n-1", json={"name": "New"})).json()
-        assert body["new_node_uuid"] is None
 
     async def test_entities_by_type_with_a_search_returning_no_edges(self, mem, zep):
         """`if edges_response and edges_response.edges` in the /edges fallback."""
