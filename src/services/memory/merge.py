@@ -79,7 +79,7 @@ async def merge_nodes(
     try:
         edges = await edges_of_node(client, user_id, remove_uuid)
     except Exception as e:
-        logger.warning("Could not list the facts of %s: %s", remove_uuid, e)
+        logger.warning("Could not list the facts of a duplicate: %s", e)
         outcome.errors.append(f"Could not list the facts of {remove_uuid}: {failure_kind(e)}")
         return outcome
 
@@ -91,7 +91,7 @@ async def merge_nodes(
             await client.graph.add_fact_triple(**kwargs)
             outcome.moved += 1
         except Exception as e:
-            logger.warning("Edge recreate failed for %s: %s", remove_uuid, e)
+            logger.warning("Edge recreate failed: %s", e)
             outcome.errors.append(f"Edge recreate failed: {failure_kind(e)}")
 
     if outcome.errors:
@@ -100,6 +100,6 @@ async def merge_nodes(
         await client.graph.node.delete(uuid_=remove_uuid)
         outcome.removed = True
     except Exception as e:
-        logger.warning("Delete failed for %s: %s", remove_uuid, e)
+        logger.warning("Delete of a duplicate failed: %s", e)
         outcome.errors.append(f"Delete failed for {remove_uuid}: {failure_kind(e)}")
     return outcome

@@ -34,24 +34,6 @@ _STANDARD_FIELDS = frozenset(logging.LogRecord("", 0, "", 0, "", None, None).__d
 }
 
 
-#: Digits of an address left readable in a log line: enough to tell numbers apart.
-VISIBLE_TAIL = 4
-
-
-def masked(address: str | None) -> str:
-    """A phone number or address for a log line: its last digits, never the whole.
-
-    The logs reach the aggregator and whoever reads it; whose number called is the
-    user's business (CodeQL: clear-text logging of private data).
-    """
-    if not address:
-        return "-"
-    text = str(address)
-    if len(text) <= VISIBLE_TAIL:
-        return "*" * len(text)
-    return "*" * (len(text) - VISIBLE_TAIL) + text[-VISIBLE_TAIL:]
-
-
 def get_request_id() -> str | None:
     """The current request's id, or None outside a request."""
     return request_id_var.get()

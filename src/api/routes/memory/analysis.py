@@ -360,7 +360,7 @@ async def _remove_orphan(client: AsyncZep, user_id: str, node_uuid: str, report:
         await client.graph.node.delete(uuid_=node_uuid)
         report["orphans_removed"] += 1
     except Exception as de:
-        logger.warning("Failed to remove orphan %s: %s", node_uuid, de)
+        logger.warning("Failed to remove an orphan: %s", de)
         report["errors"].append(f"Failed to remove orphan {node_uuid}: {failure_kind(de)}")
 
 
