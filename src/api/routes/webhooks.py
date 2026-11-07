@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, Response
 from livekit import api as livekit_api
 
 from src.core.config import settings
+from src.core.logging import masked
 from src.services.channels import (
     create_call_event,
     create_message_event,
@@ -62,7 +63,7 @@ async def twilio_voice_webhook(request: Request):
 
     channel = await find_channel_by_address(called)
     if not channel:
-        logger.warning("Inbound voice call to unknown number: %s", called)
+        logger.warning("Inbound voice call to unknown number: %s", masked(called))
         return Response("<Response><Reject/></Response>", media_type="application/xml")
 
     contact = await ensure_contact(

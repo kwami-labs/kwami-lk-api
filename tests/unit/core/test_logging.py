@@ -17,6 +17,7 @@ from src.core.logging import (
     JsonFormatter,
     configure_logging,
     get_request_id,
+    masked,
     request_id_var,
 )
 
@@ -106,6 +107,18 @@ class TestConfigureLogging:
         configure_logging()
         configure_logging()
         assert len(logging.getLogger().handlers) == 1
+
+
+class TestMasked:
+    def test_a_number_keeps_only_its_last_digits(self):
+        assert masked("+34600111222") == "********1222"
+
+    def test_short_values_are_hidden_whole(self):
+        assert masked("1234") == "****"
+
+    @pytest.mark.parametrize("empty", [None, ""])
+    def test_nothing_reads_as_a_dash(self, empty):
+        assert masked(empty) == "-"
 
 
 class TestGetRequestId:

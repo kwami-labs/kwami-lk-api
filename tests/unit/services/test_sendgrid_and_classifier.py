@@ -424,6 +424,36 @@ class TestExtractCardData:
     def test_shopping_without_a_tracking_url(self):
         assert _extract_card_data("Shipped", "no link", SHOPPING) == {"summary": "Shipped"}
 
+    def test_a_tracking_host_counts_too(self):
+        data = _extract_card_data("Shipped", "See https://track.carrier.test/abc", SHOPPING)
+        assert data["tracking_url"] == "https://track.carrier.test/abc"
+
+    def test_the_first_address_without_tracking_is_skipped(self):
+        body = "Shop https://shop.test/order/1 then https://carrier.test/TRACK/2"
+        data = _extract_card_data("Shipped", body, SHOPPING)
+        assert data["tracking_url"] == "https://carrier.test/TRACK/2"
+
+    @pytest.mark.parametrize(
+        ("category", "body"),
+        [
+            (BILLS, "a" * 50_000),
+            (TRAVEL, "a" * 50_000),
+            (SHOPPING, "http://" * 10_000),
+        ],
+    )
+    def test_a_crafted_email_does_not_stall_the_classifier(self, category, body):
+        """Quadratic patterns took seconds on these; linear ones take milliseconds.
+
+        The body is cut at 2,000 characters but the subject is not, so the subject
+        carries the payload.
+        """
+        started = time.perf_counter()
+        _extract_card_data(body, "", category)
+        assert time.perf_counter() - started < 0.5
+
+    def test_a_date_inside_a_longer_word_is_not_one(self):
+        assert "travel_date" not in _extract_card_data("Trip", "xxxxxxxxxxxxMarch 3, 2026", TRAVEL)
+
     def test_long_subjects_are_truncated_for_the_card(self):
         long_subject = "x" * 200
         assert len(_extract_card_data(long_subject, "", TRAVEL)["summary"]) == 120
