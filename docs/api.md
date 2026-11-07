@@ -78,6 +78,7 @@ Upstream exception text is not forwarded.
 | `/pc` | user | The user's PC: whether its work thread is on, Claude's sign-in, sites to sign in to in Jarvis's Chrome. |
 | `/providers` | user | Model and voice keys the user connects for their own use (OpenRouter by consent). |
 | `/access` | user | The sites Jarvis may visit, the level on each, and its pending requests. |
+| `/brain` | user | Work for the brain asked from the app, the cloud setting, the user's agents, what the cloud made. |
 | `/internal` | agent | Runtime config, channel lookup by address. |
 | `/webhooks` | signature | Twilio voice/WhatsApp, SendGrid inbound, LiveKit room events. |
 | `/admin/reconciliation` | admin | Provider invoice import and findings. |
@@ -165,6 +166,28 @@ Claude's sign-in, a site in Jarvis's Chrome); `GET /pc/orders/{order_id}` follow
 it. `/access` keeps one rule per site plus `*` for the rest; `GET /access/check`
 answers for an address, and `POST /access/requests/{rule_id}` answers a request
 Jarvis made for a site it had no rule for.
+
+### Brain
+
+The work the brain does, asked from the app, on the user's PC or in the cloud
+(migration 029). Every route answers 503 until that migration is in the database.
+
+| Method | Path | What |
+|--------|------|------|
+| `GET` | `/brain/where` | Whether the PC and the cloud are there, the user's cloud setting, what waits to come home, and where `auto` work would go now |
+| `PUT` | `/brain/cloud` | `{enabled}`: allow or stop the cloud taking this user's work |
+| `GET` | `/brain/jobs` | The latest jobs, up to 50 |
+| `POST` | `/brain/jobs` | Queue work: `kwami_id`, `task`, optional `title`, `target` (`auto` / `pc` / `cloud`), `difficulty`, `agent_id` |
+| `POST` | `/brain/jobs/{job_id}/cancel` | A queued job here; a running one on its worker's next look |
+| `GET` `POST` | `/brain/agents` | The user's agents; define one (up to 30) |
+| `PUT` `DELETE` | `/brain/agents/{agent_id}` | Change or remove one |
+| `POST` | `/brain/agents/{agent_id}/run` | Queue a job for that agent |
+| `GET` | `/brain/sync` | What the cloud made and its way home to the PC |
+| `POST` | `/brain/sync/{sync_id}/discard` | Leave one in Storage instead of bringing it home, while it waits |
+
+A user has at most 20 jobs queued from the app at once; past that, queueing is a
+429 until some start or are cancelled. A kwami that is not the caller's is a 400
+("Kwami not found"), an agent that is not theirs a 404.
 
 ### Internal
 
