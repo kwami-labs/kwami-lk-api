@@ -343,6 +343,50 @@ class TestScheduledWork:
         )
         assert row["kind"] == "work"
         assert row["next_run_at"]
+        assert "agent_id" not in row and "target" not in row
+
+    async def test_an_agent_does_it_where_it_was_told(self, fake_supabase, tenant):
+        agent_id = "00000000-0000-4000-8000-0000000000aa"
+        fake_supabase.db.seed(
+            "brain_agents",
+            {
+                "id": agent_id,
+                "user_id": tenant.user_id,
+                "name": "facturas",
+                "description": "Revisa",
+            },
+        )
+        row = await svc.create_task(
+            tenant.user_id,
+            tenant.kwami_id,
+            kind="work",
+            title="Facturas",
+            recurrence="daily",
+            local_time="08:00",
+            agent_id=agent_id,
+            target="cloud",
+        )
+        assert (row["agent_id"], row["target"]) == (agent_id, "cloud")
+        assert row["notes"] == "Haz tu trabajo de siempre: Revisa"
+
+    async def test_only_work_names_an_agent_or_a_place(self, fake_supabase, tenant):
+        common = {"title": "X", "notes": "y", "recurrence": "daily", "local_time": "08:00"}
+        with pytest.raises(ValueError, match="Only scheduled work"):
+            await svc.create_task(
+                tenant.user_id, tenant.kwami_id, kind="reminder", target="pc", **common
+            )
+        with pytest.raises(ValueError, match="target"):
+            await svc.create_task(
+                tenant.user_id, tenant.kwami_id, kind="work", target="moon", **common
+            )
+        with pytest.raises(ValueError, match="Agent not found"):
+            await svc.create_task(
+                tenant.user_id,
+                tenant.kwami_id,
+                kind="work",
+                agent_id="00000000-0000-4000-8000-0000000000ff",
+                **common,
+            )
 
 
 class TestConfirmingANumber:

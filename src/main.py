@@ -20,6 +20,7 @@ from src.api.routes import (
     access,
     admin_reconciliation,
     assistant,
+    brain,
     calendar,
     channels,
     contacts,
@@ -156,6 +157,7 @@ app.include_router(assistant.router, prefix="/assistant", tags=["Assistant"])
 app.include_router(google.router, prefix="/google", tags=["Google"])
 app.include_router(google_workspace.router, prefix="/google", tags=["Google"])
 app.include_router(pc.router, prefix="/pc", tags=["PC"])
+app.include_router(brain.router, prefix="/brain", tags=["Brain"])
 app.include_router(providers.router, prefix="/providers", tags=["Providers"])
 app.include_router(access.router, prefix="/access", tags=["Access"])
 app.include_router(internal.router, prefix="/internal", tags=["Internal"])
