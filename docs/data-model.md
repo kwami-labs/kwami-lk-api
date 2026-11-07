@@ -106,7 +106,7 @@ erDiagram
 | 025 | `google_accounts_many` | several Google accounts per user, `needs_reconnect_at` |
 | 026 | `voice_provider_keys` | voice providers allowed in `kwami_provider_keys` |
 | 027 | `brain_orders` | `merge` and `login` orders for the PC |
-| 028 | `brain_site_orders` | `brain_sites`: a site in Jarvis's Chrome to sign in to |
+| 028 | `brain_site_orders` | `site` orders, `brain_sites`: the sites signed in to in Jarvis's Chrome |
 | 030 | `jarvis_site_access` | `jarvis_site_rules`: where Jarvis may go and what it may do |
 
 029 (`brain_cloud`, the brain working in the cloud) is still in review.
