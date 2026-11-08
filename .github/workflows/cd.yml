@@ -321,7 +321,7 @@ jobs:
           wrangler-env: production
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID }}
-          skip-if-unconfigured: 'false'
+          skip-if-unconfigured: 'true'
 
   deploy-development:
     name: deploy · development
@@ -342,4 +342,4 @@ jobs:
           wrangler-env: development
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID }}
-          skip-if-unconfigured: 'false'
+          skip-if-unconfigured: 'true'
