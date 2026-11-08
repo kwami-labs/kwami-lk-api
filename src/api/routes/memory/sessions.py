@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from zep_cloud.client import AsyncZep
 
 from src.api.deps import require_auth
+from src.core.logging import log_safe
 from src.core.security import AuthUser
 from src.services.memory import get_zep_client, verify_user_access
 from src.services.memory.threads import (
@@ -96,7 +97,7 @@ async def _owned_page(
     except Exception as e:
         if _not_found(e):
             raise HTTPException(status_code=404, detail="Session not found") from e
-        logger.warning("💬 thread.get failed for %s: %s", thread_id, e)
+        logger.warning("💬 thread.get failed for %s: %s", log_safe(thread_id), log_safe(e))
         raise HTTPException(status_code=502, detail=UNAVAILABLE) from e
     if not owns_thread(response, thread_id, user_id):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -146,7 +147,7 @@ async def get_session_summary(
     except Exception as e:
         if _not_found(e):
             return {"thread_id": thread_id, "summary": None, "updated_at": None}
-        logger.warning("💬 thread.get_summary failed for %s: %s", thread_id, e)
+        logger.warning("💬 thread.get_summary failed for %s: %s", log_safe(thread_id), log_safe(e))
         raise HTTPException(status_code=502, detail=UNAVAILABLE) from e
     updated = getattr(summary, "last_summarized_at", None) or getattr(summary, "created_at", None)
     return {

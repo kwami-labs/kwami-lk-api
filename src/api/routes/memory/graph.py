@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from zep_cloud.client import AsyncZep
 
 from src.api.deps import require_auth
+from src.core.logging import log_safe
 from src.core.security import AuthUser
 from src.services.memory import (
     _extract_user_display_name,
@@ -131,7 +132,7 @@ async def get_user_edges(
         next_cursor = None
 
     rows = [_edge_row(edge) for edge in edges]
-    logger.info("🔗 Returning %s edges (offset=%s)", len(rows), offset)
+    logger.info("🔗 Returning %s edges (offset=%s)", len(rows), log_safe(offset))
     return _page_body("edges", rows, offset, limit, next_cursor)
 
 
@@ -169,7 +170,7 @@ async def get_user_nodes(
         raise HTTPException(status_code=502, detail=UNAVAILABLE) from e
 
     rows = [_node_row(node) for node in nodes]
-    logger.info("🔵 Returning %s nodes (offset=%s)", len(rows), offset)
+    logger.info("🔵 Returning %s nodes (offset=%s)", len(rows), log_safe(offset))
     return _page_body("nodes", rows, offset, limit, next_cursor)
 
 

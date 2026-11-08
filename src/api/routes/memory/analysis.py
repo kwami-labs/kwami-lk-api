@@ -18,6 +18,7 @@ from src.api.routes.memory.schemas import (
     ReorganizeApplyRequest,
 )
 from src.core.errors import failure_kind
+from src.core.logging import log_safe
 from src.core.security import AuthUser
 from src.services.memory import (
     _fetch_graph_raw,
@@ -247,7 +248,11 @@ async def merge_nodes(
             client, user_id, body.keep_uuid, body.remove_uuid
         )
         if not outcome.removed:
-            logger.warning("🔗 Merge left %s in place: %s", body.remove_uuid, outcome.errors)
+            logger.warning(
+                "🔗 Merge left %s in place: %s",
+                log_safe(body.remove_uuid),
+                log_safe(outcome.errors),
+            )
             # A string detail, because that is what the app shows the user.
             raise HTTPException(
                 status_code=502,
