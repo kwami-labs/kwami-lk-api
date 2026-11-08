@@ -14,6 +14,7 @@ from src.api.routes.memory.schemas import (
     FactRatingRequest,
     OntologySchema,
 )
+from src.core.logging import log_safe
 from src.core.security import AuthUser
 from src.services.memory import (
     DEFAULT_EDGE_TYPES,
@@ -42,7 +43,7 @@ async def _mark_ontology(client: AsyncZep, user_id: str, value: str | None) -> N
         metadata[ONTOLOGY_METADATA_KEY] = value
         await client.user.update(user_id=user_id, metadata=metadata)
     except Exception as e:
-        logger.warning("📋 Could not mark the ontology of %s: %s", user_id, e)
+        logger.warning("📋 Could not mark the ontology of %s: %s", log_safe(user_id), log_safe(e))
 
 
 @router.get("/{user_id}/ontology")

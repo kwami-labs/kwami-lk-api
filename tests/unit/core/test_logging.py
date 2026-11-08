@@ -19,6 +19,7 @@ from src.core.logging import (
     TextFormatter,
     configure_logging,
     get_request_id,
+    log_safe,
     request_id_var,
 )
 
@@ -146,3 +147,12 @@ class TestTextFormatter:
         first, *rest = text.split("\n")
         assert first == "ERROR | failed"
         assert any("RuntimeError: boom" in line for line in rest)
+
+
+class TestLogSafe:
+    def test_escapes_line_breaks_so_a_value_cannot_forge_a_line(self):
+        assert log_safe("abc\r\nINFO | forged") == "abc\\r\\nINFO | forged"
+
+    def test_leaves_ordinary_values_alone(self):
+        assert log_safe(42) == "42"
+        assert log_safe("9f1c-uuid") == "9f1c-uuid"

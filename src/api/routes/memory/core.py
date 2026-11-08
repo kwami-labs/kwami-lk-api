@@ -14,6 +14,7 @@ from src.api.routes.memory.schemas import (
     UpdateNodeRequest,
 )
 from src.core.errors import failure_kind
+from src.core.logging import log_safe
 from src.core.security import AuthUser
 from src.services.memory import (
     get_zep_client,
@@ -383,7 +384,7 @@ async def update_edge(
 
         if (new_source, new_target) == (old_source, old_target):
             updated = await client.graph.edge.update(uuid_=edge_uuid, **changes)
-            logger.info("✏️ Updated edge in place: %s", edge_uuid)
+            logger.info("✏️ Updated edge in place: %s", log_safe(edge_uuid))
             return {
                 "success": True,
                 "old_edge_uuid": edge_uuid,
@@ -412,7 +413,7 @@ async def update_edge(
         result = await client.graph.add_fact_triple(**triple_kwargs)
         new_edge_uuid = getattr(result, "edge_uuid", None) or getattr(result, "uuid_", None)
         await client.graph.edge.delete(uuid_=edge_uuid)
-        logger.info("✏️ Moved edge %s to %s", edge_uuid, new_edge_uuid)
+        logger.info("✏️ Moved edge %s to %s", log_safe(edge_uuid), log_safe(new_edge_uuid))
         return {
             "success": True,
             "old_edge_uuid": edge_uuid,
@@ -470,7 +471,7 @@ async def update_node(
         logger.exception("Failed to update node")
         raise HTTPException(status_code=500, detail="Failed to update node") from e
 
-    logger.info("✏️ Updated node in place: %s", node_uuid)
+    logger.info("✏️ Updated node in place: %s", log_safe(node_uuid))
     return {
         "success": True,
         "old_node_uuid": node_uuid,

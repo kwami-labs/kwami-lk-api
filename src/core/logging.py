@@ -34,6 +34,16 @@ _STANDARD_FIELDS = frozenset(logging.LogRecord("", 0, "", 0, "", None, None).__d
 }
 
 
+def log_safe(value: object) -> str:
+    """``value`` as text that cannot start a new log line.
+
+    Ids and error messages from a request go into plain-text logs too (local runs, the
+    container console). A CR or LF in them would let a caller forge a log line, so both
+    are written escaped.
+    """
+    return str(value).replace("\r", "\\r").replace("\n", "\\n")
+
+
 def get_request_id() -> str | None:
     """The current request's id, or None outside a request."""
     return request_id_var.get()
