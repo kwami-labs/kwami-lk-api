@@ -5,8 +5,8 @@ import logging
 from typing import Annotated
 
 import jwt
-from fastapi import Depends, Header, HTTPException, Request, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import Depends, HTTPException, Request, status
+from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 
 from src.core.config import settings
 from src.core.security import (
@@ -20,7 +20,27 @@ from src.core.security import (
 logger = logging.getLogger("kwami-api.deps")
 
 # Optional auth - auto_error=False allows unauthenticated requests
-security_scheme = HTTPBearer(auto_error=False)
+security_scheme = HTTPBearer(
+    auto_error=False,
+    scheme_name="UserJWT",
+    description="Supabase access token: `Authorization: Bearer <JWT>`. Omit it to call as anonymous.",
+)
+
+# Declared as security schemes rather than bare `Header(...)` parameters so the docs list the
+# credential under "Authorize" and mark the route as needing it. Both stay `auto_error=False`: the
+# dependency below decides what a missing or wrong key means, exactly as before.
+admin_key_scheme = APIKeyHeader(
+    name="X-Admin-API-Key",
+    auto_error=False,
+    scheme_name="AdminApiKey",
+    description="Shared admin key. An allow-listed admin JWT is accepted instead.",
+)
+internal_key_scheme = APIKeyHeader(
+    name="X-Kwami-API-Key",
+    auto_error=False,
+    scheme_name="AgentApiKey",
+    description="Shared agent key for backend-to-backend routes.",
+)
 
 
 async def get_current_user(
@@ -97,7 +117,7 @@ async def require_auth(user: Annotated[AuthUser | None, Depends(get_current_user
 
 async def require_admin(
     user: Annotated[AuthUser | None, Depends(get_current_user)],
-    x_admin_api_key: Annotated[str | None, Header(alias="X-Admin-API-Key")] = None,
+    x_admin_api_key: Annotated[str | None, Depends(admin_key_scheme)] = None,
 ) -> AdminPrincipal:
     """Require an admin identity via API key or authenticated allowlist."""
     if is_valid_admin_api_key(x_admin_api_key):
@@ -120,7 +140,7 @@ async def require_admin(
 
 
 async def require_internal_api_key(
-    x_kwami_api_key: Annotated[str | None, Header(alias="X-Kwami-API-Key")] = None,
+    x_kwami_api_key: Annotated[str | None, Depends(internal_key_scheme)] = None,
 ) -> None:
     """Require the shared agent/API key for internal backend-to-backend routes."""
     if not settings.kwami_api_key or not x_kwami_api_key:
