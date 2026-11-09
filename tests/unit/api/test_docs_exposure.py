@@ -21,6 +21,7 @@ from httpx import ASGITransport, AsyncClient
 from src.api.docs import install_docs
 from src.main import docs_urls
 
+CDN = "https://cdn.jsdelivr.net"
 DOC_URLS = ("/openapi.json", "/docs", "/swagger", "/redoc")
 
 
@@ -81,10 +82,9 @@ async def test_each_page_carries_a_csp_that_lets_it_load(url: str):
     nonce = re.search(r"'nonce-([^']+)'", csp)
     assert nonce, csp
     directives = {d.split()[0]: d.split()[1:] for d in csp.split(";") if d.strip()}
-    assert "https://cdn.jsdelivr.net" in directives["script-src"]
+    assert set(directives["script-src"]) == {f"'nonce-{nonce.group(1)}'", CDN}
     assert f'nonce="{nonce.group(1)}"' in response.text
     assert directives["frame-ancestors"] == ["'none'"]
-    assert "'unsafe-eval'" not in directives["script-src"]
     assert directives["connect-src"] == ["'self'"]
 
 
