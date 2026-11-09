@@ -75,6 +75,8 @@ src/api/authz.py                             100
 # Request-scoped dependencies. Low because the client constructors are exercised through the
 # routes rather than directly.
 src/api/deps.py                              100
+src/api/docs.py                              100
+src/api/openapi_meta.py                      100
 src/api/routes/admin_reconciliation.py       100
 src/api/routes/calendar.py                   100
 src/api/routes/channels.py                   100

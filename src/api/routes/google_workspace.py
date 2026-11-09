@@ -127,11 +127,23 @@ async def drive_search(
     max_results: int = Query(default=20, ge=1, le=50),
     account: Account = None,
 ) -> dict[str, Any]:
+    """Search Drive files.
+
+    `q` filters the files, empty for the latest. `max_results` is 1-50, default 20. Returns `{files}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     return {"files": await _call(workspace.search_files(user.id, q, max_results, account=account))}
 
 
 @router.get("/drive/files/{file_id}")
 async def drive_read(file_id: str, user: User, account: Account = None) -> dict[str, Any]:
+    """Read a Drive file's details and text.
+
+    Returns `{file}`. `text` is null when the file has no text to read, such as a zip.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     return {"file": await _call(workspace.read_file(user.id, file_id, account=account))}
 
 
@@ -139,6 +151,12 @@ async def drive_read(file_id: str, user: User, account: Account = None) -> dict[
 async def drive_create(
     body: FileCreateRequest, user: User, account: Account = None
 ) -> dict[str, Any]:
+    """Create a file in Drive.
+
+    `parent_id` is the folder, the root if omitted. Returns `{file}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     return {
         "file": await _call(workspace.create_file(user.id, account=account, **body.model_dump()))
     }
@@ -148,6 +166,12 @@ async def drive_create(
 async def drive_write(
     file_id: str, body: FileWriteRequest, user: User, account: Account = None
 ) -> dict[str, Any]:
+    """Replace the content of a Drive file.
+
+    Returns `{file}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     written = await _call(
         workspace.write_file(user.id, file_id, account=account, **body.model_dump())
     )
@@ -158,6 +182,12 @@ async def drive_write(
 async def drive_folder(
     body: FolderCreateRequest, user: User, account: Account = None
 ) -> dict[str, Any]:
+    """Create a Drive folder.
+
+    `parent_id` is the folder to put it in, the root if omitted. Returns `{file}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     created = await _call(workspace.create_folder(user.id, account=account, **body.model_dump()))
     return {"file": created}
 
@@ -166,6 +196,12 @@ async def drive_folder(
 async def drive_update(
     file_id: str, body: FileUpdateRequest, user: User, account: Account = None
 ) -> dict[str, Any]:
+    """Rename or move a Drive file.
+
+    `add_parent` and `remove_parent` move it between folders. Returns `{file}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     updated = await _call(
         workspace.update_file(user.id, file_id, account=account, **body.model_dump())
     )
@@ -176,22 +212,46 @@ async def drive_update(
 async def drive_copy(
     file_id: str, body: FileCopyRequest, user: User, account: Account = None
 ) -> dict[str, Any]:
+    """Copy a Drive file.
+
+    `name` names the copy. Returns `{file}`, the copy.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     copied = await _call(workspace.copy_file(user.id, file_id, name=body.name, account=account))
     return {"file": copied}
 
 
 @router.post("/drive/files/{file_id}/trash")
 async def drive_trash(file_id: str, user: User, account: Account = None) -> dict[str, Any]:
+    """Move a Drive file to the trash.
+
+    Returns `{file}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     return {"file": await _call(workspace.set_trashed(user.id, file_id, True, account=account))}
 
 
 @router.post("/drive/files/{file_id}/untrash")
 async def drive_untrash(file_id: str, user: User, account: Account = None) -> dict[str, Any]:
+    """Restore a Drive file from the trash.
+
+    Returns `{file}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     return {"file": await _call(workspace.set_trashed(user.id, file_id, False, account=account))}
 
 
 @router.get("/drive/files/{file_id}/permissions")
 async def drive_permissions(file_id: str, user: User, account: Account = None) -> dict[str, Any]:
+    """List who a Drive file is shared with.
+
+    Returns `{permissions}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     found = await _call(workspace.list_permissions(user.id, file_id, account=account))
     return {"permissions": found}
 
@@ -200,6 +260,12 @@ async def drive_permissions(file_id: str, user: User, account: Account = None) -
 async def drive_share(
     file_id: str, body: ShareRequest, user: User, account: Account = None
 ) -> dict[str, Any]:
+    """Share a Drive file with one named person.
+
+    `role` is reader, commenter or writer; default reader. Anyone-with-the-link and ownership are not offered. Returns `{permission}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 400 if the input is refused, 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     shared = await _call(
         workspace.share_file(user.id, file_id, email=body.email, role=body.role, account=account)
     )
@@ -210,6 +276,12 @@ async def drive_share(
 async def drive_unshare(
     file_id: str, permission_id: str, user: User, account: Account = None
 ) -> dict[str, bool]:
+    """Remove a person's access to a Drive file.
+
+    Returns `{ok: true}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     await _call(workspace.unshare_file(user.id, file_id, permission_id, account=account))
     return {"ok": True}
 
@@ -222,6 +294,12 @@ async def gmail_attachment_save(
     user: User,
     account: Account = None,
 ) -> dict[str, Any]:
+    """Save a Gmail attachment into Drive.
+
+    `filename` and `mime_type` describe the saved file; `parent_id` is the folder, the root if omitted. Returns `{file}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     saved = await _call(
         workspace.save_attachment(
             user.id, message_id, attachment_id, account=account, **body.model_dump()
@@ -237,6 +315,12 @@ async def gmail_attachment_save(
 async def docs_create(
     body: DocumentCreateRequest, user: User, account: Account = None
 ) -> dict[str, Any]:
+    """Create a Google Doc.
+
+    `text` is its initial content. Returns `{document}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     created = await _call(
         workspace.create_document(user.id, title=body.title, text=body.text, account=account)
     )
@@ -247,6 +331,12 @@ async def docs_create(
 async def docs_append(
     document_id: str, body: DocumentAppendRequest, user: User, account: Account = None
 ) -> dict[str, bool]:
+    """Append text to the end of a Google Doc.
+
+    Returns `{ok: true}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     await _call(workspace.append_to_document(user.id, document_id, text=body.text, account=account))
     return {"ok": True}
 
@@ -255,6 +345,12 @@ async def docs_append(
 async def docs_replace(
     document_id: str, body: DocumentReplaceRequest, user: User, account: Account = None
 ) -> dict[str, int]:
+    """Replace every case-sensitive match of a text in a Google Doc.
+
+    Returns `{changed}`, the number of places replaced.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     changed = await _call(
         workspace.replace_in_document(
             user.id, document_id, find=body.find, replace=body.replace, account=account
@@ -268,6 +364,12 @@ async def docs_replace(
 
 @router.post("/sheets")
 async def sheets_create(body: TitleRequest, user: User, account: Account = None) -> dict[str, Any]:
+    """Create a Google Sheet.
+
+    Returns `{spreadsheet}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     created = await _call(workspace.create_spreadsheet(user.id, title=body.title, account=account))
     return {"spreadsheet": created}
 
@@ -279,6 +381,12 @@ async def sheets_read(
     cell_range: Annotated[str, Query(alias="range", min_length=1, max_length=200)],
     account: Account = None,
 ) -> dict[str, Any]:
+    """Read a range of cells from a Google Sheet.
+
+    `range` is in A1 notation. Returns `{values}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 400 if the input is refused, 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     values = await _call(workspace.read_range(user.id, spreadsheet_id, cell_range, account=account))
     return {"values": values}
 
@@ -287,6 +395,12 @@ async def sheets_read(
 async def sheets_write(
     spreadsheet_id: str, body: CellsRequest, user: User, account: Account = None
 ) -> dict[str, int]:
+    """Write values into a range of a Google Sheet, replacing what is there.
+
+    `values` is a list of rows. Returns `{changed}`, the number of cells updated.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 400 if the input is refused, 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     changed = await _call(
         workspace.write_range(
             user.id, spreadsheet_id, body.range, values=body.values, account=account
@@ -299,6 +413,12 @@ async def sheets_write(
 async def sheets_append(
     spreadsheet_id: str, body: CellsRequest, user: User, account: Account = None
 ) -> dict[str, bool]:
+    """Append rows after the data in a range of a Google Sheet.
+
+    `values` is a list of rows. Returns `{ok: true}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 400 if the input is refused, 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     await _call(
         workspace.append_rows(
             user.id, spreadsheet_id, body.range, values=body.values, account=account
@@ -312,6 +432,12 @@ async def sheets_append(
 
 @router.post("/slides")
 async def slides_create(body: TitleRequest, user: User, account: Account = None) -> dict[str, Any]:
+    """Create a Google Slides presentation.
+
+    Returns `{presentation}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     created = await _call(workspace.create_presentation(user.id, title=body.title, account=account))
     return {"presentation": created}
 
@@ -320,6 +446,12 @@ async def slides_create(body: TitleRequest, user: User, account: Account = None)
 async def slides_add(
     presentation_id: str, body: SlideRequest, user: User, account: Account = None
 ) -> dict[str, str]:
+    """Add a title-and-body slide at the end of a presentation.
+
+    Returns `{id}`, the new slide's id.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     slide_id = await _call(
         workspace.add_slide(
             user.id, presentation_id, title=body.title, body=body.body, account=account
@@ -335,6 +467,12 @@ async def slides_add(
 async def contacts_search(
     user: User, q: str = Query(default=""), account: Account = None
 ) -> dict[str, Any]:
+    """Search the account's contacts.
+
+    `q` filters them, empty for all. Returns `{contacts}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     return {"contacts": await _call(workspace.search_contacts(user.id, q, account=account))}
 
 
@@ -342,6 +480,12 @@ async def contacts_search(
 async def contacts_create(
     body: ContactCreateRequest, user: User, account: Account = None
 ) -> dict[str, Any]:
+    """Create a contact.
+
+    Returns `{contact}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     created = await _call(workspace.create_contact(user.id, account=account, **body.model_dump()))
     return {"contact": created}
 
@@ -350,6 +494,12 @@ async def contacts_create(
 async def contacts_update(
     resource_name: str, body: ContactUpdateRequest, user: User, account: Account = None
 ) -> dict[str, Any]:
+    """Change fields of a contact.
+
+    `resource_name` is the contact id, such as `people/c123`. Only the fields sent are changed. Returns `{contact}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 400 if the input is refused, 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     updated = await _call(
         workspace.update_contact(user.id, resource_name, account=account, **body.model_dump())
     )
@@ -361,6 +511,12 @@ async def contacts_update(
 
 @router.get("/tasks/lists")
 async def tasks_lists(user: User, account: Account = None) -> dict[str, Any]:
+    """List the account's task lists.
+
+    Returns `{lists}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     return {"lists": await _call(workspace.list_task_lists(user.id, account=account))}
 
 
@@ -371,6 +527,12 @@ async def tasks_list(
     show_done: bool = Query(default=False),
     account: Account = None,
 ) -> dict[str, Any]:
+    """List the tasks of a task list.
+
+    `task_list` defaults to `@default`. Completed tasks are left out unless `show_done` is true. Returns `{tasks}`, up to 100.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     found = await _call(
         workspace.list_tasks(user.id, task_list, show_done=show_done, account=account)
     )
@@ -381,6 +543,12 @@ async def tasks_list(
 async def tasks_create(
     body: TaskCreateRequest, user: User, account: Account = None
 ) -> dict[str, Any]:
+    """Create a task.
+
+    `task_list` defaults to `@default`; `due` is the due date. Returns `{task}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     created = await _call(workspace.create_task(user.id, account=account, **body.model_dump()))
     return {"task": created}
 
@@ -389,6 +557,12 @@ async def tasks_create(
 async def tasks_update(
     task_id: str, body: TaskUpdateRequest, user: User, account: Account = None
 ) -> dict[str, Any]:
+    """Change fields of a task.
+
+    Only the fields sent are changed; `done` marks it completed or not. Returns `{task}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     updated = await _call(
         workspace.update_task(user.id, task_id, account=account, **body.model_dump())
     )

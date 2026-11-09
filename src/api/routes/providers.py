@@ -45,6 +45,11 @@ class CompleteRequest(BaseModel):
 
 @router.get("")
 async def connections(user: Annotated[AuthUser, Depends(require_auth)]) -> dict[str, Any]:
+    """List the model providers the user has connected.
+
+    Requires a user JWT. Shows each provider with a hint of its key and when it was updated, never the
+    key itself. Works when key storage is not configured: nothing is connected then.
+    """
     return await provider_keys_service.list_connections(user.id)
 
 
@@ -56,6 +61,11 @@ async def connect_key(
     body: KeyRequest,
     user: Annotated[AuthUser, Depends(require_auth)],
 ) -> dict[str, str]:
+    """Store the user's API key for a provider, after the provider accepts it.
+
+    Requires a user JWT. Rate limited. Errors: 400 when the provider refuses the key, 404 for an unknown
+    provider, 502 when the provider does not answer, 503 when keys cannot be stored.
+    """
     try:
         return await provider_keys_service.connect_key(user.id, provider, body.key)
     except ProviderKeysNotConfiguredError as exc:
@@ -75,6 +85,11 @@ async def check_key(
     provider: str,
     user: Annotated[AuthUser, Depends(require_auth)],
 ) -> dict[str, bool]:
+    """Check that the provider still accepts the key connected for it.
+
+    Requires a user JWT. Rate limited. Returns `{"ok": bool}`. Errors: 404 when the provider is not
+    connected, 502 when the provider does not answer, 503 when keys cannot be stored.
+    """
     try:
         return {"ok": await provider_keys_service.check_key(user.id, provider)}
     except ProviderKeysNotConfiguredError as exc:
@@ -89,6 +104,11 @@ async def check_key(
 async def disconnect(
     provider: str, user: Annotated[AuthUser, Depends(require_auth)]
 ) -> dict[str, bool]:
+    """Forget the user's key for a provider.
+
+    Requires a user JWT. Revoking the key is up to the user on the provider's site.
+    Returns `{"ok": true}`. Returns 404 when the provider is not connected.
+    """
     if not await provider_keys_service.disconnect(user.id, provider):
         raise HTTPException(status_code=404, detail="Not connected")
     return {"ok": True}
@@ -100,6 +120,12 @@ async def openrouter_connect(
     user: Annotated[AuthUser, Depends(require_auth)],
     body: ConnectRequest = ConnectRequest(),  # noqa: B008
 ) -> dict[str, str]:
+    """Start the OpenRouter sign-in and return the URL to send the browser to.
+
+    Requires a user JWT. The return target comes from the `Origin` header, or the desktop app when
+    `desktop` is true. Errors: 400 for an unknown return target, 503 when keys
+    cannot be stored.
+    """
     try:
         target = oauth_return.return_target(request.headers.get("origin"), desktop=body.desktop)
         return {"url": provider_keys_service.openrouter_authorization_url(user.id, target)}

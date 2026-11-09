@@ -46,6 +46,11 @@ async def get_events(
     range_start: str = Query(...),
     range_end: str = Query(...),
 ):
+    """List a kwami's calendar events inside a time range.
+
+    Requires a user JWT. `range_start` and `range_end` are ISO date-times. Returns `events`.
+    Returns 400 for an invalid date or an end that is not after the start.
+    """
     try:
         events = await calendar_service.list_events(user.id, kwami_id, range_start, range_end)
     except ValueError as exc:
@@ -58,6 +63,12 @@ async def create_event(
     body: CalendarEventCreateRequest,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
+    """Create a calendar event for a kwami.
+
+    Requires a user JWT. `starts_at` and `ends_at` are ISO date-times and the end must be after the
+    start. Returns the `event`. Returns 400 for invalid input or a kwami that is not
+    the user's.
+    """
     try:
         event = await calendar_service.create_event(
             user.id,
@@ -83,6 +94,11 @@ async def patch_event(
     body: CalendarEventUpdateRequest,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
+    """Change the given fields of a calendar event.
+
+    Requires a user JWT. Only the fields sent are changed. Returns the `event`.
+    Errors: 400 for invalid input, 404 when the event is not found.
+    """
     try:
         event = await calendar_service.update_event(
             user.id,
@@ -109,6 +125,10 @@ async def remove_event(
     event_id: str,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
+    """Delete a calendar event.
+
+    Requires a user JWT. Returns `{"ok": true}`. Returns 404 when the event is not found.
+    """
     deleted = await calendar_service.delete_event(user.id, event_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Event not found")
