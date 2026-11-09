@@ -1,12 +1,14 @@
-"""Twilio voice/messages and SendGrid email webhooks."""
+"""Twilio voice/messages, SendGrid email and LiveKit room webhooks."""
 
 from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
+from livekit import api as livekit_api
 
 from src.core.config import settings
 from src.services.channels import (
@@ -23,6 +25,7 @@ from src.services.channels import (
 )
 from src.services.email_service import process_inbound_email
 from src.services.sendgrid_service import verify_inbound_webhook
+from src.services.sessions import record_room_event
 from src.services.twilio_service import (
     build_message_ack_response,
     build_voice_bridge_response,
@@ -59,7 +62,8 @@ async def twilio_voice_webhook(request: Request):
 
     channel = await find_channel_by_address(called)
     if not channel:
-        logger.warning("Inbound voice call to unknown number: %s", called)
+        # Not the number: whose it is, is the caller's business, not the log's.
+        logger.warning("Inbound voice call to a number no channel has")
         return Response("<Response><Reject/></Response>", media_type="application/xml")
 
     contact = await ensure_contact(
@@ -283,3 +287,40 @@ async def sendgrid_inbound_email(request: Request):
     if not stored:
         logger.warning("Inbound email dropped — no matching account")
     return JSONResponse({"ok": True})
+
+
+def _livekit_receiver() -> livekit_api.WebhookReceiver:
+    return livekit_api.WebhookReceiver(
+        livekit_api.TokenVerifier(settings.livekit_api_key, settings.livekit_api_secret)
+    )
+
+
+@router.post("/livekit")
+async def livekit_webhook(request: Request):
+    """Room lifecycle from LiveKit Cloud: started, joined, left, finished.
+
+    LiveKit signs every delivery with a JWT made from this project's API key and
+    secret, carrying the SHA-256 of the body; anything that does not verify is
+    refused. Configure the URL `/webhooks/livekit` in the LiveKit project's
+    webhook settings.
+    """
+    body = (await request.body()).decode("utf-8", errors="replace")
+    token = request.headers.get("Authorization", "").strip()
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
+    try:
+        event = _livekit_receiver().receive(body, token)
+    except Exception:
+        logger.warning("Rejected a LiveKit webhook that did not verify")
+        return JSONResponse({"detail": "Invalid webhook signature"}, status_code=401)
+
+    at = (
+        datetime.fromtimestamp(event.created_at, UTC) if event.created_at > 0 else datetime.now(UTC)
+    )
+    try:
+        updated = await record_room_event(event.event, event.room.name, at=at)
+    except Exception:
+        # Every update is idempotent, so a retry from LiveKit is the right recovery.
+        logger.exception("Could not record LiveKit event %s for %s", event.event, event.room.name)
+        return JSONResponse({"detail": "Could not record the event"}, status_code=503)
+    return JSONResponse({"ok": True, "updated": updated})

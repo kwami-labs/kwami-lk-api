@@ -234,7 +234,8 @@ class TestPurchase:
         with caplog.at_level("WARNING", logger="kwami-api.channels"):
             body = await _purchase(tenant_client, tenant.kwami_id)
         assert body["voiceChannel"]["status"] == "routing_pending"
-        assert body["sharedInfrastructure"]["error"] == "livekit unreachable"
+        # The kind of failure, never the provider's own words.
+        assert body["sharedInfrastructure"]["error"] == "RuntimeError"
         assert body["voiceChannel"]["capabilities"]["outbound"] is False
 
     async def test_an_unsynced_outbound_trunk_marks_routing_pending(
@@ -347,7 +348,7 @@ class TestRelease:
                 json={"kwamiId": tenant.kwami_id, "channelId": channel_id},
             )
         assert r.status_code == 200
-        assert r.json()["provider"]["livekit"] == {"error": "livekit down"}
+        assert r.json()["provider"]["livekit"] == {"error": "RuntimeError"}
 
     async def test_a_trunk_detach_failure_does_not_block_release(
         self, monkeypatch, tenant_client, tenant, stub_providers, caplog
@@ -364,7 +365,7 @@ class TestRelease:
                 json={"kwamiId": tenant.kwami_id, "channelId": channel_id},
             )
         assert r.status_code == 200
-        assert r.json()["provider"]["twilioTrunk"] == {"error": "detach failed"}
+        assert r.json()["provider"]["twilioTrunk"] == {"error": "RuntimeError"}
 
     async def test_a_number_release_failure_is_a_502_and_keeps_the_rows(
         self, monkeypatch, tenant_client, tenant, stub_providers, fake_supabase, caplog

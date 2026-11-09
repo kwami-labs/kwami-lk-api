@@ -101,6 +101,7 @@ src/api/routes/memory/core.py                100
 src/api/routes/memory/graph.py               100
 src/api/routes/memory/ontology.py            100
 src/api/routes/memory/analysis.py            100
+src/api/routes/memory/sessions.py            100
 src/api/routes/models.py                     100
 
 # LiveKit token issuance -- the endpoint the app cannot work without, and the one that decides
@@ -148,6 +149,16 @@ src/services/memory/client.py                100
 src/services/memory/tenancy.py               100
 src/services/memory/ontology.py              100
 src/services/memory/graph.py                 100
+# `paging.py` walks a graph past Zep's 50-record page; `ownership.py` checks that a
+# uuid named in a route is in the caller's own graph before anything is changed.
+src/services/memory/paging.py                100
+src/services/memory/ownership.py             100
+# `merge.py` moves every fact of a duplicate before deleting it; `analysis.py` is the
+# duplicate-pair pass, pure so the routes can run it off the event loop.
+src/services/memory/merge.py                 100
+src/services/memory/analysis.py              100
+# `threads.py` reads one user's threads instead of every thread in the project.
+src/services/memory/threads.py               100
 src/services/languages.py                    100
 src/services/livekit.py                      100
 src/services/models.py                       100
@@ -167,6 +178,7 @@ src/services/voices.py                       100
 src/services/wallet_service.py               100
 
 # Reminders, reports and the user's Google account.
+src/api/routes/access.py                     100
 src/api/routes/assistant.py                  100
 src/api/routes/google.py                     100
 src/api/routes/google_workspace.py           100
@@ -180,4 +192,9 @@ src/services/google_workspace.py             100
 src/services/oauth_return.py                 100
 src/services/pc_service.py                   100
 src/services/provider_keys_service.py        100
+src/services/site_access_service.py          100
 src/services/voice_preview.py                100
+
+# The brain from the app: work on the PC or in the cloud, the user's agents, sync.
+src/api/routes/brain.py                      100
+src/services/brain_service.py                100

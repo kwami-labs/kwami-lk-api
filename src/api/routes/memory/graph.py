@@ -1,14 +1,24 @@
-"""Reading the knowledge graph: edges, nodes, search, entities, the whole graph."""
+"""Reading the knowledge graph: edges, nodes, search, entities, the whole graph.
+
+Zep returns at most 50 records per listing call, so every reader here walks the
+uuid cursor (see `src.services.memory.paging`). The edge and node listings take
+either the `cursor` they returned last time or the older `offset`; a cursor
+costs one Zep call per 50 records, an offset re-walks everything before it.
+
+A listing Zep fails to serve is a 502, not an empty page: "this memory is
+empty" and "the memory service is down" must not look the same in the panel.
+"""
 
 from __future__ import annotations
 
 import logging
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from zep_cloud.client import AsyncZep
 
 from src.api.deps import require_auth
+from src.core.logging import log_safe
 from src.core.security import AuthUser
 from src.services.memory import (
     _extract_user_display_name,
@@ -16,14 +26,66 @@ from src.services.memory import (
     get_zep_client,
     verify_user_access,
 )
+from src.services.memory.paging import collect, page, uuid_of
 
 logger = logging.getLogger("kwami-api.memory")
 router = APIRouter()
 
-# How many records are pulled from Zep before slicing a "page" in Python.
-# Endpoints fetch this many regardless of the requested page size, so `total`
-# saturates here and `has_more` is wrong beyond it.
-ZEP_FETCH_LIMIT = 1000
+#: The most records one `/graph` read will assemble.
+MAX_GRAPH_LIMIT = 5000
+
+UNAVAILABLE = "Memory service unavailable"
+
+
+def _when(record: Any, name: str) -> str | None:
+    value = getattr(record, name, None)
+    return str(value) if value else None
+
+
+def _edge_row(edge: Any) -> dict:
+    return {
+        "uuid": uuid_of(edge),
+        "fact": getattr(edge, "fact", None),
+        "name": getattr(edge, "name", None),
+        "source_node_uuid": getattr(edge, "source_node_uuid", None),
+        "target_node_uuid": getattr(edge, "target_node_uuid", None),
+        "created_at": _when(edge, "created_at"),
+        "valid_at": _when(edge, "valid_at"),
+        "invalid_at": _when(edge, "invalid_at"),
+        "expired_at": _when(edge, "expired_at"),
+    }
+
+
+def _node_row(node: Any) -> dict:
+    return {
+        "uuid": uuid_of(node),
+        "name": getattr(node, "name", None),
+        "summary": getattr(node, "summary", None),
+        "labels": list(getattr(node, "labels", None) or []),
+        "created_at": _when(node, "created_at"),
+        "degree": getattr(node, "degree", None),
+    }
+
+
+def _page_body(key: str, rows: list[dict], offset: int, limit: int, cursor: str | None) -> dict:
+    """The page envelope the app reads: `total` is exact once `has_more` is false.
+
+    Zep gives no count for a listing, so while more remain `total` is a lower
+    bound -- what has been seen so far plus the one record that proves there is
+    more. A client that walks to the end ends with the exact figure.
+    """
+    has_more = cursor is not None
+    seen = offset + len(rows)
+    return {
+        key: rows,
+        "count": len(rows),
+        "total": seen + 1 if has_more else seen,
+        "total_is_exact": not has_more,
+        "offset": offset,
+        "limit": limit,
+        "has_more": has_more,
+        "next_cursor": cursor,
+    }
 
 
 @router.get("/{user_id}/edges")
@@ -33,8 +95,9 @@ async def get_user_edges(
     client: AsyncZep = Depends(get_zep_client),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    cursor: str | None = Query(None, description="`next_cursor` from the previous page"),
 ):
-    """Get edges (facts with temporal data) for a user with pagination.
+    """Get edges (facts with temporal data) for a user, a page at a time.
 
     Edges represent facts/relationships in the knowledge graph. Each edge includes:
     - fact: The relationship description
@@ -43,109 +106,34 @@ async def get_user_edges(
     - created_at: When Zep learned the fact
     - expired_at: When Zep learned the fact was no longer true
 
-    Supports offset/limit pagination. Returns total count and has_more flag.
+    Pass the `next_cursor` of one page to get the next; `offset` still works.
     """
     verify_user_access(user, user_id)
     logger.info("🔗 Fetching edges for user: %s (offset=%s, limit=%s)", user_id, offset, limit)
     try:
-        all_edges = []
-
-        # Get all edges from Zep (large batch)
-        try:
-            edges_response = await client.graph.edge.get_by_user_id(
-                user_id=user_id, limit=ZEP_FETCH_LIMIT
-            )
-            if edges_response:
-                for edge in edges_response:
-                    all_edges.append(
-                        {
-                            "uuid": edge.uuid_
-                            if hasattr(edge, "uuid_")
-                            else (edge.uuid if hasattr(edge, "uuid") else None),
-                            "fact": edge.fact if hasattr(edge, "fact") else None,
-                            "name": edge.name if hasattr(edge, "name") else None,
-                            "source_node_uuid": edge.source_node_uuid
-                            if hasattr(edge, "source_node_uuid")
-                            else None,
-                            "target_node_uuid": edge.target_node_uuid
-                            if hasattr(edge, "target_node_uuid")
-                            else None,
-                            "created_at": str(edge.created_at)
-                            if hasattr(edge, "created_at") and edge.created_at
-                            else None,
-                            "valid_at": str(edge.valid_at)
-                            if hasattr(edge, "valid_at") and edge.valid_at
-                            else None,
-                            "invalid_at": str(edge.invalid_at)
-                            if hasattr(edge, "invalid_at") and edge.invalid_at
-                            else None,
-                            "expired_at": str(edge.expired_at)
-                            if hasattr(edge, "expired_at") and edge.expired_at
-                            else None,
-                        }
-                    )
-        except Exception as e:
-            logger.warning("🔗 graph.edge.get_by_user_id failed: %s", e)
-            # Fallback to graph.search
-            try:
-                facts_response = await client.graph.search(
-                    user_id=user_id,
-                    query="*",
-                    scope="edges",
-                    limit=ZEP_FETCH_LIMIT,
-                )
-                if facts_response and facts_response.edges:
-                    for edge in facts_response.edges:
-                        all_edges.append(
-                            {
-                                "uuid": edge.uuid_
-                                if hasattr(edge, "uuid_")
-                                else (edge.uuid if hasattr(edge, "uuid") else None),
-                                "fact": edge.fact if hasattr(edge, "fact") else None,
-                                "name": edge.name if hasattr(edge, "name") else None,
-                                "source_node_uuid": edge.source_node_uuid
-                                if hasattr(edge, "source_node_uuid")
-                                else None,
-                                "target_node_uuid": edge.target_node_uuid
-                                if hasattr(edge, "target_node_uuid")
-                                else None,
-                                "created_at": str(edge.created_at)
-                                if hasattr(edge, "created_at") and edge.created_at
-                                else None,
-                                "valid_at": str(edge.valid_at)
-                                if hasattr(edge, "valid_at") and edge.valid_at
-                                else None,
-                                "invalid_at": str(edge.invalid_at)
-                                if hasattr(edge, "invalid_at") and edge.invalid_at
-                                else None,
-                                "expired_at": str(edge.expired_at)
-                                if hasattr(edge, "expired_at") and edge.expired_at
-                                else None,
-                            }
-                        )
-            except Exception as search_err:
-                logger.warning("🔗 Fallback graph.search also failed: %s", search_err)
-
-        # Apply pagination
-        total = len(all_edges)
-        paginated = all_edges[offset : offset + limit]
-        has_more = (offset + limit) < total
-
-        logger.info(
-            "🔗 Found %s total edges, returning %s (offset=%s)", total, len(paginated), offset
+        edges, next_cursor = await page(
+            client.graph.edge.get_by_user_id,
+            user_id,
+            limit=limit,
+            cursor=cursor,
+            offset=0 if cursor else offset,
         )
-        return {
-            "edges": paginated,
-            "count": len(paginated),
-            "total": total,
-            "offset": offset,
-            "limit": limit,
-            "has_more": has_more,
-        }
-
     except Exception as e:
-        logger.exception("Failed to fetch edges")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.warning("🔗 graph.edge.get_by_user_id failed: %s", e)
+        # graph.search has no cursor: it can stand in for one page, the last.
+        try:
+            facts_response = await client.graph.search(
+                user_id=user_id, query="*", scope="edges", limit=limit
+            )
+        except Exception as search_err:
+            logger.warning("🔗 Fallback graph.search also failed: %s", search_err)
+            raise HTTPException(status_code=502, detail=UNAVAILABLE) from search_err
+        edges = list(getattr(facts_response, "edges", None) or [])
+        next_cursor = None
+
+    rows = [_edge_row(edge) for edge in edges]
+    logger.info("🔗 Returning %s edges (offset=%s)", len(rows), log_safe(offset))
+    return _page_body("edges", rows, offset, limit, next_cursor)
 
 
 @router.get("/{user_id}/nodes")
@@ -155,65 +143,35 @@ async def get_user_nodes(
     client: AsyncZep = Depends(get_zep_client),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    cursor: str | None = Query(None, description="`next_cursor` from the previous page"),
 ):
-    """Get nodes (entities with summaries) for a user with pagination.
+    """Get nodes (entities with summaries) for a user, a page at a time.
 
     Nodes represent entities in the knowledge graph. Each node includes:
     - name: The entity name
     - summary: AI-generated overview of the entity
     - labels: Type categorization
+    - degree: How many facts it takes part in
 
-    Supports offset/limit pagination. Returns total count and has_more flag.
+    Pass the `next_cursor` of one page to get the next; `offset` still works.
     """
     verify_user_access(user, user_id)
     logger.info("🔵 Fetching nodes for user: %s (offset=%s, limit=%s)", user_id, offset, limit)
     try:
-        all_nodes = []
-
-        try:
-            nodes_response = await client.graph.node.get_by_user_id(
-                user_id=user_id, limit=ZEP_FETCH_LIMIT
-            )
-            if nodes_response:
-                for node in nodes_response:
-                    all_nodes.append(
-                        {
-                            "uuid": node.uuid_
-                            if hasattr(node, "uuid_")
-                            else (node.uuid if hasattr(node, "uuid") else None),
-                            "name": node.name if hasattr(node, "name") else None,
-                            "summary": node.summary if hasattr(node, "summary") else None,
-                            "labels": list(node.labels)
-                            if hasattr(node, "labels") and node.labels
-                            else [],
-                            "created_at": str(node.created_at)
-                            if hasattr(node, "created_at") and node.created_at
-                            else None,
-                        }
-                    )
-        except Exception as e:
-            logger.warning("🔵 graph.node.get_by_user_id failed: %s", e)
-
-        # Apply pagination
-        total = len(all_nodes)
-        paginated = all_nodes[offset : offset + limit]
-        has_more = (offset + limit) < total
-
-        logger.info(
-            "🔵 Found %s total nodes, returning %s (offset=%s)", total, len(paginated), offset
+        nodes, next_cursor = await page(
+            client.graph.node.get_by_user_id,
+            user_id,
+            limit=limit,
+            cursor=cursor,
+            offset=0 if cursor else offset,
         )
-        return {
-            "nodes": paginated,
-            "count": len(paginated),
-            "total": total,
-            "offset": offset,
-            "limit": limit,
-            "has_more": has_more,
-        }
-
     except Exception as e:
-        logger.exception("Failed to fetch nodes")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.warning("🔵 graph.node.get_by_user_id failed: %s", e)
+        raise HTTPException(status_code=502, detail=UNAVAILABLE) from e
+
+    rows = [_node_row(node) for node in nodes]
+    logger.info("🔵 Returning %s nodes (offset=%s)", len(rows), log_safe(offset))
+    return _page_body("nodes", rows, offset, limit, next_cursor)
 
 
 @router.get("/{user_id}/search")
@@ -311,7 +269,7 @@ async def search_graph(
 
     except Exception as e:
         logger.exception("Failed to search graph")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to search graph") from e
 
 
 @router.get("/{user_id}/entities/{entity_type}")
@@ -334,50 +292,38 @@ async def get_entities_by_type(
     logger.info("🏷️ Fetching %s entities for user: %s", entity_type, user_id)
 
     try:
-        all_entities = []
-
-        # Get all nodes and filter by type
-        nodes_response = await client.graph.node.get_by_user_id(
-            user_id=user_id,
-            limit=ZEP_FETCH_LIMIT,
-        )
-
-        if nodes_response:
-            for node in nodes_response:
-                node_labels = list(node.labels) if hasattr(node, "labels") and node.labels else []
-                # Check if the entity type matches (case-insensitive)
-                if any(label.lower() == entity_type.lower() for label in node_labels):
-                    all_entities.append(
-                        {
-                            "name": getattr(node, "name", ""),
-                            "type": node_labels[0] if node_labels else "entity",
-                            "labels": node_labels,
-                            "summary": getattr(node, "summary", ""),
-                            "uuid": getattr(node, "uuid_", None) or getattr(node, "uuid", None),
-                            "created_at": str(node.created_at)
-                            if hasattr(node, "created_at") and node.created_at
-                            else None,
-                        }
-                    )
-
-        # Apply pagination
-        total = len(all_entities)
-        paginated = all_entities[offset : offset + limit]
-        has_more = (offset + limit) < total
-
-        return {
-            "entity_type": entity_type,
-            "entities": paginated,
-            "count": len(paginated),
-            "total": total,
-            "offset": offset,
-            "limit": limit,
-            "has_more": has_more,
-        }
-
+        nodes = await collect(client.graph.node.get_by_user_id, user_id)
     except Exception as e:
-        logger.exception("Failed to fetch entities by type")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        logger.warning("🏷️ graph.node.get_by_user_id failed: %s", e)
+        raise HTTPException(status_code=502, detail=UNAVAILABLE) from e
+
+    wanted = entity_type.lower()
+    all_entities = []
+    for node in nodes:
+        node_labels = list(getattr(node, "labels", None) or [])
+        if any(label.lower() == wanted for label in node_labels):
+            all_entities.append(
+                {
+                    "name": getattr(node, "name", ""),
+                    "type": node_labels[0],
+                    "labels": node_labels,
+                    "summary": getattr(node, "summary", ""),
+                    "uuid": uuid_of(node),
+                    "created_at": _when(node, "created_at"),
+                }
+            )
+
+    total = len(all_entities)
+    paginated = all_entities[offset : offset + limit]
+    return {
+        "entity_type": entity_type,
+        "entities": paginated,
+        "count": len(paginated),
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": (offset + limit) < total,
+    }
 
 
 @router.get("/{user_id}/graph")
@@ -385,7 +331,7 @@ async def get_memory_graph(
     user_id: str,
     user: Annotated[AuthUser, Depends(require_auth)],
     client: AsyncZep = Depends(get_zep_client),
-    limit: int = Query(1000, ge=1, le=5000),
+    limit: int = Query(1000, ge=1, le=MAX_GRAPH_LIMIT),
 ):
     """Get the knowledge graph representation of the user's memory from Zep.
 
@@ -399,76 +345,48 @@ async def get_memory_graph(
         edges = []
         graph_edges_raw = []  # Store raw edges for relationship building
 
-        # 1. Get edges via graph API (for relationships)
+        # 1. Edges and 2. nodes, walked past Zep's 50-record page.
         try:
-            edges_response = await client.graph.edge.get_by_user_id(user_id=user_id, limit=limit)
-            if edges_response:
-                logger.info("📊 Got %s edges from graph.edge", len(edges_response))
-                for edge in edges_response:
-                    edge_data = {
-                        "fact": getattr(edge, "fact", None),
-                        "relation": getattr(edge, "name", "related_to"),
-                        "source_node": getattr(edge, "source_node_uuid", None),
-                        "target_node": getattr(edge, "target_node_uuid", None),
-                    }
-                    graph_edges_raw.append(edge_data)
+            raw_edges = await collect(client.graph.edge.get_by_user_id, user_id, max_items=limit)
+            raw_nodes = await collect(client.graph.node.get_by_user_id, user_id, max_items=limit)
         except Exception as e:
-            logger.warning("📊 graph.edge failed, trying search: %s", e)
-            # Fallback to graph.search
-            try:
-                facts_response = await client.graph.search(
-                    user_id=user_id,
-                    query="*",
-                    scope="edges",
-                    limit=limit,
-                )
-                if facts_response and facts_response.edges:
-                    for edge in facts_response.edges:
-                        edge_data = {
-                            "fact": getattr(edge, "fact", None),
-                            "relation": getattr(edge, "name", "related_to"),
-                            "source_node": getattr(edge, "source_node_uuid", None),
-                            "target_node": getattr(edge, "target_node_uuid", None),
-                        }
-                        graph_edges_raw.append(edge_data)
-            except Exception as search_e:
-                logger.warning("📊 graph.search edges also failed: %s", search_e)
+            logger.warning("📊 graph listing failed: %s", e)
+            raise HTTPException(status_code=502, detail=UNAVAILABLE) from e
+        logger.info("📊 Got %s edges and %s nodes", len(raw_edges), len(raw_nodes))
 
-        # 2. Get nodes (entities) from graph.node API
+        for edge in raw_edges:
+            graph_edges_raw.append(
+                {
+                    "fact": getattr(edge, "fact", None),
+                    "relation": getattr(edge, "name", "related_to"),
+                    "source_node": getattr(edge, "source_node_uuid", None),
+                    "target_node": getattr(edge, "target_node_uuid", None),
+                }
+            )
+
         entity_nodes = []
+        for node in raw_nodes:
+            node_name = getattr(node, "name", "Unknown")
+            node_labels = list(getattr(node, "labels", None) or [])
+            node_summary = getattr(node, "summary", None)
 
-        try:
-            nodes_response = await client.graph.node.get_by_user_id(user_id=user_id, limit=limit)
-            if nodes_response:
-                logger.info("📊 Got %s nodes from graph.node", len(nodes_response))
-                for node in nodes_response:
-                    node_name = getattr(node, "name", "Unknown")
-                    node_labels = (
-                        list(node.labels) if hasattr(node, "labels") and node.labels else []
-                    )
-                    node_uuid = getattr(node, "uuid_", None) or getattr(node, "uuid", None)
-                    created_at = node.created_at if hasattr(node, "created_at") else None
-                    node_summary = getattr(node, "summary", None)
+            # Infer type using labels + keyword analysis
+            node_type = _infer_node_type(node_name, node_summary, node_labels)
 
-                    # Infer type using labels + keyword analysis
-                    node_type = _infer_node_type(node_name, node_summary, node_labels)
+            # Detect the user/kwami node
+            if node_type == "user" or "kwami_" in node_name.lower():
+                node_type = "user"
 
-                    # Detect the user/kwami node
-                    if node_type == "user" or "kwami_" in node_name.lower():
-                        node_type = "user"
-
-                    entity_nodes.append(
-                        {
-                            "name": node_name,
-                            "type": node_type,
-                            "summary": node_summary,
-                            "uuid": node_uuid,
-                            "created_at": created_at,
-                            "labels": node_labels,
-                        }
-                    )
-        except Exception as e:
-            logger.warning("📊 graph.node failed: %s", e)
+            entity_nodes.append(
+                {
+                    "name": node_name,
+                    "type": node_type,
+                    "summary": node_summary,
+                    "uuid": uuid_of(node),
+                    "created_at": getattr(node, "created_at", None),
+                    "labels": node_labels,
+                }
+            )
 
         # 3. Build the visualization graph
         # Map UUIDs to node IDs for edge building
@@ -534,6 +452,8 @@ async def get_memory_graph(
         logger.info("📊 Final graph: %s nodes, %s edges", len(nodes), len(edges))
         return {"nodes": nodes, "edges": edges}
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Failed to fetch memory graph")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to fetch memory graph") from e

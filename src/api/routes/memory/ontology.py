@@ -14,6 +14,7 @@ from src.api.routes.memory.schemas import (
     FactRatingRequest,
     OntologySchema,
 )
+from src.core.logging import log_safe
 from src.core.security import AuthUser
 from src.services.memory import (
     DEFAULT_EDGE_TYPES,
@@ -26,10 +27,23 @@ from src.services.memory import (
 logger = logging.getLogger("kwami-api.memory")
 router = APIRouter()
 
-# How many records are pulled from Zep before slicing a "page" in Python.
-# Endpoints fetch this many regardless of the requested page size, so `total`
-# saturates here and `has_more` is wrong beyond it.
-ZEP_FETCH_LIMIT = 1000
+#: The agent stamps this key on the Zep user's metadata with the version of
+#: the default ontology it applied, and never applies its defaults over the
+#: value "custom". Setting an ontology here marks it custom; a reset clears it,
+#: so the agent's current defaults go back on at the next conversation.
+ONTOLOGY_METADATA_KEY = "kwami_ontology"
+CUSTOM_ONTOLOGY = "custom"
+
+
+async def _mark_ontology(client: AsyncZep, user_id: str, value: str | None) -> None:
+    """Record on the user's Zep metadata whose ontology this is. Best effort."""
+    try:
+        record = await client.user.get(user_id)
+        metadata = dict(getattr(record, "metadata", None) or {})
+        metadata[ONTOLOGY_METADATA_KEY] = value
+        await client.user.update(user_id=user_id, metadata=metadata)
+    except Exception as e:
+        logger.warning("📋 Could not mark the ontology of %s: %s", log_safe(user_id), log_safe(e))
 
 
 @router.get("/{user_id}/ontology")
@@ -42,24 +56,25 @@ async def get_user_ontology(
 
     Returns the configured entity types and edge types that Zep uses
     for extracting information from conversations.
+
+    This called `graph.get_ontology`, which zep-cloud does not have, so it
+    answered 500 every time. The listing is `graph.list_entity_types`.
     """
     verify_user_access(user, user_id)
     logger.info("📋 Fetching ontology for user: %s", user_id)
 
     try:
-        ontology = await client.graph.get_ontology(user_id=user_id)
+        ontology = await client.graph.list_entity_types(user_id=user_id)
 
-        if ontology:
+        entity_types = list(getattr(ontology, "entity_types", None) or [])
+        edge_types = list(getattr(ontology, "edge_types", None) or [])
+        if entity_types or edge_types:
             return {
                 "user_id": user_id,
                 "entity_types": [
-                    {"name": e.name, "description": e.description}
-                    for e in (ontology.entity_types or [])
+                    {"name": e.name, "description": e.description} for e in entity_types
                 ],
-                "edge_types": [
-                    {"name": e.name, "description": e.description}
-                    for e in (ontology.edge_types or [])
-                ],
+                "edge_types": [{"name": e.name, "description": e.description} for e in edge_types],
             }
         # Return defaults if no ontology configured
         return {
@@ -80,7 +95,7 @@ async def get_user_ontology(
                 "is_default": True,
             }
         logger.exception("Failed to fetch ontology")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to fetch ontology") from e
 
 
 @router.put("/{user_id}/ontology")
@@ -110,6 +125,9 @@ async def set_user_ontology(
             user_ids=[user_id],
         )
 
+        # So the agent's session start does not put its defaults back over it.
+        await _mark_ontology(client, user_id, CUSTOM_ONTOLOGY)
+
         logger.info(
             "📋 Ontology set: %s entity types, %s edge types",
             len(ontology.entity_types),
@@ -125,7 +143,7 @@ async def set_user_ontology(
 
     except Exception as e:
         logger.exception("Failed to set ontology")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to set ontology") from e
 
 
 @router.post("/{user_id}/ontology/reset")
@@ -149,6 +167,9 @@ async def reset_user_ontology(
             edges=edges,
             user_ids=[user_id],
         )
+        # No longer custom: the agent's current defaults apply from the next
+        # conversation, with its source and target constraints.
+        await _mark_ontology(client, user_id, None)
 
         return {
             "success": True,
@@ -160,7 +181,7 @@ async def reset_user_ontology(
 
     except Exception as e:
         logger.exception("Failed to reset ontology")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to reset ontology") from e
 
 
 @router.get("/{user_id}/fact-rating")
@@ -217,7 +238,7 @@ async def get_fact_rating(
 
     except Exception as e:
         logger.exception("Failed to get fact rating")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to get fact rating") from e
 
 
 @router.put("/{user_id}/fact-rating")
@@ -263,7 +284,7 @@ async def set_fact_rating(
 
     except Exception as e:
         logger.exception("Failed to set fact rating")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to set fact rating") from e
 
 
 @router.get("/{user_id}/instructions")
@@ -297,7 +318,7 @@ async def get_custom_instructions(
 
     except Exception as e:
         logger.exception("Failed to get custom instructions")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to get custom instructions") from e
 
 
 @router.post("/{user_id}/instructions")
@@ -335,7 +356,7 @@ async def add_custom_instructions(
 
     except Exception as e:
         logger.exception("Failed to add custom instructions")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to add custom instructions") from e
 
 
 @router.delete("/{user_id}/instructions")
@@ -370,4 +391,4 @@ async def delete_custom_instructions(
 
     except Exception as e:
         logger.exception("Failed to delete custom instructions")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="Failed to delete custom instructions") from e

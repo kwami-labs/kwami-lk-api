@@ -34,6 +34,16 @@ _STANDARD_FIELDS = frozenset(logging.LogRecord("", 0, "", 0, "", None, None).__d
 }
 
 
+def log_safe(value: object) -> str:
+    """``value`` as text that cannot start a new log line.
+
+    Ids and error messages from a request go into plain-text logs too (local runs, the
+    container console). A CR or LF in them would let a caller forge a log line, so both
+    are written escaped.
+    """
+    return str(value).replace("\r", "\\r").replace("\n", "\\n")
+
+
 def get_request_id() -> str | None:
     """The current request's id, or None outside a request."""
     return request_id_var.get()
@@ -66,6 +76,22 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str)
 
 
+class TextFormatter(logging.Formatter):
+    """Plain text for a person at a terminal: one line per record, whatever it carries.
+
+    Log lines take values a caller chose: a path parameter, a query, a body field. With
+    a line break in one, a plain-text line ends early and the rest reads as a record of
+    its own, which is how a log gets forged (CodeQL's `py/log-injection`). `json.dumps`
+    escapes it in `JsonFormatter`; this escapes it here. Only the record's line: a
+    traceback keeps its lines so a person can read it, and production writes JSON
+    (`LOG_JSON`, on by default), where nothing breaks a line.
+    """
+
+    def formatMessage(self, record: logging.LogRecord) -> str:  # noqa: N802 -- stdlib name
+        line = super().formatMessage(record)
+        return line.replace("\r", "\\r").replace("\n", "\\n")
+
+
 def configure_logging(*, debug: bool = False, json_output: bool = True) -> None:
     """Install the formatter on the root handler.
 
@@ -77,7 +103,7 @@ def configure_logging(*, debug: bool = False, json_output: bool = True) -> None:
         handler.setFormatter(JsonFormatter())
     else:
         handler.setFormatter(
-            logging.Formatter("%(asctime)s | %(levelname)-8s | %(name)s | %(message)s")
+            TextFormatter("%(asctime)s | %(levelname)-8s | %(name)s | %(message)s")
         )
 
     root = logging.getLogger()

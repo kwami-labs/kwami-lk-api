@@ -41,6 +41,9 @@ class TaskCreateRequest(BaseModel):
     weekdays: list[int] | None = None
     local_time: str | None = None
     timezone: str | None = None
+    #: Scheduled work only: the agent that does it, and where (`/brain`).
+    agent_id: str | None = None
+    target: str | None = None
 
 
 class TaskUpdateRequest(BaseModel):

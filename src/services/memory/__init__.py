@@ -13,11 +13,20 @@ from src.services.memory.graph import (
     _extract_user_display_name,
     _fetch_graph_raw,
     _infer_node_type,
+    find_orphans,
+    is_user_node,
 )
 from src.services.memory.ontology import (
     DEFAULT_EDGE_TYPES,
     DEFAULT_ENTITY_TYPES,
     _build_ontology_models,
+)
+from src.services.memory.ownership import (
+    edges_of_node,
+    has_edges,
+    require_edge,
+    require_node,
+    require_nodes,
 )
 from src.services.memory.tenancy import (
     iter_all_threads,
@@ -33,8 +42,15 @@ __all__ = [
     "_fetch_graph_raw",
     "_infer_node_type",
     "close_zep_client",
+    "edges_of_node",
+    "find_orphans",
     "get_zep_client",
+    "has_edges",
+    "is_user_node",
     "iter_all_threads",
+    "require_edge",
+    "require_node",
+    "require_nodes",
     "thread_belongs_to",
     "verify_user_access",
 ]

@@ -9,6 +9,8 @@ response mapping — which is where a nullable ledger column silently becomes a
 
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 import pytest
 
 from src.api.routes import credits as credits_route
@@ -76,7 +78,8 @@ class TestPurchase:
         monkeypatch.setattr(credits_route, "create_checkout_session", create)
         r = await tenant_client.post("/credits/purchase", json=self._body())
         assert r.status_code == 200
-        assert r.json()["checkout_url"].startswith("https://checkout.stripe.com")
+        checkout = urlparse(r.json()["checkout_url"])
+        assert (checkout.scheme, checkout.hostname) == ("https", "checkout.stripe.com")
         assert seen["user_id"] == tenant.user_id, "the session is bound to the caller"
         assert seen["pack_id"] == "starter"
 

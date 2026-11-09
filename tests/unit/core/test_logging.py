@@ -10,13 +10,16 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 
 import pytest
 
 from src.core.logging import (
     JsonFormatter,
+    TextFormatter,
     configure_logging,
     get_request_id,
+    log_safe,
     request_id_var,
 )
 
@@ -95,7 +98,7 @@ class TestConfigureLogging:
 
     def test_text_output_is_available_for_local_development(self):
         configure_logging(json_output=False)
-        assert not isinstance(logging.getLogger().handlers[0].formatter, JsonFormatter)
+        assert isinstance(logging.getLogger().handlers[0].formatter, TextFormatter)
 
     def test_debug_lowers_the_level(self):
         configure_logging(debug=True)
@@ -118,3 +121,38 @@ class TestGetRequestId:
             assert get_request_id() == "abc"
         finally:
             request_id_var.reset(token)
+
+
+class TestTextFormatter:
+    """A value a caller sent cannot start a record of its own."""
+
+    FORMAT = "%(levelname)s | %(message)s"
+
+    def test_a_line_break_in_a_value_stays_on_the_line(self):
+        record = _record(msg="Deleted node %s", args=("n-1\nINFO | admin granted",))
+        line = TextFormatter(self.FORMAT).format(record)
+        assert line == "INFO | Deleted node n-1\\nINFO | admin granted"
+        assert "\n" not in line
+
+    def test_a_carriage_return_too(self):
+        record = _record(msg="user=%s", args=("u-1\rINFO | forged",))
+        assert "\r" not in TextFormatter(self.FORMAT).format(record)
+
+    def test_a_traceback_keeps_its_own_lines(self):
+        try:
+            raise RuntimeError("boom")
+        except RuntimeError:
+            record = _record(msg="failed", args=(), level=logging.ERROR, exc_info=sys.exc_info())
+        text = TextFormatter(self.FORMAT).format(record)
+        first, *rest = text.split("\n")
+        assert first == "ERROR | failed"
+        assert any("RuntimeError: boom" in line for line in rest)
+
+
+class TestLogSafe:
+    def test_escapes_line_breaks_so_a_value_cannot_forge_a_line(self):
+        assert log_safe("abc\r\nINFO | forged") == "abc\\r\\nINFO | forged"
+
+    def test_leaves_ordinary_values_alone(self):
+        assert log_safe(42) == "42"
+        assert log_safe("9f1c-uuid") == "9f1c-uuid"

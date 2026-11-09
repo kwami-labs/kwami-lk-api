@@ -35,8 +35,18 @@ from src.core.errors import (
     WalletNotFoundError,
     _code_for_status,
     error_body,
+    failure_kind,
     install_error_handlers,
 )
+
+
+class TestFailureKind:
+    def test_it_names_the_failure_and_leaves_its_text_out(self):
+        reason = failure_kind(RuntimeError("upstream at 10.0.0.7 refused key sk-live-123"))
+        assert reason == "RuntimeError"
+
+    def test_a_timeout_still_reads_as_one(self):
+        assert failure_kind(httpx.ReadTimeout("slow")) == "ReadTimeout"
 
 
 class TestDomainErrorConstruction:

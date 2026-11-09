@@ -19,6 +19,7 @@ import base64
 import io
 import json
 import logging
+import re
 import wave
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
@@ -168,8 +169,14 @@ async def _gateway(model: str, voice: str, language: str | None, text: str) -> b
     raise PreviewFailedError(model)
 
 
+#: A voice designed in LiveKit Cloud: "v_" and letters or digits, not a Cartesia UUID.
+_LIVEKIT_VOICE = re.compile(r"^v_[A-Za-z0-9]{6,40}$")
+
+
 async def _cartesia(voice: Voice, language: str, text: str) -> Sample:
-    return Sample(_wav(await _gateway("cartesia/sonic-3", voice.id, language, text)))
+    # LiveKit designs its voices on Sonic 3.5; Cartesia's own ones speak on Sonic 3.
+    model = "cartesia/sonic-3.5" if _LIVEKIT_VOICE.match(voice.id) else "cartesia/sonic-3"
+    return Sample(_wav(await _gateway(model, voice.id, language, text)))
 
 
 async def _rime(voice: Voice, language: str, text: str) -> Sample:

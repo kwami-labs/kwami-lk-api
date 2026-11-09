@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from src.api.deps import require_auth
 from src.api.ratelimit import PROVISIONING_LIMIT, limiter
 from src.core.config import settings
+from src.core.errors import failure_kind
 from src.core.security import AuthUser
 from src.services.channels import (
     build_agent_bootstrap_payload,
@@ -167,7 +168,7 @@ async def purchase_kwami_phone_number(
         except Exception as exc:
             voice_status = "routing_pending"
             voice_outbound_ready = False
-            shared_infra_sync = {"error": str(exc), "strategy": "shared_trunks"}
+            shared_infra_sync = {"error": failure_kind(exc), "strategy": "shared_trunks"}
             logger.warning("Failed to sync purchased number to shared LiveKit trunks: %s", exc)
 
     voice_channel = await upsert_channel(
@@ -279,7 +280,7 @@ async def release_kwami_phone_number(
             provider_steps["livekit"] = await remove_phone_from_shared_livekit_trunks(phone_e164)
         except Exception as exc:
             logger.warning("LiveKit trunk cleanup failed (continuing): %s", exc)
-            provider_steps["livekit"] = {"error": str(exc)}
+            provider_steps["livekit"] = {"error": failure_kind(exc)}
 
         if incoming_sid:
             try:
@@ -287,7 +288,7 @@ async def release_kwami_phone_number(
                 provider_steps["twilioTrunk"] = "detached" if trunk_attach_sid else "skipped"
             except Exception as exc:
                 logger.warning("Twilio SIP trunk detach failed (continuing): %s", exc)
-                provider_steps["twilioTrunk"] = {"error": str(exc)}
+                provider_steps["twilioTrunk"] = {"error": failure_kind(exc)}
 
             try:
                 await release_incoming_phone_number(incoming_sid)

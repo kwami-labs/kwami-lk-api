@@ -16,6 +16,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from src.core.config import settings
+from src.services import brain_service
 from src.services.channels import get_owned_kwami, normalize_phone_number, now_iso
 from src.services.credits import get_supabase_admin
 
@@ -283,10 +284,27 @@ async def create_task(
     weekdays: list[int] | None = None,
     local_time: str | None = None,
     timezone: str | None = None,
+    agent_id: str | None = None,
+    target: str | None = None,
 ) -> dict[str, Any]:
     settings_row = await get_settings(user_id, kwami_id)
     if kind not in USER_KINDS:
         raise ValueError("kind must be 'reminder', 'followup' or 'work'")
+    # Who does scheduled work, and where (migration 029). Named only when chosen.
+    extra: dict[str, Any] = {}
+    if (agent_id or target not in (None, "auto")) and kind != "work":
+        raise ValueError("Only scheduled work can name an agent or where it runs")
+    if target not in (None, "auto", "pc", "cloud"):
+        raise ValueError("target must be 'auto', 'pc' or 'cloud'")
+    if target in ("pc", "cloud"):
+        extra["target"] = target
+    if agent_id:
+        try:
+            agent = await brain_service.get_agent(user_id, agent_id)
+        except brain_service.AgentNotFoundError as exc:
+            raise ValueError("Agent not found") from exc
+        extra["agent_id"] = agent_id
+        notes = notes.strip() or f"Haz tu trabajo de siempre: {agent['description']}"
     clean_title = title.strip()
     if not clean_title:
         raise ValueError("Title is required")
@@ -316,6 +334,7 @@ async def create_task(
                 "notes": notes.strip(),
                 "status": "open",
                 **schedule,
+                **extra,
             }
         )
         .execute()
