@@ -80,11 +80,12 @@ async def test_each_page_carries_a_csp_that_lets_it_load(url: str):
     csp = response.headers["content-security-policy"]
     nonce = re.search(r"'nonce-([^']+)'", csp)
     assert nonce, csp
-    assert "https://cdn.jsdelivr.net" in csp
+    directives = {d.split()[0]: d.split()[1:] for d in csp.split(";") if d.strip()}
+    assert "https://cdn.jsdelivr.net" in directives["script-src"]
     assert f'nonce="{nonce.group(1)}"' in response.text
-    assert "frame-ancestors 'none'" in csp
-    assert "unsafe-eval" not in csp
-    assert "connect-src 'self'" in csp
+    assert directives["frame-ancestors"] == ["'none'"]
+    assert "'unsafe-eval'" not in directives["script-src"]
+    assert directives["connect-src"] == ["'self'"]
 
 
 @pytest.mark.anyio
