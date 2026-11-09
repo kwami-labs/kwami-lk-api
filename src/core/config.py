@@ -483,7 +483,7 @@ class Settings(BaseSettings):
 
     @property
     def show_docs(self) -> bool:
-        """Whether to expose /docs and /redoc."""
+        """Whether to expose the API docs: /docs, /swagger, /redoc and /openapi.json."""
         return not self.is_production or self.enable_docs
 
     @property

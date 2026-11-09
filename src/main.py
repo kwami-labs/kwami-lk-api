@@ -10,11 +10,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi.errors import RateLimitExceeded
 
 from src import __version__
+from src.api.docs import install_docs
 from src.api.middleware import (
     BodySizeLimitMiddleware,
     RequestContextMiddleware,
     SecurityHeadersMiddleware,
 )
+from src.api.openapi_meta import CONTACT, DESCRIPTION, LICENSE_INFO, TAGS
 from src.api.ratelimit import limiter, rate_limit_exceeded_handler
 from src.api.routes import (
     access,
@@ -97,23 +99,30 @@ async def lifespan(app: FastAPI):
 
 
 def docs_urls(show_docs: bool) -> dict[str, str | None]:
-    """The two UIs and the schema they fetch are one decision, not three.
+    """The schema and the pages that render it are one decision, not four.
 
-    Gating only `docs_url` and `redoc_url` left `/openapi.json` served in
-    production with `ENABLE_DOCS=false` -- the same route map, parameters and
-    models the UIs render, minus the HTML. Returning all three together is what
-    stops the next edit from closing one and leaving another open; it is a
-    function rather than three ternaries so a test can assert on it directly.
+    Gating only the pages left `/openapi.json` served in production with `ENABLE_DOCS=false` --
+    the same route map, parameters and models the UIs render, minus the HTML. The pages themselves
+    (`/docs`, `/swagger`, `/redoc`) are mounted by `install_docs`, not by FastAPI, so they are
+    switched off here by simply not being installed; FastAPI's own `docs_url` and `redoc_url` are
+    always `None`, because its built-in pages are blocked by the API's Content-Security-Policy.
+    A function rather than ternaries so a test can assert on it directly.
     """
-    if not show_docs:
-        return {"docs_url": None, "redoc_url": None, "openapi_url": None}
-    return {"docs_url": "/docs", "redoc_url": "/redoc", "openapi_url": "/openapi.json"}
+    return {
+        "docs_url": None,
+        "redoc_url": None,
+        "openapi_url": "/openapi.json" if show_docs else None,
+    }
 
 
 app = FastAPI(
     title="Kwami AI LiveKit API",
-    description="Token endpoint and configuration API for Kwami AI agents",
+    summary="Token endpoint and configuration API for Kwami AI agents",
+    description=DESCRIPTION,
     version=__version__,
+    contact=CONTACT,
+    license_info=LICENSE_INFO,
+    openapi_tags=TAGS,
     lifespan=lifespan,
     **docs_urls(settings.show_docs),
 )
@@ -167,6 +176,9 @@ app.include_router(
     prefix="/admin/reconciliation",
     tags=["Admin Reconciliation"],
 )
+
+if settings.show_docs:
+    install_docs(app)
 
 
 def run():
