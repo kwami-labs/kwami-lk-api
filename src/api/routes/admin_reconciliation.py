@@ -157,6 +157,9 @@ async def get_provider_imports(
     provider: str | None = Query(None),
     limit: int = Query(50, ge=1, le=500),
 ):
+    """List provider usage imports, newest first, optionally for one provider.
+
+    Requires admin access (admin API key or allow-listed admin JWT; 403 otherwise). `limit` is 1-500, default 50; 400 on invalid input."""
     try:
         imports = await list_provider_usage_imports(limit=limit, provider=provider)
         return ProviderImportListResponse(imports=imports, count=len(imports))
@@ -169,6 +172,9 @@ async def get_provider_import_detail(
     import_id: str,
     _: Annotated[AdminPrincipal, Depends(require_admin)],
 ):
+    """Return one provider usage import with its lines.
+
+    Requires admin access (403 otherwise). Responds 404 if the import does not exist."""
     try:
         detail = await get_provider_usage_import(import_id)
         return ProviderImportDetailResponse(**detail)
@@ -203,6 +209,9 @@ async def get_reconciliation_runs(
     _: Annotated[AdminPrincipal, Depends(require_admin)],
     limit: int = Query(25, ge=1, le=200),
 ):
+    """List reconciliation runs.
+
+    Requires admin access (403 otherwise). `limit` is 1-200, default 25."""
     runs = await list_reconciliation_runs(limit=limit)
     return ReconciliationRunListResponse(runs=runs, count=len(runs))
 
@@ -212,6 +221,9 @@ async def get_reconciliation_run_detail(
     run_id: str,
     _: Annotated[AdminPrincipal, Depends(require_admin)],
 ):
+    """Return one reconciliation run with its findings.
+
+    Requires admin access (403 otherwise). Responds 404 if the run does not exist."""
     try:
         detail = await get_reconciliation_run(run_id)
         return ReconciliationRunDetailResponse(**detail)
@@ -224,6 +236,9 @@ async def get_reconciliation_findings(
     run_id: str,
     _: Annotated[AdminPrincipal, Depends(require_admin)],
 ):
+    """Return only the findings of one reconciliation run.
+
+    Requires admin access (403 otherwise). Responds 404 if the run does not exist."""
     try:
         detail = await get_reconciliation_run(run_id)
         return detail["findings"]

@@ -55,6 +55,12 @@ def _not_ready() -> HTTPException:
 
 @router.get("/where")
 async def read_where(user: Annotated[AuthUser, Depends(require_auth)]) -> dict[str, Any]:
+    """Report where the brain can run work for the user.
+
+    Requires a user JWT. Returns whether the PC runner and the cloud are online, whether the cloud is
+    enabled for the user, how many cloud results wait to sync, and where `auto` would
+    place a job. Returns 503 when the brain's cloud is not set up on this server.
+    """
     try:
         return await brain_service.where(user.id)
     except brain_service.BrainNotReadyError as exc:
@@ -65,6 +71,11 @@ async def read_where(user: Annotated[AuthUser, Depends(require_auth)]) -> dict[s
 async def write_cloud(
     body: CloudSetting, user: Annotated[AuthUser, Depends(require_auth)]
 ) -> dict[str, bool]:
+    """Allow or forbid running the user's work in the brain's cloud.
+
+    Requires a user JWT. Stores `enabled` for the user and returns it as `{"enabled": bool}`.
+    Returns 503 when the brain's cloud is not set up on this server.
+    """
     try:
         return {"enabled": await brain_service.set_cloud(user.id, body.enabled)}
     except brain_service.BrainNotReadyError as exc:
@@ -77,6 +88,12 @@ async def read_jobs(
     kwami_id: str | None = None,
     limit: Annotated[int, Query(ge=1, le=brain_service.MAX_LIST)] = 20,
 ) -> dict[str, Any]:
+    """List the user's brain jobs, newest first.
+
+    Requires a user JWT. Optionally filtered by `kwami_id`; `limit` is 1 to 50 (default 20).
+    Returns only jobs asked for work, not PC login or site orders. Returns 503 when the
+    brain's cloud is not set up.
+    """
     try:
         return {"jobs": await brain_service.list_jobs(user.id, kwami_id, limit)}
     except brain_service.BrainNotReadyError as exc:
@@ -87,6 +104,13 @@ async def read_jobs(
 async def ask_for_work(
     body: JobRequest, user: Annotated[AuthUser, Depends(require_auth)]
 ) -> dict[str, Any]:
+    """Queue a task for the brain and say where it will run.
+
+    Requires a user JWT. `target` is `auto`, `pc` or `cloud`; `difficulty` is `simple`, `normal` or `hard`;
+    `agent_id` optionally runs it as one of the user's agents. Returns the queued job.
+    Errors: 400 for a kwami that is not the user's or other invalid input, 404 for an
+    unknown agent, 429 when too much work is already waiting, 503 when not set up.
+    """
     try:
         return await brain_service.queue_job(
             user.id,
@@ -111,6 +135,12 @@ async def ask_for_work(
 async def cancel_job(
     job_id: UUID, user: Annotated[AuthUser, Depends(require_auth)]
 ) -> dict[str, bool]:
+    """Cancel a job that is queued or running.
+
+    Requires a user JWT. A queued job is cancelled at once; a running one when its worker next checks.
+    Returns `{"cancelled": true}`. Returns 404 when there is no such cancellable job
+    and 503 when the brain's cloud is not set up.
+    """
     try:
         cancelled = await brain_service.cancel_job(user.id, str(job_id))
     except brain_service.BrainNotReadyError as exc:
@@ -122,6 +152,11 @@ async def cancel_job(
 
 @router.get("/agents")
 async def read_agents(user: Annotated[AuthUser, Depends(require_auth)]) -> dict[str, Any]:
+    """List the user's agents with the models and tools they may use.
+
+    Requires a user JWT. Returns `agents` ordered by name, plus the allowed `models` and `tools`.
+    Returns 503 when the brain's cloud is not set up.
+    """
     try:
         return {
             "agents": await brain_service.list_agents(user.id),
@@ -136,6 +171,12 @@ async def read_agents(user: Annotated[AuthUser, Depends(require_auth)]) -> dict[
 async def create_agent(
     body: AgentFields, user: Annotated[AuthUser, Depends(require_auth)]
 ) -> dict[str, Any]:
+    """Create an agent: a named prompt, with a model, tools and a target.
+
+    Requires a user JWT. `name`, `description` and `prompt` are required. Returns the agent with 201.
+    Errors: 400 for an invalid field, a name already in use or too many agents,
+    503 when the brain's cloud is not set up.
+    """
     try:
         return await brain_service.create_agent(user.id, body.given())
     except brain_service.BrainNotReadyError as exc:
@@ -148,6 +189,12 @@ async def create_agent(
 async def update_agent(
     agent_id: UUID, body: AgentFields, user: Annotated[AuthUser, Depends(require_auth)]
 ) -> dict[str, Any]:
+    """Change the given fields of one of the user's agents.
+
+    Requires a user JWT. Only the fields sent are changed; with none, the agent is returned as is.
+    Errors: 400 for an invalid field or a name already in use, 404 for an unknown
+    agent, 503 when the brain's cloud is not set up.
+    """
     try:
         return await brain_service.update_agent(user.id, str(agent_id), body.given())
     except brain_service.BrainNotReadyError as exc:
@@ -160,6 +207,11 @@ async def update_agent(
 
 @router.delete("/agents/{agent_id}", status_code=204)
 async def delete_agent(agent_id: UUID, user: Annotated[AuthUser, Depends(require_auth)]) -> None:
+    """Delete one of the user's agents.
+
+    Requires a user JWT. Returns 204 with no body. Returns 404 for an unknown agent and 503 when the
+    brain's cloud is not set up.
+    """
     try:
         await brain_service.delete_agent(user.id, str(agent_id))
     except brain_service.BrainNotReadyError as exc:
@@ -172,6 +224,13 @@ async def delete_agent(agent_id: UUID, user: Annotated[AuthUser, Depends(require
 async def run_agent(
     agent_id: UUID, body: AgentRun, user: Annotated[AuthUser, Depends(require_auth)]
 ) -> dict[str, Any]:
+    """Queue a job for one of the user's agents.
+
+    Requires a user JWT. Without a `task`, the agent does its usual work as its description says.
+    Returns the queued job. Errors: 400 for a kwami that is not the user's or an agent
+    that is switched off, 404 for an unknown agent, 429 when too much work is waiting,
+    503 when the brain's cloud is not set up.
+    """
     try:
         return await brain_service.run_agent(user.id, str(agent_id), body.kwami_id, body.task)
     except brain_service.BrainNotReadyError as exc:
@@ -189,6 +248,11 @@ async def read_sync(
     user: Annotated[AuthUser, Depends(require_auth)],
     limit: Annotated[int, Query(ge=1, le=brain_service.MAX_LIST)] = 20,
 ) -> dict[str, Any]:
+    """List what the cloud made and has not yet been brought to the PC, newest first.
+
+    Requires a user JWT. `limit` is 1 to 50 (default 20). Returns `items`.
+    Returns 503 when the brain's cloud is not set up.
+    """
     try:
         return {"items": await brain_service.list_sync(user.id, limit)}
     except brain_service.BrainNotReadyError as exc:
@@ -199,6 +263,11 @@ async def read_sync(
 async def discard_sync(
     sync_id: UUID, user: Annotated[AuthUser, Depends(require_auth)]
 ) -> dict[str, bool]:
+    """Leave something the cloud made in storage instead of syncing it.
+
+    Requires a user JWT. Works only while the item is still pending. Returns `{"discarded": true}`.
+    Returns 404 when nothing is waiting under that id and 503 when not set up.
+    """
     try:
         discarded = await brain_service.discard_sync(user.id, str(sync_id))
     except brain_service.BrainNotReadyError as exc:

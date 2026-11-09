@@ -42,6 +42,11 @@ async def list_contacts(
     q: Annotated[str | None, Query(alias="q")] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 100,
 ):
+    """List the contacts of one kwami.
+
+    Requires a user JWT. `kwamiId` is required; `q` filters the contacts and `limit` is 1 to 200
+    (default 100). Returns `contacts`.
+    """
     await get_owned_kwami(user.id, kwami_id)
     return {
         "contacts": await list_contacts_for_kwami(user.id, kwami_id, query=q, limit=limit),
@@ -53,6 +58,11 @@ async def create_contact_route(
     body: ContactUpsertRequest,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
+    """Add a contact to a kwami.
+
+    Requires a user JWT. Phone numbers are normalised for the configured country, and the email is
+    lower-cased. Returns the `contact`. Returns 400 for an invalid phone number.
+    """
     await get_owned_kwami(user.id, body.kwami_id)
     try:
         phone_number = normalize_phone_number(body.phone_number, settings.twilio_phone_country)
@@ -82,6 +92,11 @@ async def update_contact_route(
     body: ContactUpsertRequest,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
+    """Replace the details of a contact.
+
+    Requires a user JWT. The body is the full contact, and its `kwamiId` must match the contact's kwami.
+    Returns the `contact`. Returns 400 when the contact belongs to another kwami.
+    """
     existing = await get_contact(user.id, contact_id)
     if existing["kwami_id"] != body.kwami_id:
         raise HTTPException(status_code=400, detail="Contact does not belong to this kwami")
@@ -108,6 +123,11 @@ async def delete_contact_route(
     user: Annotated[AuthUser, Depends(require_auth)],
     kwami_id: Annotated[str, Query(alias="kwamiId")],
 ):
+    """Delete a contact.
+
+    Requires a user JWT. `kwamiId` is required and must match the contact's kwami.
+    Returns `{"ok": true}`. Returns 400 when the contact belongs to another kwami.
+    """
     await get_owned_kwami(user.id, kwami_id)
     existing = await get_contact(user.id, contact_id)
     if existing["kwami_id"] != kwami_id:

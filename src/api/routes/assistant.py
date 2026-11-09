@@ -68,6 +68,11 @@ def _bad_request(exc: ValueError) -> HTTPException:
 async def read_settings(
     user: Annotated[AuthUser, Depends(require_auth)], kwami_id: str = Query(...)
 ) -> dict[str, Any]:
+    """Read the assistant settings of one kwami.
+
+    Requires a user JWT. Returns `settings`, or defaults when none were saved. Returns 400 when the
+    kwami is not the user's.
+    """
     try:
         return {"settings": await assistant_service.get_settings(user.id, kwami_id)}
     except ValueError as exc:
@@ -97,6 +102,13 @@ async def send_notify_code(
 async def write_settings(
     request: Request, body: SettingsRequest, user: Annotated[AuthUser, Depends(require_auth)]
 ) -> dict[str, Any]:
+    """Save the assistant settings of one kwami.
+
+    Requires a user JWT. Rate limited. Sets the report number and channel (`whatsapp` or `sms`), the
+    timezone and whether reports are on. A new number needs the `notify_code` and
+    `notify_proof` from the notify-code step. Returns 400 for invalid input, an unknown
+    kwami or an unconfirmed number.
+    """
     try:
         row = await assistant_service.save_settings(
             user.id,
@@ -119,6 +131,11 @@ async def read_tasks(
     kwami_id: str = Query(...),
     status: str | None = Query(default=None),
 ) -> dict[str, Any]:
+    """List the reminders, follow-ups and scheduled work of one kwami.
+
+    Requires a user JWT. Optionally filtered by `status` (`open`, `done` or `cancelled`).
+    Returns 400 for an invalid status or a kwami that is not the user's.
+    """
     try:
         return {"tasks": await assistant_service.list_tasks(user.id, kwami_id, status=status)}
     except ValueError as exc:
@@ -129,6 +146,12 @@ async def read_tasks(
 async def add_task(
     body: TaskCreateRequest, user: Annotated[AuthUser, Depends(require_auth)]
 ) -> dict[str, Any]:
+    """Create a reminder, follow-up or piece of scheduled work.
+
+    Requires a user JWT. `kind` is `reminder`, `followup` or `work`. Timing is `run_at`, or a daily or
+    weekly `recurrence` with `local_time`. Returns the `task`. Returns 400 for invalid
+    or missing timing, an unknown agent or a kwami that is not the user's.
+    """
     fields = body.model_dump(exclude={"kwami_id"})
     try:
         return {"task": await assistant_service.create_task(user.id, body.kwami_id, **fields)}
@@ -140,6 +163,11 @@ async def add_task(
 async def change_task(
     task_id: str, body: TaskUpdateRequest, user: Annotated[AuthUser, Depends(require_auth)]
 ) -> dict[str, Any]:
+    """Change the title, notes or status of a task.
+
+    Requires a user JWT. `status` is `open`, `done` or `cancelled`. Returns the `task`.
+    Errors: 400 for invalid input, 404 when the task is not found.
+    """
     try:
         return {
             "task": await assistant_service.update_task(
@@ -155,6 +183,10 @@ async def change_task(
 async def remove_task(
     task_id: str, user: Annotated[AuthUser, Depends(require_auth)]
 ) -> dict[str, bool]:
+    """Delete a task.
+
+    Requires a user JWT. Returns `{"ok": true}`. Returns 404 when the task is not found.
+    """
     if not await assistant_service.delete_task(user.id, task_id):
         raise HTTPException(status_code=404, detail="Task not found")
     return {"ok": True}
@@ -167,6 +199,11 @@ async def read_notifications(
     unread_only: bool = Query(default=False),
     limit: int = Query(default=20, ge=1, le=200),
 ) -> dict[str, Any]:
+    """List the notifications of one kwami, newest first.
+
+    Requires a user JWT. `unread_only` limits it to unread ones; `limit` is 1 to 200 (default 20).
+    Returns 400 when the kwami is not the user's.
+    """
     try:
         rows = await assistant_service.list_notifications(
             user.id, kwami_id, unread_only=unread_only, limit=limit
@@ -180,6 +217,10 @@ async def read_notifications(
 async def read_notification(
     notification_id: str, user: Annotated[AuthUser, Depends(require_auth)]
 ) -> dict[str, bool]:
+    """Mark a notification as read.
+
+    Requires a user JWT. Returns `{"ok": true}`. Returns 404 when the notification is not found.
+    """
     if not await assistant_service.mark_notification_read(user.id, notification_id):
         raise HTTPException(status_code=404, detail="Notification not found")
     return {"ok": True}
@@ -189,6 +230,12 @@ async def read_notification(
 async def record_express_send(
     body: ExpressSendRequest, user: Annotated[AuthUser, Depends(require_auth)]
 ) -> dict[str, Any]:
+    """Record a send that skipped the confirmation dialog.
+
+    Requires a user JWT. Keeps the channel, recipient, a summary and the user's `express_order` that
+    allowed it, as an audit entry. Returns the `record`. Returns 400 when the kwami is
+    not the user's.
+    """
     try:
         row = await assistant_service.record_express_send(
             user.id,

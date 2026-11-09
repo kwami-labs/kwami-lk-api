@@ -58,6 +58,10 @@ async def create_wallet_for_kwami(
     kwami_id: str,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
+    """Create the custodial Solana wallet for a kwami, or return the existing one.
+
+    Requires a user JWT and a wallet-enabled deployment (503 otherwise).
+    Responds 404 if the kwami is not the caller's and 503 if the custody provider fails."""
     _ensure_wallet_enabled()
     try:
         wallet = await create_kwami_wallet(user.id, kwami_id)
@@ -73,6 +77,9 @@ async def get_wallet_for_kwami(
     kwami_id: str,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
+    """Return a kwami's wallet with balances, token allowlist, transactions and funding intents.
+
+    Requires a user JWT. Responds 503 if the wallet feature is disabled and 404 if the kwami is not found."""
     _ensure_wallet_enabled()
     try:
         overview = await get_kwami_wallet_overview(user.id, kwami_id)
@@ -87,6 +94,10 @@ async def create_phantom_funding_intent(
     request: FundingIntentRequest,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
+    """Create a funding intent to be paid by a Phantom wallet transfer.
+
+    Requires a user JWT. The body gives the token mint, symbol and amount, plus an optional idempotency key.
+    Responds 400 if the amount is not positive, the mint is not allowlisted, or the kwami has no wallet."""
     _ensure_wallet_enabled()
     try:
         intent = await create_funding_intent(
@@ -111,6 +122,10 @@ async def create_card_funding_intent(
     request: FundingIntentRequest,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
+    """Create a funding intent to be paid through the card provider.
+
+    Requires a user JWT. Takes the same body as the Phantom intent and fails the same way (400)
+    if the amount is not positive, the mint is not allowlisted, or the kwami has no wallet."""
     _ensure_wallet_enabled()
     try:
         intent = await create_funding_intent(
@@ -134,6 +149,9 @@ async def add_allowlist_token(
     request: AllowlistTokenRequest,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
+    """Add a custom token (mint address, symbol, decimals) to the caller's wallet allowlist.
+
+    Requires a user JWT and a wallet-enabled deployment (503 otherwise). Returns the stored token."""
     _ensure_wallet_enabled()
     token = await add_custom_allowlist_token(
         user.id,
@@ -151,6 +169,11 @@ async def wallet_provider_webhook(
     request: Request,
     x_wallet_signature: Annotated[str | None, Header(alias="X-Wallet-Signature")] = None,
 ):
+    """Receive a funding settlement callback from a wallet or card provider.
+
+    Not user-authenticated: the body must carry a valid HMAC-SHA256 hex signature in `X-Wallet-Signature`,
+    else 401 (also 401 if no webhook secret is configured). Settles the funding intent named in the payload.
+    Responds 400 for an unsupported provider, a missing `intent_id` or an unknown intent."""
     _ensure_wallet_enabled()
     body = await request.body()
     if not verify_wallet_webhook_signature(body, x_wallet_signature):

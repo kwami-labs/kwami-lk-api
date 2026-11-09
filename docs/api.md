@@ -1,6 +1,8 @@
 # API
 
-The live contract is OpenAPI at `/docs` when docs are enabled. This page is
+The live contract is OpenAPI, served when docs are enabled (`ENABLE_DOCS`; always on outside
+production): [Scalar](https://api.kwami.io/docs) at `/docs`, Swagger UI at `/swagger`, ReDoc at
+`/redoc` and the raw schema at `/openapi.json`. This page is
 the map: which prefix exists, who may call it, and what it is for.
 
 Base URL is the Cloudflare Worker (`https://kwami-lk-api.nexow.workers.dev`

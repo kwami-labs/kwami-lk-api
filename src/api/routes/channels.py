@@ -99,6 +99,9 @@ async def get_kwami_channels(
     kwami_id: str,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
+    """Return a kwami's runtime config, its channels and its recent call and message events.
+
+    Requires a user JWT; the kwami must belong to the caller."""
     kwami = await get_owned_kwami(user.id, kwami_id)
     return {
         "kwami": {
@@ -120,6 +123,10 @@ async def search_phone_numbers(
     contains: Annotated[str | None, Query(alias="contains")] = None,
     limit: Annotated[int, Query(ge=1, le=20)] = 10,
 ):
+    """Search Twilio for phone numbers available to buy.
+
+    Requires a user JWT and ownership of `kwamiId`. Filters: `countryCode` (defaults to the configured Twilio country),
+    `areaCode`, `contains`, and `limit` (1-20, default 10)."""
     await get_owned_kwami(user.id, kwami_id)
     return NumberSearchResponse(
         results=await search_available_numbers(
@@ -138,6 +145,11 @@ async def purchase_kwami_phone_number(
     body: PhonePurchaseRequest,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
+    """Buy a Twilio number for a kwami and create its voice, WhatsApp and SMS channels.
+
+    Requires a user JWT and is rate-limited as provisioning. Attaches the number to the Twilio SIP trunk and syncs the shared LiveKit trunks;
+    if either step fails the call still succeeds and the voice channel is marked `routing_pending` when LiveKit sync fails.
+    Returns `voiceChannel`, `whatsappChannel`, `smsChannel` and `sharedInfrastructure`."""
     kwami = await get_owned_kwami(user.id, body.kwami_id)
     phone_number = normalize_phone_number(body.phone_number, body.country_code)
 
@@ -314,6 +326,10 @@ async def configure_whatsapp_channel(
     request: ChannelUpdateRequest,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
+    """Update the status, sender or metadata of a WhatsApp channel.
+
+    Requires a user JWT and a channel the caller owns. Metadata is merged into the existing metadata.
+    Responds 400 if the channel is not a WhatsApp channel."""
     channel = await get_channel(user.id, request.channel_id)
     if channel["kind"] != "whatsapp":
         raise HTTPException(status_code=400, detail="Channel is not a WhatsApp sender")
@@ -334,6 +350,10 @@ async def start_outbound_call(
     request: OutboundCallRequest,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
+    """Place an outbound call from the kwami's phone number through LiveKit SIP, with the agent in the room.
+
+    Requires a user JWT. Uses `channelId` or the kwami's voice channel; responds 400 for an invalid `toNumber` and 404 if there is no phone channel.
+    Records a call event (status `queued`, or `failed` with the provider error if placing the call raises) and returns it with `conversationId`."""
     kwami = await get_owned_kwami(user.id, request.kwami_id)
     try:
         to_number = normalize_phone_number(request.to_number, settings.twilio_phone_country)
@@ -499,6 +519,11 @@ async def send_outbound_message(
     request: OutboundMessageRequest,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
+    """Send an SMS or WhatsApp message from a kwami's channel via Twilio.
+
+    Requires a user JWT. `channelKind` is `whatsapp` (default) or `sms`; 400 for an empty body or other kind, 404 if the channel is missing,
+    503 if no sender is configured, 409 if the WhatsApp sender is not active or sandbox (or Twilio error 63007), 502 on other Twilio failures.
+    Returns the stored message event and `conversationId`."""
     if not request.body.strip():
         raise HTTPException(status_code=400, detail="Message body is required")
 
