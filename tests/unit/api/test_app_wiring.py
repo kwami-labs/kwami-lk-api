@@ -108,13 +108,15 @@ class TestLifespan:
 
 
 class TestDocsUrls:
-    def test_off_closes_all_three(self):
+    """The pages are mounted by `install_docs`; FastAPI's own are always off. See test_docs_exposure."""
+
+    def test_off_closes_the_schema(self):
         assert docs_urls(False) == {"docs_url": None, "redoc_url": None, "openapi_url": None}
 
-    def test_on_opens_all_three(self):
+    def test_on_opens_the_schema(self):
         assert docs_urls(True) == {
-            "docs_url": "/docs",
-            "redoc_url": "/redoc",
+            "docs_url": None,
+            "redoc_url": None,
             "openapi_url": "/openapi.json",
         }
 

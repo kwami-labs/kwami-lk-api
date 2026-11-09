@@ -43,6 +43,11 @@ async def _form_payload(request: Request) -> dict[str, str]:
 
 @router.post("/twilio/voice")
 async def twilio_voice_webhook(request: Request):
+    """Handle an inbound Twilio voice call and bridge it to LiveKit SIP.
+
+    Called by Twilio, not users: the request must carry a valid `X-Twilio-Signature` (401 if invalid, 503 if no auth token is configured).
+    Records the call and returns TwiML: `<Reject/>` if the dialed number maps to no channel, a `<Say>` message if SIP inbound is not configured,
+    otherwise the SIP bridge TwiML carrying kwami, channel and user headers."""
     payload = await _form_payload(request)
     await validate_twilio_request(request, payload)
 
@@ -116,6 +121,9 @@ async def twilio_voice_webhook(request: Request):
 
 @router.post("/twilio/voice/status")
 async def twilio_voice_status_webhook(request: Request):
+    """Update a call event from a Twilio voice status callback.
+
+    Requires a valid Twilio signature (401, or 503 if unconfigured). Applies status, duration and error fields for the `CallSid`. Returns `{"ok": true}`."""
     payload = await _form_payload(request)
     await validate_twilio_request(request, payload)
     if payload.get("CallSid"):
@@ -132,6 +140,10 @@ async def twilio_voice_status_webhook(request: Request):
 
 @router.post("/twilio/whatsapp")
 async def twilio_whatsapp_webhook(request: Request):
+    """Handle an inbound WhatsApp or SMS message from Twilio.
+
+    Requires a valid Twilio signature (401, or 503 if unconfigured). Messages with a `whatsapp:` address are treated as WhatsApp, others as SMS.
+    Stores the inbound message and replies with TwiML containing a short acknowledgement, or a "not configured" notice for an unknown sender."""
     payload = await _form_payload(request)
     await validate_twilio_request(request, payload)
 
@@ -208,6 +220,9 @@ async def twilio_whatsapp_webhook(request: Request):
 
 @router.post("/twilio/whatsapp/status")
 async def twilio_whatsapp_status_webhook(request: Request):
+    """Update a message event from a Twilio message status callback.
+
+    Requires a valid Twilio signature (401, or 503 if unconfigured). Applies the status and error fields for the `MessageSid`. Returns `{"ok": true}`."""
     payload = await _form_payload(request)
     await validate_twilio_request(request, payload)
     if payload.get("MessageSid"):

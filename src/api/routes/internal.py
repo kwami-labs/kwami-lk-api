@@ -31,6 +31,9 @@ async def get_kwami_runtime_config(
     kwami_id: str,
     _: Annotated[None, Depends(require_internal_api_key)],
 ):
+    """Return the agent bootstrap config for a kwami, as the browser's initial config message would carry it.
+
+    Service-to-service: requires the shared `X-Kwami-API-Key` (401 otherwise). Responds 404 if the kwami does not exist and 500 on a lookup failure."""
     # Internal routes are keyed, so we only need to load the kwami row and return
     # the config payload that mimics the browser's initial "config" message.
     try:
@@ -62,6 +65,9 @@ async def get_channel_by_address(
     address: str,
     _: Annotated[None, Depends(require_internal_api_key)],
 ):
+    """Look up a channel by phone number or address.
+
+    Service-to-service: requires `X-Kwami-API-Key` (401 otherwise). Responds 404 if no channel matches."""
     channel = await find_channel_by_address(address)
     if not channel:
         raise HTTPException(status_code=404, detail="Channel not found")

@@ -70,6 +70,10 @@ async def check_username(
     body: CheckUsernameRequest,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
+    """Check whether an email username can be claimed.
+
+    Requires a user JWT. Always answers 200: an invalid username (3-30 characters, format rules)
+    returns `available=false` with an i18n `error` key; otherwise `available` reflects whether it is free."""
     err = email_service.validate_username(body.username)
     if err:
         return CheckUsernameResponse(available=False, error=err)
@@ -82,6 +86,10 @@ async def activate_email(
     body: ActivateRequest,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
+    """Create the kwami's email account for the chosen username.
+
+    Requires a user JWT. Returns the account id, username and address.
+    Responds 400 if the username is invalid or already taken."""
     try:
         account = await email_service.activate_account(
             user_id=user.id,
@@ -103,6 +111,9 @@ async def get_account(
     user: Annotated[AuthUser, Depends(require_auth)],
     kwami_id: str = Query(...),
 ):
+    """Return the caller's email account for a kwami.
+
+    Requires a user JWT. Responds 200 with `{"account": null}` when none is activated."""
     account = await email_service.get_account(user.id, kwami_id)
     if not account:
         return {"account": None}
@@ -121,6 +132,9 @@ async def deactivate_account(
     user: Annotated[AuthUser, Depends(require_auth)],
     kwami_id: str = Query(...),
 ):
+    """Delete the kwami's email account and all of its messages.
+
+    Requires a user JWT. Returns `{"ok": true}`; responds 404 if the kwami has no email account."""
     removed = await email_service.deactivate_account(user.id, kwami_id)
     if not removed:
         raise HTTPException(status_code=404, detail="No email account found")
@@ -135,6 +149,9 @@ async def get_inbox(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=30, ge=1, le=100),
 ):
+    """List stored messages for a kwami's mailbox, optionally filtered by category.
+
+    Requires a user JWT. Paginated with `page` (from 1) and `page_size` (1-100, default 30); archived messages are excluded."""
     messages = await email_service.fetch_inbox(
         user.id,
         kwami_id,
@@ -150,6 +167,9 @@ async def get_unread_counts(
     user: Annotated[AuthUser, Depends(require_auth)],
     kwami_id: str = Query(...),
 ):
+    """Return unread message counts per category for a kwami's mailbox.
+
+    Requires a user JWT. Archived messages are not counted."""
     counts = await email_service.get_unread_counts(user.id, kwami_id)
     return {"counts": counts}
 
@@ -159,6 +179,9 @@ async def get_message(
     message_id: str,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
+    """Return a single email message owned by the caller.
+
+    Requires a user JWT. Responds 404 if the message does not exist or is not the caller's."""
     msg = await email_service.get_message(user.id, message_id)
     if not msg:
         raise HTTPException(status_code=404, detail="Message not found")
@@ -171,6 +194,10 @@ async def update_message(
     body: MessagePatchRequest,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
+    """Set the read, starred or archived flag on a message.
+
+    Requires a user JWT. Only the flags present in the body are changed.
+    Returns the updated message; responds 404 if it is not found."""
     fields: dict[str, Any] = {}
     if body.is_read is not None:
         fields["is_read"] = body.is_read
@@ -190,6 +217,10 @@ async def send_email_route(
     body: SendEmailRequest,
     user: Annotated[AuthUser, Depends(require_auth)],
 ):
+    """Send an email from the kwami's address through SendGrid and store the sent copy.
+
+    Requires a user JWT. Responds 503 if email sending is not configured and 400 if the kwami has no activated email account.
+    Returns `{"ok": true, "message": <stored message>}`."""
     if not settings.email_enabled:
         raise HTTPException(status_code=503, detail="Email sending is not configured")
 

@@ -118,6 +118,11 @@ async def _call(call: Awaitable[T]) -> T:
 
 @router.get("/status")
 async def status(user: Annotated[AuthUser, Depends(require_auth)]) -> dict[str, Any]:
+    """Report whether Google is configured and which accounts are linked.
+
+    Returns `configured`, `connected`, the oldest account's `email`, and `accounts`, each with `needs_reconnect` and `missing_scopes`.
+    Needs the user's JWT.
+    """
     return await google_service.connection_status(user.id)
 
 
@@ -127,6 +132,12 @@ async def connect(
     user: Annotated[AuthUser, Depends(require_auth)],
     body: ConnectRequest = ConnectRequest(),  # noqa: B008
 ) -> dict[str, str]:
+    """Start linking a Google account and return the consent URL.
+
+    Returns `{url}`. The return target comes from the request `Origin` header, or the desktop app when `desktop` is true.
+    Errors: 400 if the return target is unknown, 503 if Google is not configured.
+    Needs the user's JWT.
+    """
     try:
         target = oauth_return.return_target(request.headers.get("origin"), desktop=body.desktop)
         return {"url": google_service.authorization_url(user.id, target)}
@@ -206,6 +217,12 @@ async def work_thread(
 async def disconnect(
     user: Annotated[AuthUser, Depends(require_auth)], account: Account = None
 ) -> dict[str, bool]:
+    """Unlink a Google account.
+
+    Returns `{ok: true}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 404 if no Google account is linked.
+    """
     if not await google_service.disconnect(user.id, account):
         raise HTTPException(status_code=404, detail="No Google account is linked")
     return {"ok": True}
@@ -218,6 +235,12 @@ async def gmail_list(
     max_results: int = Query(default=10, ge=1, le=25),
     account: Account = None,
 ) -> dict[str, Any]:
+    """Search Gmail and list matching messages.
+
+    `q` is a Gmail search query, empty for the latest. `max_results` is 1-25, default 10. Returns `{messages}` as summaries.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     messages = await _call(google_service.list_messages(user.id, q, max_results, account=account))
     return {"messages": messages}
 
@@ -226,6 +249,12 @@ async def gmail_list(
 async def gmail_read(
     message_id: str, user: Annotated[AuthUser, Depends(require_auth)], account: Account = None
 ) -> dict[str, Any]:
+    """Read one Gmail message.
+
+    Returns `{message}` with its text and attachment list.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     return {
         "message": await _call(google_service.read_message(user.id, message_id, account=account))
     }
@@ -235,6 +264,12 @@ async def gmail_read(
 async def gmail_send(
     body: SendRequest, user: Annotated[AuthUser, Depends(require_auth)], account: Account = None
 ) -> dict[str, Any]:
+    """Send an email from the account.
+
+    `attachment_file_ids` are Drive files attached to the mail; the total must stay under Gmail's 25 MB. `reply_to_message_id` sends it as a reply. Returns `{message}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 400 if the input is refused, 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     sent = await _call(
         google_service.send_message(
             user.id,
@@ -254,6 +289,12 @@ async def gmail_send(
 async def gmail_draft_create(
     body: SendRequest, user: Annotated[AuthUser, Depends(require_auth)], account: Account = None
 ) -> dict[str, Any]:
+    """Create an email draft without sending it.
+
+    Takes the same body as sending, including Drive attachments (under 25 MB in total). Returns `{draft}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 400 if the input is refused, 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     draft = await _call(
         google_service.create_draft(
             user.id,
@@ -273,6 +314,12 @@ async def gmail_draft_create(
 async def gmail_draft_list(
     user: Annotated[AuthUser, Depends(require_auth)], account: Account = None
 ) -> dict[str, Any]:
+    """List the account's email drafts.
+
+    Returns `{drafts}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     return {"drafts": await _call(google_service.list_drafts(user.id, account=account))}
 
 
@@ -280,6 +327,12 @@ async def gmail_draft_list(
 async def gmail_draft_send(
     draft_id: str, user: Annotated[AuthUser, Depends(require_auth)], account: Account = None
 ) -> dict[str, Any]:
+    """Send an existing draft.
+
+    Returns `{message}`, the sent message.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     return {"message": await _call(google_service.send_draft(user.id, draft_id, account=account))}
 
 
@@ -290,6 +343,12 @@ async def gmail_attachment(
     user: Annotated[AuthUser, Depends(require_auth)],
     account: Account = None,
 ) -> dict[str, Any]:
+    """Read an attachment of a Gmail message.
+
+    Returns `{attachment}` with `size` and, if the file is UTF-8 text, its `text` (truncated); `text` is null for other files such as PDFs or images.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     found = await _call(
         google_service.read_attachment(user.id, message_id, attachment_id, account=account)
     )
@@ -300,6 +359,12 @@ async def gmail_attachment(
 async def gmail_labels(
     user: Annotated[AuthUser, Depends(require_auth)], account: Account = None
 ) -> dict[str, Any]:
+    """List the account's Gmail labels.
+
+    Returns `{labels}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     return {"labels": await _call(google_service.list_labels(user.id, account=account))}
 
 
@@ -309,6 +374,12 @@ async def gmail_label_create(
     user: Annotated[AuthUser, Depends(require_auth)],
     account: Account = None,
 ) -> dict[str, Any]:
+    """Create a Gmail label.
+
+    Returns `{label}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     return {"label": await _call(google_service.create_label(user.id, body.name, account=account))}
 
 
@@ -319,6 +390,12 @@ async def gmail_label_modify(
     user: Annotated[AuthUser, Depends(require_auth)],
     account: Account = None,
 ) -> dict[str, bool]:
+    """Add or remove labels on a message.
+
+    `add` and `remove` are lists of label ids. Returns `{ok: true}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     await _call(
         google_service.modify_labels(
             user.id, message_id, add=body.add, remove=body.remove, account=account
@@ -331,6 +408,12 @@ async def gmail_label_modify(
 async def gmail_trash(
     message_id: str, user: Annotated[AuthUser, Depends(require_auth)], account: Account = None
 ) -> dict[str, bool]:
+    """Move a message to the trash.
+
+    Returns `{ok: true}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     await _call(google_service.trash_message(user.id, message_id, account=account))
     return {"ok": True}
 
@@ -339,6 +422,12 @@ async def gmail_trash(
 async def gmail_untrash(
     message_id: str, user: Annotated[AuthUser, Depends(require_auth)], account: Account = None
 ) -> dict[str, bool]:
+    """Take a message out of the trash.
+
+    Returns `{ok: true}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     await _call(google_service.untrash_message(user.id, message_id, account=account))
     return {"ok": True}
 
@@ -347,6 +436,12 @@ async def gmail_untrash(
 async def gmail_filters(
     user: Annotated[AuthUser, Depends(require_auth)], account: Account = None
 ) -> dict[str, Any]:
+    """List the account's Gmail filters.
+
+    Returns `{filters}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     return {"filters": await _call(google_service.list_filters(user.id, account=account))}
 
 
@@ -356,6 +451,12 @@ async def gmail_filter_create(
     user: Annotated[AuthUser, Depends(require_auth)],
     account: Account = None,
 ) -> dict[str, Any]:
+    """Create a Gmail filter.
+
+    `criteria` and `action` follow Gmail's filter format. A filter that forwards mail is refused. Returns `{filter}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 400 if the input is refused, 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     created = await _call(
         google_service.create_filter(
             user.id, criteria=body.criteria, action=body.action, account=account
@@ -368,6 +469,12 @@ async def gmail_filter_create(
 async def gmail_filter_delete(
     filter_id: str, user: Annotated[AuthUser, Depends(require_auth)], account: Account = None
 ) -> dict[str, bool]:
+    """Delete a Gmail filter.
+
+    Returns `{ok: true}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     await _call(google_service.delete_filter(user.id, filter_id, account=account))
     return {"ok": True}
 
@@ -376,6 +483,12 @@ async def gmail_filter_delete(
 async def gmail_archive(
     message_id: str, user: Annotated[AuthUser, Depends(require_auth)], account: Account = None
 ) -> dict[str, bool]:
+    """Archive a message, taking it out of the inbox.
+
+    Returns `{ok: true}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     await _call(google_service.archive_message(user.id, message_id, account=account))
     return {"ok": True}
 
@@ -387,6 +500,12 @@ async def calendar_list(
     range_end: str = Query(...),
     account: Account = None,
 ) -> dict[str, Any]:
+    """List calendar events in a time range.
+
+    `range_start` and `range_end` are RFC 3339 timestamps. Recurring events come expanded, ordered by start, up to 250. Returns `{events}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     events = await _call(
         google_service.list_events(user.id, range_start, range_end, account=account)
     )
@@ -399,6 +518,12 @@ async def calendar_create(
     user: Annotated[AuthUser, Depends(require_auth)],
     account: Account = None,
 ) -> dict[str, Any]:
+    """Create a calendar event.
+
+    If `attendees` is given, Google invites them. Returns `{event}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     event = await _call(google_service.create_event(user.id, account=account, **body.model_dump()))
     return {"event": event}
 
@@ -410,6 +535,12 @@ async def calendar_update(
     user: Annotated[AuthUser, Depends(require_auth)],
     account: Account = None,
 ) -> dict[str, Any]:
+    """Change fields of a calendar event.
+
+    Only the fields sent are changed. Google notifies the attendees only when `attendees` is sent. Returns `{event}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     event = await _call(
         google_service.update_event(user.id, event_id, account=account, **body.model_dump())
     )
@@ -420,5 +551,11 @@ async def calendar_update(
 async def calendar_delete(
     event_id: str, user: Annotated[AuthUser, Depends(require_auth)], account: Account = None
 ) -> dict[str, bool]:
+    """Delete a calendar event.
+
+    Returns `{ok: true}`.
+    Needs the user's JWT. `account` picks the linked Google account, the oldest if omitted.
+    Errors: 409 if no Google account is linked, 502 if Google rejects the request, 503 if Google is not configured.
+    """
     await _call(google_service.delete_event(user.id, event_id, account=account))
     return {"ok": True}
