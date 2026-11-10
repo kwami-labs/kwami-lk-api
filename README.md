@@ -51,7 +51,7 @@ make docker-build
 make docker-up
 ```
 
-API listens on `API_HOST:API_PORT` (default `0.0.0.0:8080`). OpenAPI docs at `/docs` and `/redoc`, and the schema at `/openapi.json`, when `ENABLE_DOCS=true`.
+API listens on `API_HOST:API_PORT` (default `0.0.0.0:8080`). OpenAPI docs at `/docs` (Scalar), `/swagger` and `/redoc`, and the schema at `/openapi.json`, when `ENABLE_DOCS=true`.
 
 ## API overview
 
@@ -66,7 +66,8 @@ API listens on `API_HOST:API_PORT` (default `0.0.0.0:8080`). OpenAPI docs at `/d
 | `/channels` | Phone, SMS, WhatsApp, outbound calls |
 | `/contacts` `/email` `/calendar` | Per-kwami communications |
 | `/wallets` | Custody wallets and funding |
-| `/webhooks` | Twilio and SendGrid inbound |
+| `/assistant` `/google` `/pc` `/providers` `/access` `/brain` | Assistant reminders, linked Google accounts, the user's PC, own provider keys, Jarvis site access, brain jobs |
+| `/webhooks` | Twilio, SendGrid and LiveKit room events |
 | `/internal` | Agent bootstrap (API key) |
 | `/admin/reconciliation` | Provider invoice diffs |
 
@@ -89,7 +90,7 @@ The **token** endpoint expects a POST body with optional `roomName`, `participan
 | `CORS_ORIGINS` | No | Comma-separated origins (default `*` in dev) |
 | `API_HOST` / `API_PORT` | No | Bind address and port (default `0.0.0.0:8080`) |
 | `APP_ENV` | No | `development` \| `production` |
-| `ENABLE_DOCS` | No | Set to `true` to expose `/docs`, `/redoc` and `/openapi.json` in production |
+| `ENABLE_DOCS` | No | Set to `true` to expose `/docs`, `/swagger`, `/redoc` and `/openapi.json` in production |
 | `RATE_LIMIT_ENABLED` | No | Per-caller rate limits (default on) |
 | `RATE_LIMIT_STORAGE_URI` | No | `memory://` (per worker) or a `redis://` URL for exact limits across machines |
 | `MAX_REQUEST_BODY_BYTES` | No | Largest accepted body (default 10 MiB) |

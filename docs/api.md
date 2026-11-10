@@ -5,8 +5,8 @@ production): [Scalar](https://api.kwami.io/docs) at `/docs`, Swagger UI at `/swa
 `/redoc` and the raw schema at `/openapi.json`. This page is
 the map: which prefix exists, who may call it, and what it is for.
 
-Base URL is the Cloudflare Worker (`https://kwami-lk-api.nexow.workers.dev`
-in production, or `APP_PUBLIC_URL`). Local default is `http://127.0.0.1:8080`.
+Base URL is the Cloudflare Worker (`https://api.kwami.io` in production,
+`https://dev.api.kwami.io` in development; `APP_PUBLIC_URL`). Local default is `http://127.0.0.1:8080`.
 
 ## Auth classes
 
@@ -82,7 +82,7 @@ Upstream exception text is not forwarded.
 | `/access` | user | The sites Jarvis may visit, the level on each, and its pending requests. |
 | `/brain` | user | Work for the brain asked from the app, the cloud setting, the user's agents, what the cloud made. |
 | `/internal` | agent | Runtime config, channel lookup by address. |
-| `/webhooks` | signature | Twilio voice/WhatsApp, SendGrid inbound, LiveKit room events. |
+| `/webhooks` | signature | Twilio voice/WhatsApp (and their status callbacks), SendGrid inbound, LiveKit room events. |
 | `/admin/reconciliation` | admin | Provider invoice import and findings. |
 
 ### Token
@@ -199,6 +199,9 @@ there is no browser.
 
 `GET /internal/channels/by-address` resolves a phone or WhatsApp address to
 the owning kwami.
+
+`GET`/`POST`/`DELETE /internal/browser-contexts/{owner_key}` read, record and
+forget which persisted cloud-browser profile is whose.
 
 ## Pagination and aliases
 
