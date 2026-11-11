@@ -8,7 +8,7 @@ Nothing is released or shipped from a commit whose tests did not pass.
 ```mermaid
 flowchart TD
   PR["pull request"] --> CI["ci.yml"]
-  DEV["push to dev"] --> FAST["ci fast lane: lint, unit, migrations"]
+  DEV["push to dev"] --> FAST["ci fast lane: lint, typecheck, unit, migrations"]
   MAIN["push to main"] --> CI
 
   CI -->|red| STOP[nothing]
@@ -25,7 +25,7 @@ Cloudflare is the live origin. The same `Dockerfile` is built twice on a
 behind the Worker. `dev` skips the archive and deploys its channel Worker
 only.
 
-| Event | lint / unit / migrations | integration / coverage / build | vuln | cd |
+| Event | lint / typecheck / unit / migrations | integration / coverage / build | vuln | cd |
 |-------|--------------------------|--------------------------------|------|----|
 | pull request | yes | yes | advisory | no |
 | push `dev` | yes | no | no | deploy `kwami-lk-api-dev` → `dev.api.kwami.io` |
@@ -102,10 +102,10 @@ the same `Dockerfile` from the same commit as a Container. The trade is
 a second build rather than giving Cloudflare credentials for a private
 GHCR package.
 
-The image is `python:3.11-slim`, installs `uv`, runs
-`uv sync --frozen --no-dev`, and starts with
-`uv run python -m src.main`. `.python-version` is `3.11` locally and in
-CI for the same reason: coverage percentages shift between interpreters.
+The image is a digest-pinned `python:3.14-slim`, builds the virtualenv with
+`uv sync --frozen --no-dev` in a builder stage, copies it into the runtime
+stage, and starts with `python -m src.main`. `.python-version` is `3.11`
+locally and in CI: coverage percentages shift between interpreters.
 
 Two things in it are deliberate. The `uv` binary comes from a **pinned**
 `ghcr.io/astral-sh/uv` tag rather than `:latest` — with a floating tag,
@@ -113,9 +113,9 @@ two builds of the same commit can resolve different uv versions, which is
 the thing a version number exists to rule out. And the process runs as
 the unprivileged `app` user (uid 10001), not root: it binds 8080, which
 needs no privilege, and writes nothing outside the virtualenv.
-`UV_FROZEN` and `UV_NO_SYNC` stop `uv run` from trying to re-resolve and
-rewrite the lockfile at start-up, which that user cannot do and should
-not — the image ships the environment it was built with.
+The venv is on `PATH` and `uv` is not in the runtime stage, so start-up
+never tries to re-resolve or rewrite the lockfile, which that user cannot
+do and should not — the image ships the environment it was built with.
 
 ## Cloudflare
 
@@ -161,7 +161,8 @@ Run it by hand from `infra/` with `pnpm install && pnpm exec wrangler deploy --e
 
 ## Required status checks
 
-Every job in `ci.yml` except `vuln` is required on `main`:
+These jobs from `ci.yml` are required on `main` (`.github/rulesets/main.json`);
+`typecheck`, `codeql`, `secrets` and `vuln` are not:
 
 | Check | Fails when |
 |-------|------------|

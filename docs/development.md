@@ -7,7 +7,7 @@ install, run, test, and what the gate actually checks.
 ## Prerequisites
 
 - Python **3.11** — [`.python-version`](../.python-version) pins it. `uv`,
-  CI, and `python:3.11-slim` all use 3.11. Coverage percentages shift
+  and CI use 3.11 (the release image runs 3.14). Coverage percentages shift
   between interpreters, so an unpinned runtime makes the floors flaky.
 - [uv](https://docs.astral.sh/uv/)
 - Docker, for the throwaway Postgres and for image builds
@@ -33,9 +33,9 @@ make dev                     # uv run python -m src.main
 # listens on API_HOST:API_PORT, default 0.0.0.0:8080
 ```
 
-OpenAPI is at `/docs`, `/redoc` and `/openapi.json` outside production.
-Set `ENABLE_DOCS=true` if you need them with `APP_ENV=production`; the flag
-opens and closes all three together.
+OpenAPI is at `/docs` (Scalar), `/swagger`, `/redoc` and `/openapi.json` outside
+production. Set `ENABLE_DOCS=true` if you need them with `APP_ENV=production`;
+the flag opens and closes all of them together.
 
 `APP_ENV` is `development` | `production`. Outside
 production, credits fail-open on a check error and wallets default on.
@@ -125,7 +125,7 @@ tests/
   fakes/                in-process Supabase stand-in
   factories/            tenant fixtures
 scripts/                migrate, coverage-gate, set-version, rulesets
-.github/workflows/      ci.yml, cd.yml
+.github/workflows/      ci.yml, cd.yml, cf-cutover.yml
 .github/rulesets/       main and tag protection
 ```
 

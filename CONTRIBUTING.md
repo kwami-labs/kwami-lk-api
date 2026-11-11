@@ -35,13 +35,13 @@ and deploys the production Cloudflare Worker + Container. `dev` deploys its own 
 (`kwami-lk-api-dev`) at `https://dev.api.kwami.io`.
 
 They are not tested the same way. A pull request runs everything; a push to
-`dev` runs the **fast lane** — `lint`, `unit` and `migrations` — and skips `integration`,
+`dev` runs the **fast lane** — `lint`, `typecheck`, `unit` and `migrations` — and skips `integration`,
 `coverage`, `vuln` and `build`. `dev` is the branch you push to repeatedly, and those cost minutes
 each: a Postgres service container, a network fetch against the advisory database, a full image
 build. The full suite still runs on every pull request, so nothing reaches `main` without it. The
 fast lane is a shorter feedback loop, not a lower bar.
 
-| | `lint` `unit` `migrations` | `integration` `coverage` `build` | `vuln` | `cd` |
+| | `lint` `typecheck` `unit` `migrations` | `integration` `coverage` `build` | `vuln` | `cd` |
 |---|---|---|---|---|
 | pull request | yes | yes | advisory | no |
 | push `dev` | yes | **no** | **no** | deploy `kwami-lk-api-dev` |
@@ -75,7 +75,7 @@ make test-db-up   # throwaway Postgres on 55433
 make check
 ```
 
-That is the whole gate: `ruff check`, `ruff format --check`, both test lanes, the merged coverage
+That is the whole gate: `ruff check`, `mypy`, `ruff format --check`, both test lanes, the merged coverage
 profile against the per-module floors, and the migration dry run. CI runs the same things as
 separate jobs, so a green `make check` is a green pipeline — with two exceptions that need the
 network and therefore run only in CI: `make vuln` and the Docker build.
@@ -103,8 +103,7 @@ Two things about this suite catch people out:
   plugins competing to collect the same coroutine silently skips tests; that is why the
   dependency is deliberately absent, and it is noted in `pyproject.toml` too.
 - **The interpreter is pinned.** [`.python-version`](.python-version) says `3.11`, which is what
-  `uv run` uses here, what CI uses, and what `python:3.11-slim` gives the release image. It is not
-  only tidiness: coverage percentages shift between Python versions, so an unpinned interpreter
+  `uv run` uses here, what CI uses (the release image itself is built on `python:3.14-slim`). It is not only tidiness: coverage percentages shift between Python versions, so an unpinned interpreter
   would make the floors below flaky.
 - **`filterwarnings = ["error"]` and `xfail_strict = true`.** A new `DeprecationWarning` fails the
   suite unless it is from a dependency already listed, and an `xfail` that starts passing fails
@@ -131,7 +130,7 @@ request.
 
 ## CI
 
-Every job in [`ci.yml`](.github/workflows/ci.yml) except `vuln` is a required status check:
+These jobs in [`ci.yml`](.github/workflows/ci.yml) are required status checks (`typecheck`, `codeql`, `secrets` and `vuln` are not):
 
 | Check | What fails it |
 |---|---|
