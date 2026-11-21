@@ -15,8 +15,20 @@ from src import __version__
 from src.api import authz
 from src.api.authz import kwami_from_path, kwami_from_query, require_kwami_owned
 from src.core.errors import KwamiNotFoundError
-from src.main import app, docs_urls, lifespan
+from src.main import SOURCE_DIR, app, docs_urls, lifespan, reload_options
 from src.services import voices
+
+
+class TestReload:
+    def test_development_watches_only_the_source(self):
+        options = reload_options(True)
+        assert options == {"reload": True, "reload_dirs": [str(SOURCE_DIR)]}
+        assert SOURCE_DIR.name == "src"
+        assert (SOURCE_DIR / "main.py").is_file()
+
+    def test_a_real_run_watches_nothing(self):
+        """uvicorn warns when reload_dirs comes without reload."""
+        assert reload_options(False) == {"reload": False}
 
 
 class TestVoicePlugins:
