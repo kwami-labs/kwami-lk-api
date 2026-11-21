@@ -14,7 +14,10 @@ dependencies = [
     "livekit-api>=1.0.0",
     "livekit-agents>=1.0.0",
     "python-dotenv>=1.0.0",
-    "zep-cloud>=3.0.0",
+    # zep-cloud 4 removed most of what the memory code calls (graph.search,
+    # graph.add_fact_triple, thread.get_user_context, user.get_threads...). Moving to it is
+    # a migration, not a bump; tests/unit/services/test_zep_contract.py fails on it.
+    "zep-cloud>=3.16.0,<4.0.0",
     "pyyaml>=6.0.0",
     "PyJWT>=2.8.0",
     "cryptography>=42.0.0",
