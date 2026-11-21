@@ -211,6 +211,7 @@ class FakeZep:
             add_custom_instructions=Recorder(None),
             delete_custom_instructions=Recorder(None),
             set_ontology=Recorder(None),
+            list_entity_types=Recorder(SimpleNamespace(entity_types=[], edge_types=[])),
         )
         self.thread = SimpleNamespace(
             list_all=Recorder(SimpleNamespace(threads=[], total_count=0)),
@@ -229,11 +230,7 @@ class FakeZep:
         self.user = SimpleNamespace(
             get_threads=Recorder([]),
             delete=Recorder(None),
-            get=Recorder(
-                SimpleNamespace(
-                    uuid_="zep-user-uuid", first_name=None, last_name=None, email=None, metadata={}
-                )
-            ),
+            get=Recorder(SimpleNamespace(first_name=None, last_name=None, email=None, metadata={})),
             update=Recorder(None),
             add=Recorder(None),
         )

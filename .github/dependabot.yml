@@ -26,6 +26,11 @@ updates:
         patterns: ["pytest*", "ruff", "respx", "responses", "aioresponses", "freezegun", "dirty-equals", "anyio", "httpx", "testcontainers*"]
       minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      # zep-cloud 4 removed most of the client methods the memory code calls; moving to it is a
+      # migration (tests/unit/services/test_zep_contract.py fails on it), not a version bump.
+      - dependency-name: "zep-cloud"
+        versions: [">=4"]
 
   - package-ecosystem: github-actions
     directory: /

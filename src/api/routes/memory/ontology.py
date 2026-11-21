@@ -57,19 +57,14 @@ async def get_user_ontology(
     Returns the configured entity types and edge types that Zep uses
     for extracting information from conversations.
 
-    zep-cloud 4 dropped `graph.list_entity_types`; the ontology of a user's graph
-    is `graph.get_ontology`, addressed by the user's Zep UUID. An ontology Zep
-    marks `inherited` is the project's, not one set for this user: that is the
-    default here.
+    This called `graph.get_ontology`, which zep-cloud does not have, so it
+    answered 500 every time. The listing is `graph.list_entity_types`.
     """
     verify_user_access(user, user_id)
     logger.info("📋 Fetching ontology for user: %s", user_id)
 
     try:
-        zep_user = await client.user.get(user_id)
-        ontology = await client.graph.get_ontology(zep_user.uuid_)
-        if getattr(ontology, "inherited", False):
-            ontology = None
+        ontology = await client.graph.list_entity_types(user_id=user_id)
 
         entity_types = list(getattr(ontology, "entity_types", None) or [])
         edge_types = list(getattr(ontology, "edge_types", None) or [])

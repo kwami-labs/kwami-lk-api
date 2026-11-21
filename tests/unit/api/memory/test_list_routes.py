@@ -220,9 +220,8 @@ class TestNodes:
 
 
 class TestOntology:
-    """`GET /ontology` reads `graph.get_ontology` by the user's Zep UUID: zep-cloud 4
-    dropped `graph.list_entity_types`, and 3 had no `get_ontology`. An ontology Zep
-    marks `inherited` is the project's, so the defaults are shown.
+    """`GET /ontology` asked for `graph.get_ontology`, which zep-cloud does not
+    have, and answered 500 every time; it reads `graph.list_entity_types`.
 
     Setting an ontology marks it "custom" on the user's Zep metadata, which the
     agent never overwrites with its defaults; a reset clears the mark.
@@ -234,11 +233,11 @@ class TestOntology:
         from zep_cloud.client import AsyncZep
 
         graph = AsyncZep(api_key="x").graph
-        assert hasattr(graph, "get_ontology")
-        assert not hasattr(graph, "list_entity_types")
+        assert hasattr(graph, "list_entity_types")
+        assert not hasattr(graph, "get_ontology")
 
     async def test_a_configured_ontology_is_returned(self, mem, zep):
-        zep.graph.get_ontology.result = SimpleNamespace(
+        zep.graph.list_entity_types.result = SimpleNamespace(
             entity_types=[SimpleNamespace(name="Preference", description="d")],
             edge_types=[SimpleNamespace(name="KNOWS", description="k")],
         )
@@ -246,46 +245,35 @@ class TestOntology:
         assert body["entity_types"] == [{"name": "Preference", "description": "d"}]
         assert body["edge_types"] == [{"name": "KNOWS", "description": "k"}]
         assert "is_default" not in body
-        assert zep.graph.get_ontology.last == {"_args": ("zep-user-uuid",)}
-        assert zep.user.get.last == {"_args": (USER_ID,)}
+        assert zep.graph.list_entity_types.last == {"user_id": USER_ID}
 
     async def test_an_ontology_with_null_type_lists_is_the_default(self, mem, zep):
-        zep.graph.get_ontology.result = SimpleNamespace(entity_types=None, edge_types=None)
+        zep.graph.list_entity_types.result = SimpleNamespace(entity_types=None, edge_types=None)
         body = (await mem.get(self.PATH)).json()
         assert body["is_default"] is True
 
     async def test_only_edge_types_is_still_configured(self, mem, zep):
-        zep.graph.get_ontology.result = SimpleNamespace(
+        zep.graph.list_entity_types.result = SimpleNamespace(
             entity_types=None, edge_types=[SimpleNamespace(name="KNOWS", description="k")]
         )
         body = (await mem.get(self.PATH)).json()
         assert body["entity_types"] == []
         assert body["edge_types"] == [{"name": "KNOWS", "description": "k"}]
 
-    async def test_the_projects_inherited_ontology_is_the_default(self, mem, zep):
-        zep.graph.get_ontology.result = SimpleNamespace(
-            inherited=True,
-            entity_types=[SimpleNamespace(name="Project", description="p")],
-            edge_types=[],
-        )
-        body = (await mem.get(self.PATH)).json()
-        assert body["is_default"] is True
-        assert body["entity_types"] == DEFAULT_ENTITY_TYPES
-
     async def test_no_ontology_falls_back_to_the_defaults(self, mem, zep):
-        zep.graph.get_ontology.result = None
+        zep.graph.list_entity_types.result = None
         body = (await mem.get(self.PATH)).json()
         assert body["is_default"] is True
         assert body["entity_types"] == DEFAULT_ENTITY_TYPES
 
     async def test_a_404_also_falls_back_to_the_defaults(self, mem, zep):
-        zep.graph.get_ontology.error = RuntimeError("status 404")
+        zep.graph.list_entity_types.error = RuntimeError("status 404")
         body = (await mem.get(self.PATH)).json()
         assert body["is_default"] is True
         assert body["edge_types"] == DEFAULT_EDGE_TYPES
 
     async def test_another_failure_is_a_500(self, mem, zep, caplog):
-        zep.graph.get_ontology.error = RuntimeError("zep down")
+        zep.graph.list_entity_types.error = RuntimeError("zep down")
         with caplog.at_level("ERROR", logger="kwami-api.memory"):
             assert (await mem.get(self.PATH)).status_code == 500
         assert "Failed to fetch ontology" in caplog.text

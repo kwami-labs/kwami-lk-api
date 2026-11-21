@@ -40,16 +40,14 @@ def _build_ontology_models(
     entity_types: list[dict],
     edge_types: list[dict],
 ) -> tuple[dict, dict]:
-    """Build Zep SDK ontology models from dict definitions.
+    """Build Zep v3 SDK ontology models from dict definitions.
 
     Converts simple {name, description} dicts into EntityModel/EdgeModel classes
-    required by the Zep SDK's set_ontology method. zep-cloud 4 renamed
-    `EntityEdgeSourceTarget` to `EdgeSourceTarget` and moved the models from
-    `external_clients.ontology` to `zep_cloud.ontology`.
+    required by the Zep v3 SDK's set_ontology method.
     """
     from pydantic import Field
-    from zep_cloud import EdgeSourceTarget
-    from zep_cloud.ontology import EdgeModel, EntityModel, EntityText
+    from zep_cloud import EntityEdgeSourceTarget
+    from zep_cloud.external_clients.ontology import EdgeModel, EntityModel, EntityText
 
     entities = {}
     for et in entity_types:
@@ -81,7 +79,7 @@ def _build_ontology_models(
         )
         edges[name] = (
             model_cls,
-            [EdgeSourceTarget(source="User")],
+            [EntityEdgeSourceTarget(source="User")],
         )
 
     return entities, edges
