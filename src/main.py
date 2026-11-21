@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI
@@ -115,6 +116,19 @@ def docs_urls(show_docs: bool) -> dict[str, str | None]:
     }
 
 
+# Reload mode watches the code it serves and nothing else. With uvicorn's default,
+# the whole checkout, it also watched .venv: on 2026-11-21 changes reported in
+# site-packages restarted the local API twice on every start.
+SOURCE_DIR = Path(__file__).resolve().parent
+
+
+def reload_options(debug: bool) -> dict[str, object]:
+    """What uvicorn watches in development; nothing in a real run."""
+    if not debug:
+        return {"reload": False}
+    return {"reload": True, "reload_dirs": [str(SOURCE_DIR)]}
+
+
 app = FastAPI(
     title="Kwami AI LiveKit API",
     summary="Token endpoint and configuration API for Kwami AI agents",
@@ -187,7 +201,7 @@ def run():
         "src.main:app",
         host=settings.api_host,
         port=settings.api_port,
-        reload=settings.debug,
+        **reload_options(settings.debug),
         # One worker cannot use more than one core, and it is also a single point
         # of failure: a restart drops every request in flight. Reload mode is
         # single-worker by definition, so this only applies to a real run.

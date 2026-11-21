@@ -1,0 +1,24 @@
+-- =============================================================================
+-- What is left of the Claude plan on the user's PC (2026-11-17)
+--
+-- The brain works on the PC's Claude Code login first, which costs nothing per
+-- token, and moves to the API key when the plan runs out. Claude Code says how
+-- much of each window is used and when it resets (its rate-limit events: the
+-- five-hour window, the week, the week on Opus). The PC's worker keeps the last
+-- thing it said here, beside the heartbeat, so that:
+--   * the agent stops sending thoughts to a plan that has run out, and goes
+--     straight to the API key or says when the plan comes back, as the user chose;
+--   * the models panel shows the plan as it is: used, reset time, or run out.
+--
+-- Shape (written by the worker only; the service role writes, as everywhere in
+-- the brain):
+--   {"status": "allowed" | "allowed_warning" | "rejected",
+--    "type": "five_hour" | "seven_day" | "seven_day_opus" | "seven_day_sonnet" | ...,
+--    "utilization": 0.0 .. 1.0 | null,
+--    "resetsAt": "<ISO 8601>" | null,
+--    "seenAt": "<ISO 8601>"}
+-- Null until Claude Code has said anything. The user reads it through the
+-- existing select policy on brain_runners.
+-- =============================================================================
+
+ALTER TABLE brain_runners ADD COLUMN IF NOT EXISTS claude_plan jsonb;
