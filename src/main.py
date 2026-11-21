@@ -116,6 +116,19 @@ def docs_urls(show_docs: bool) -> dict[str, str | None]:
     }
 
 
+# Reload mode watches the code it serves and nothing else. With uvicorn's default,
+# the whole checkout, it also watched .venv: on 2026-11-21 changes reported in
+# site-packages restarted the local API twice on every start.
+SOURCE_DIR = Path(__file__).resolve().parent
+
+
+def reload_options(debug: bool) -> dict[str, object]:
+    """What uvicorn watches in development; nothing in a real run."""
+    if not debug:
+        return {"reload": False}
+    return {"reload": True, "reload_dirs": [str(SOURCE_DIR)]}
+
+
 app = FastAPI(
     title="Kwami AI LiveKit API",
     summary="Token endpoint and configuration API for Kwami AI agents",
@@ -180,19 +193,6 @@ app.include_router(
 
 if settings.show_docs:
     install_docs(app)
-
-
-# Reload mode watches the code it serves and nothing else. With uvicorn's default,
-# the whole checkout, it also watched .venv: on 2026-11-21 changes reported in
-# site-packages restarted the local API twice on every start.
-SOURCE_DIR = Path(__file__).resolve().parent
-
-
-def reload_options(debug: bool) -> dict[str, object]:
-    """What uvicorn watches in development; nothing in a real run."""
-    if not debug:
-        return {"reload": False}
-    return {"reload": True, "reload_dirs": [str(SOURCE_DIR)]}
 
 
 def run():
