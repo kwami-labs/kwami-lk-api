@@ -118,7 +118,10 @@
         "CORS_ORIGINS": "https://kwami.io,https://kwami-app.nexow.workers.dev",
         // Where Twilio dials an inbound call (the LiveKit project's SIP address); the
         // number goes in the user part. Not a secret: the call's headers are signed.
-        "LIVEKIT_SIP_INBOUND_URI": "sip:l8dp94yp0e8.sip.livekit.cloud"
+        "LIVEKIT_SIP_INBOUND_URI": "sip:l8dp94yp0e8.sip.livekit.cloud",
+        // The inbound trunk that lists the numbers it accepts: a number bought from the
+        // app is added to it, so it rings the kwami without anyone editing the trunk.
+        "LIVEKIT_SIP_INBOUND_TRUNK_ID": "ST_Werwq7R3mhns"
       },
       "secrets": {
         "required": [
