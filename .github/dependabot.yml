@@ -26,6 +26,11 @@ updates:
         patterns: ["pytest*", "ruff", "respx", "responses", "aioresponses", "freezegun", "dirty-equals", "anyio", "httpx", "testcontainers*"]
       minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      # zep-cloud 4 removed most of the client methods the memory code calls; moving to it is a
+      # migration (tests/unit/services/test_zep_contract.py fails on it), not a version bump.
+      - dependency-name: "zep-cloud"
+        versions: [">=4"]
 
   - package-ecosystem: github-actions
     directory: /
@@ -47,3 +52,8 @@ updates:
       day: monday
     commit-message:
       prefix: build
+    ignore:
+      # livekit-blingfire (pulled in by livekit-agents) ships no wheel or sdist for 3.15, so
+      # the image cannot install its dependencies there (#110). Lift this once it does.
+      - dependency-name: "python"
+        versions: [">=3.15"]

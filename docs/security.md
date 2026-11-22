@@ -213,11 +213,10 @@ is unrecoverable.
 | `KWAMI_API_KEY` | agent deploy + the Worker, together |
 | `ADMIN_API_KEY` | operators + the Worker |
 | `WALLET_CUSTODY_SIGNING_SECRET` / `WALLET_WEBHOOK_SECRET` | custody + the Worker |
-| `FLY_API_TOKEN` | GitHub Actions secrets |
+| `CLOUDFLARE_API_TOKEN` | GitHub Environments |
 
 `GITHUB_TOKEN` is the only credential `cd.yml` uses for the release and
-GHCR. Deploy credentials live in GitHub Environments and `fly secrets`,
-not the repo.
+GHCR. Deploy credentials live in GitHub Environments, not the repo.
 
 If you believe a secret has been exposed, rotate it first, then report it.
 
@@ -241,8 +240,8 @@ So the wildcard was not an inert misconfiguration that browsers would reject
 tokens rather than cookies limited what an attacker could do with it; moving
 to cookie auth would have removed that limit silently. Set explicit origins.
 
-OpenAPI is off in production unless `ENABLE_DOCS=true` — all three of
-`/docs`, `/redoc` and `/openapi.json`. The schema describes admin and webhook
+OpenAPI is off in production unless `ENABLE_DOCS=true` — all of
+`/docs`, `/swagger`, `/redoc` and `/openapi.json`. The schema describes admin and webhook
 routes; treat it as sensitive. It is the schema that matters: the two UIs only
 render it, and closing them while leaving `/openapi.json` served published the
 whole route map anyway. `src.main.docs_urls` returns the three together for that

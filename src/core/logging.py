@@ -92,6 +92,10 @@ class TextFormatter(logging.Formatter):
         return line.replace("\r", "\\r").replace("\n", "\\n")
 
 
+#: Libraries that log the wire itself at DEBUG: frames, headers, connection pools.
+WIRE_LOGGERS: tuple[str, ...] = ("hpack", "httpcore", "h2", "h11", "urllib3", "watchfiles")
+
+
 def configure_logging(*, debug: bool = False, json_output: bool = True) -> None:
     """Install the formatter on the root handler.
 
@@ -111,3 +115,9 @@ def configure_logging(*, debug: bool = False, json_output: bool = True) -> None:
         root.removeHandler(existing)
     root.addHandler(handler)
     root.setLevel(logging.DEBUG if debug else logging.INFO)
+    # `debug` is for this service's own records. At DEBUG the HTTP clients log
+    # every frame and every header of every call to Supabase: a local API with
+    # the Accesos panel open wrote 155 MB in two days, nearly all of it hpack
+    # decoding headers, and its own lines were lost in it.
+    for name in WIRE_LOGGERS:
+        logging.getLogger(name).setLevel(logging.INFO)

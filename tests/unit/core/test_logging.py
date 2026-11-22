@@ -15,6 +15,7 @@ import sys
 import pytest
 
 from src.core.logging import (
+    WIRE_LOGGERS,
     JsonFormatter,
     TextFormatter,
     configure_logging,
@@ -103,6 +104,14 @@ class TestConfigureLogging:
     def test_debug_lowers_the_level(self):
         configure_logging(debug=True)
         assert logging.getLogger().level == logging.DEBUG
+
+    def test_debug_leaves_the_wire_out(self):
+        """hpack and httpcore at DEBUG log every header of every call to Supabase."""
+        configure_logging(debug=True)
+        for name in WIRE_LOGGERS:
+            assert not logging.getLogger(name).isEnabledFor(logging.DEBUG)
+        assert logging.getLogger("hpack.hpack").getEffectiveLevel() == logging.INFO
+        assert logging.getLogger("kwami-api.access").isEnabledFor(logging.DEBUG)
 
     def test_it_replaces_rather_than_stacks_handlers(self):
         """Calling it twice must not double every line."""

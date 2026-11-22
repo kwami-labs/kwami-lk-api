@@ -5,7 +5,7 @@ tokens, serves model and voice catalogs, stores per-kwami memory and
 communications state, and settles money. It does not run the realtime agent
 itself — that is a separate process that joins the room LiveKit Cloud dispatches.
 
-The running process is a FastAPI app (`src/main.py`) on Python 3.11. Persistence
+The running process is a FastAPI app (`src/main.py`), developed and tested on Python 3.11 and shipped on 3.14. Persistence
 is Supabase (Postgres + Auth + PostgREST). Secrets and third-party credentials
 are validated at boot by `src/core/config.py`; a missing required variable
 refuses to start the process.
