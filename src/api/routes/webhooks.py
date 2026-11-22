@@ -24,8 +24,10 @@ from src.services.channels import (
     update_message_event_status,
 )
 from src.services.email_service import process_inbound_email
+from src.services.owner_messages import is_redelivery, owner_number, owner_task_reply
 from src.services.sendgrid_service import verify_inbound_webhook
 from src.services.sessions import record_room_event
+from src.services.sip_calls import call_headers, sip_uri_for
 from src.services.twilio_service import (
     build_message_ack_response,
     build_voice_bridge_response,
@@ -107,14 +109,17 @@ async def twilio_voice_webhook(request: Request):
             media_type="application/xml",
         )
 
+    # The owner is whoever confirmed this number for the kwami's notices.
+    owner = bool(caller) and caller == await owner_number(channel)
     xml = build_voice_bridge_response(
-        livekit_uri=settings.livekit_sip_inbound_uri,
-        headers={
-            "X-Kwami-Id": channel["kwami_id"],
-            "X-Kwami-Channel-Id": channel["id"],
-            "X-Kwami-User-Id": channel["user_id"],
-            "X-Contact-Number": caller or "",
-        },
+        livekit_uri=sip_uri_for(settings.livekit_sip_inbound_uri, called),
+        headers=call_headers(
+            kwami_id=channel["kwami_id"],
+            channel_id=channel["id"],
+            user_id=channel["user_id"],
+            caller=caller,
+            owner=owner,
+        ),
     )
     return Response(xml, media_type="application/xml")
 
@@ -143,7 +148,8 @@ async def twilio_whatsapp_webhook(request: Request):
     """Handle an inbound WhatsApp or SMS message from Twilio.
 
     Requires a valid Twilio signature (401, or 503 if unconfigured). Messages with a `whatsapp:` address are treated as WhatsApp, others as SMS.
-    Stores the inbound message and replies with TwiML containing a short acknowledgement, or a "not configured" notice for an unknown sender."""
+    Stores the inbound message and replies with TwiML containing a short acknowledgement, or a "not configured" notice for an unknown sender.
+    A message from the kwami's owner (the number confirmed for its notices) is queued as work for the brain, and the reply says so."""
     payload = await _form_payload(request)
     await validate_twilio_request(request, payload)
 
@@ -189,6 +195,7 @@ async def twilio_whatsapp_webhook(request: Request):
             "channelKind": channel_kind,
         },
     )
+    redelivered = await is_redelivery(payload.get("MessageSid"))
     await create_message_event(
         conversation_id=conversation["id"],
         channel_id=channel["id"],
@@ -204,6 +211,16 @@ async def twilio_whatsapp_webhook(request: Request):
         requires_followup=True,
         provider_payload=payload,
     )
+
+    # What the kwami's owner writes to it is something to do; once, not per redelivery.
+    if not redelivered:
+        try:
+            task_reply = await owner_task_reply(channel, contact_number, body)
+        except Exception:
+            logger.exception("Could not queue the owner's message as work")
+            task_reply = None
+        if task_reply:
+            return Response(build_message_ack_response(task_reply), media_type="application/xml")
 
     kwami = await get_owned_kwami(channel["user_id"], channel["kwami_id"])
     if is_whatsapp:

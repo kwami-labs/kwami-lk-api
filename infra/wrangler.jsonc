@@ -115,7 +115,10 @@
         // stays healthy under load (see a3cca1d — two workers can miss :8080).
         "WEB_CONCURRENCY": "1",
         "APP_PUBLIC_URL": "https://api.kwami.io",
-        "CORS_ORIGINS": "https://kwami.io,https://kwami-app.nexow.workers.dev"
+        "CORS_ORIGINS": "https://kwami.io,https://kwami-app.nexow.workers.dev",
+        // Where Twilio dials an inbound call (the LiveKit project's SIP address); the
+        // number goes in the user part. Not a secret: the call's headers are signed.
+        "LIVEKIT_SIP_INBOUND_URI": "sip:l8dp94yp0e8.sip.livekit.cloud"
       },
       "secrets": {
         "required": [
