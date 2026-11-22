@@ -167,6 +167,7 @@ src/services/models.py                       100
 src/services/pricing.py                      100
 src/services/sendgrid_service.py             100
 src/services/sessions.py                     100
+src/services/sip_calls.py                    100
 
 # Checkout sessions, payment intents and refunds. The purchase path stores the payment intent so
 # a later refund can match it; that is the arm worth keeping covered.
@@ -192,6 +193,7 @@ src/services/google_service.py               100
 src/services/google_worker.py                100
 src/services/google_workspace.py             100
 src/services/oauth_return.py                 100
+src/services/owner_messages.py               100
 src/services/pc_service.py                   100
 src/services/provider_keys_service.py        100
 src/services/site_access_service.py          100
